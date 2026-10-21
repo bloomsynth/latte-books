@@ -1,0 +1,5 @@
+# Matches Zed's toolchain, since GPUI is developed against it.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

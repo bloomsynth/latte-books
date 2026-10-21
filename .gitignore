@@ -1,3 +1,4 @@
-/target
 *.books.db
 .DS_Store
+target/
+build.log

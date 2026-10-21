@@ -134,6 +134,8 @@ CI runs the parity suite on every PR. Any difference fails the build.
 - Vendor schemas, fixtures, translations and templates from Books v0.36.0.
 - **GPUI spikes. These decide whether GPUI stays:**
   1. Startup time to first usable window on a low-end Windows laptop.
+     *First result (2026-10-21): 543 ms to first frame on a Ryzen 3700X + RTX 2060 desktop;
+     low-end laptop still to test. See `spikes/gpui-startup/RESULTS.md`.*
   2. Runs on a Windows VM, Windows Remote Desktop, and a Linux VM (Vulkan).
   3. An **editable invoice item grid**: tab between cells, add and remove rows,
      autocomplete for items, a total that updates live.
