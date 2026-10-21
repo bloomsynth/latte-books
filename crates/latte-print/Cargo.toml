@@ -1,0 +1,10 @@
+[package]
+name = "latte-print"
+description = "Typst rendering of invoices, payments and shipments"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+latte-core.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "latte-i18n"
+description = "Translation CSV loader and number, date and currency formatting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

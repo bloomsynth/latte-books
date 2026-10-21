@@ -1,0 +1,11 @@
+[package]
+name = "latte-core"
+description = "Models and business rules: posting, invoices, payments, taxes, reports. No UI types."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+latte-schema.workspace = true
+latte-db.workspace = true

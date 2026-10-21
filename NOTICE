@@ -1,0 +1,21 @@
+Latte Books
+Copyright (C) 2026 Bloomsynth
+
+Latte Books is a Rust port of Frappe Books (https://github.com/frappe/books),
+Copyright (C) Frappe Technologies Pvt. Ltd. and the Frappe Books contributors,
+licensed under the GNU Affero General Public License v3.0.
+
+The port follows Frappe Books v0.36.0 (commit 2f028f42be70a1dbd45bd4c6483d57df2fc64805).
+Its schemas, charts of accounts, country data, translations, print templates and
+accounting logic are reused or translated from that release. Files copied as they are
+live in vendor/books/ and keep their original copyright.
+
+Translations were contributed by the Frappe Books community.
+
+Latte Books is not affiliated with, endorsed by or sponsored by Frappe Technologies
+Pvt. Ltd. "Frappe" and "Frappe Books" are trademarks of their owner and are used here
+only to describe where this project comes from.
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License as published by the Free Software
+Foundation, version 3. See LICENSE for the full text.

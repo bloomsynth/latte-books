@@ -1,0 +1,15 @@
+[package]
+name = "latte-app"
+description = "Latte Books desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "latte-books"
+path = "src/main.rs"
+
+[dependencies]
+latte-core.workspace = true
+latte-ui.workspace = true

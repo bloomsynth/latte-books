@@ -1,0 +1,10 @@
+[package]
+name = "latte-regional"
+description = "Country modules: in (GST), ch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+latte-core.workspace = true

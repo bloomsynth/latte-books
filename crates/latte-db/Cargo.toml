@@ -1,0 +1,10 @@
+[package]
+name = "latte-db"
+description = "SQLite access, schema-driven CRUD, patches and the change log"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+latte-schema.workspace = true
