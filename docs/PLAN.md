@@ -126,7 +126,7 @@ CI runs the parity suite on every PR. Any difference fails the build.
 
 ## 5. Phases
 
-### Phase 0 — Foundations and risk spikes (2–3 weeks)
+### Phase 0 — Foundations and risk spikes (2–3 weeks) — done 2026-10-22
 
 - Repo, AGPL `LICENSE`, `NOTICE` crediting Frappe and contributors, README with origin and the
   "not affiliated" note.
@@ -143,14 +143,17 @@ CI runs the parity suite on every PR. Any difference fails the build.
      before release.*
   3. An **editable invoice item grid**: tab between cells, add and remove rows,
      autocomplete for items, a total that updates live.
-     *Passed (2026-10-21): all four work, covered by 8 UI tests. With `uniform_list`, each edit
-     reaches the screen in one 120 Hz frame even at 2,000 rows. See `spikes/invoice-grid/RESULTS.md`.*
+     *Passed (2026-10-21): all four work. With `uniform_list`, each edit reaches the screen in
+     one 120 Hz frame even at 2,000 rows. Hand-tested (2026-10-22): three mouse bugs found and
+     fixed; now covered by 11 UI tests. See `spikes/invoice-grid/RESULTS.md`.*
   4. Text in Hindi, Gujarati, Chinese and Korean renders correctly.
      *Passed with two known issues (2026-10-22): shaping matches Chromium and input-method
      composition works. On stock GPUI, wrapped Hindi and Gujarati text can break mid-word, and
      the cursor can stop inside a conjunct. We don't patch GPUI; both are listed as known
      issues and to be reported upstream. See `spikes/indic-cjk-text/RESULTS.md`.*
 - **Exit:** spikes 1, 3 and 4 pass (spike 2 skipped), or we have a written plan B.
+  *Met (2026-10-22): GPUI stays. The CI workflow is written but hasn't run yet, as there is no
+  GitHub repo.*
 
 ### Phase 1 — Data layer (3–4 weeks)
 
@@ -254,6 +257,7 @@ So Phase 5 doesn't need a rework:
 
 ## 10. Next steps
 
-1. Create the Cargo workspace, LICENSE, NOTICE and README (Phase 0).
-2. Vendor schemas, fixtures, translations and templates from Books v0.36.0.
-3. Start the GPUI startup and editable-grid spikes.
+1. Create the public GitHub repo, so CI runs and users can file issues.
+2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
+   gpui-kit.
+3. Start Phase 1 with `latte-schema`.
