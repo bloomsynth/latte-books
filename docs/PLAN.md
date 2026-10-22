@@ -197,8 +197,13 @@ CI runs the parity suite on every PR. Any difference fails the build.
   *Journal entries post 2026-10-22 (`latte_core::models`): `Transactional`,
   `LedgerPosting` (with round-off) and the Account, AccountingLedgerEntry, JournalEntry and
   JournalEntryAccount models. Submitting posts the ledger entries, cancelling reverts
-  them, deleting removes them, and an entry that doesn't balance is refused. Tested on an
-  in-memory file; not yet compared with what Books posts for the same entry.*
+  them, deleting removes them, and an entry that doesn't balance is refused. Checked
+  against Books 2026-10-22: the `post_test` example submitted one journal entry and
+  cancelled another in a copy of a real file, and Books v0.36.0 did the same by hand. The
+  ledger entries match field for field: accounts, amounts, the midnight-UTC date, the
+  null party, the reverted flags, which entry each reversal reverts and the order they are
+  written in. The only difference is `createdBy`/`modifiedBy` (`Admin` against the
+  signed-in user). Latte reads Books' entries back with no errors.*
 - Reports: General Ledger, Trial Balance, P&L, Balance Sheet.
 - Setup: create a new company from `countryInfo.json` and the charts of accounts.
 - **Exit:** parity suite passes for every core document and report.
@@ -299,5 +304,5 @@ So Phase 5 doesn't need a rework:
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
 3. Phase 1 is done. In Phase 2 the `Doc` layer is ported and journal entries post to the
-   ledger. Next: check a posted journal entry against Books on a copy of a real file, then
-   sales and purchase invoices and payments, which reuse `LedgerPosting`.
+   ledger, matching what Books posts. Next: sales and purchase invoices and payments,
+   which reuse `LedgerPosting`.
