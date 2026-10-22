@@ -8,3 +8,7 @@ publish.workspace = true
 
 [dependencies]
 latte-schema.workspace = true
+indexmap.workspace = true
+jiff.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true

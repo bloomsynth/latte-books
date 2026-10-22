@@ -163,8 +163,16 @@ CI runs the parity suite on every PR. Any difference fails the build.
   file. Not yet compared with the output of Books' own `getSchemas`.*
 - `latte-db`: open a `.books.db`, check the schema version, generic get/list/insert/update/delete,
   child tables, naming series, single values, custom fields, and the change log.
-- Money in and out of the `text` columns with no loss of precision.
+  *Reading done 2026-10-22: ports of the read half of `backend/database/core.ts` (get, getAll
+  with Books' filters, single values, exists) and of `fyo/core/converter.ts` to document
+  values. Files must come from Books v0.36.0, which brings their tables up to date. Writing,
+  naming series and the change log are next.*
+- Money in and out of the `text` columns with no loss of precision. *Reading done: pesa's
+  parsing, `store` and rounding are ported (`latte_db::pesa`); its arithmetic comes with
+  Phase 2.*
 - **Exit:** open a real Books file and print every document type with its child rows, read-only.
+  *Read-only part met 2026-10-22: `cargo run -p latte-db --example dump` reads all 564
+  documents in a real company file with no errors.*
 
 ### Phase 2 — Accounting engine (5–7 weeks)
 
@@ -268,4 +276,4 @@ So Phase 5 doesn't need a rework:
 1. Create the public GitHub repo, so CI runs and users can file issues.
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
-3. Phase 1: `latte-schema` is done; `latte-db` reading is next.
+3. Phase 1: `latte-schema` and `latte-db` reading are done; `latte-db` writing is next.
