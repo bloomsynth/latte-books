@@ -1,0 +1,11 @@
+# Phase 0 spikes. Kept out of the main workspace so CI doesn't build GPUI until latte-ui needs it.
+[workspace]
+resolver = "3"
+members = ["gpui-startup", "invoice-grid"]
+
+[workspace.dependencies]
+gpui-kit = "=0.8.0"
+
+# No LTO for now: this machine runs out of memory linking GPUI with it (see gpui-startup/RESULTS.md).
+[profile.release]
+strip = "debuginfo"

@@ -139,6 +139,8 @@ CI runs the parity suite on every PR. Any difference fails the build.
   2. Runs on a Windows VM, Windows Remote Desktop, and a Linux VM (Vulkan).
   3. An **editable invoice item grid**: tab between cells, add and remove rows,
      autocomplete for items, a total that updates live.
+     *Passed (2026-10-21): all four work, covered by 8 UI tests. With `uniform_list`, each edit
+     reaches the screen in one 120 Hz frame even at 2,000 rows. See `spikes/invoice-grid/RESULTS.md`.*
   4. Text in Hindi, Gujarati, Chinese and Korean renders correctly.
 - **Exit:** all four spikes pass, or we have a written plan B.
 

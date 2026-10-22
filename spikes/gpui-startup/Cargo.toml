@@ -6,12 +6,5 @@ edition = "2024"
 license = "AGPL-3.0-only"
 publish = false
 
-# Kept out of the main workspace so CI doesn't build GPUI until latte-ui needs it.
-[workspace]
-
 [dependencies]
-gpui-kit = "=0.8.0"
-
-# No LTO for now: this machine runs out of memory linking GPUI with it (see RESULTS.md).
-[profile.release]
-strip = "debuginfo"
+gpui-kit.workspace = true

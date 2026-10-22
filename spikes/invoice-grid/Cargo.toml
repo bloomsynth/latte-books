@@ -1,0 +1,16 @@
+[package]
+name = "invoice-grid"
+description = "Phase 0 spike: editable invoice item grid in GPUI"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+gpui-kit.workspace = true
+rust_decimal = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
