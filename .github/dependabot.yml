@@ -1,0 +1,20 @@
+# Weekly update pull requests for the Rust dependencies and the CI actions.
+# Minor and patch updates come grouped in one pull request per ecosystem; major updates each
+# get their own. The spikes/ workspace is left out: those are finished Phase 0 prototypes.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
