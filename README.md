@@ -9,7 +9,8 @@ app alive: it is a Rust port of Frappe Books v0.36.0 that works on your own comp
 your company in a single file.
 
 > **Status: early development. Not usable yet.** Latte can read and write Frappe Books files,
-> and the accounting engine is under way: journal entries post to the ledger. There is no
+> and the accounting engine is under way: journal entries and sales and purchase invoices
+> post to the ledger, and what each party owes is kept up to date. There is no
 > app to use yet. Follow along in [docs/PLAN.md](docs/PLAN.md).
 
 Latte Books is **not affiliated with Frappe Technologies**. It is built on their work; see

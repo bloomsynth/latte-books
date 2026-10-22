@@ -156,6 +156,12 @@ impl Doc {
         self.values.insert(fieldname.to_owned(), value);
     }
 
+    /// Replaces a table's rows without any of `set`'s checks, as Books does with
+    /// `doc[tablefield] = rows`.
+    pub fn set_table_rows(&mut self, fieldname: &str, rows: Vec<Doc>) {
+        self.insert_table(fieldname, rows);
+    }
+
     pub fn not_inserted(&self) -> bool {
         self.not_inserted
     }

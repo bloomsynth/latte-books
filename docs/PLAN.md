@@ -204,6 +204,21 @@ CI runs the parity suite on every PR. Any difference fails the build.
   null party, the reverted flags, which entry each reversal reverts and the order they are
   written in. The only difference is `createdBy`/`modifiedBy` (`Admin` against the
   signed-in user). Latte reads Books' entries back with no errors.*
+  *Invoices post 2026-10-23: the Item, Party, SalesInvoice, PurchaseInvoice, their item
+  rows and TaxSummary models. Rows total with item and invoice discounts, taxes come from
+  the tax template, foreign currency invoices post in the company currency, and what
+  doesn't balance goes to the round-off account. Submitting posts and raises what the
+  party owes; cancelling reverts both. Pricing rules, coupons, loyalty points, returns,
+  payments and stock transfers aren't ported and are refused where they would change the
+  result. Five Books bugs in the row formulas are fixed (see DEVIATIONS.md). Checked
+  against Books 2026-10-23: the `invoice_test` example submitted two sales invoices in a
+  copy of a real file, one with a 10% row discount and one in EUR at a rate of 90, and
+  Books v0.36.0 did the same by hand. The discounted invoice matches field for field:
+  invoice, row, taxes, ledger entries and what the party owes, apart from
+  `createdBy`/`modifiedBy`. The EUR invoice matched once the rate was the same: Books'
+  rate box shows the rate to two decimals and writes that back when you leave it, even
+  unchanged, so its row rate was 13.33 against Latte's 13.3333…. The sums from either
+  rate agree. That rewrite is a Books UI bug for Phase 3 not to copy.*
 - Reports: General Ledger, Trial Balance, P&L, Balance Sheet.
 - Setup: create a new company from `countryInfo.json` and the charts of accounts.
 - **Exit:** parity suite passes for every core document and report.
@@ -303,6 +318,6 @@ So Phase 5 doesn't need a rework:
 1. Create the public GitHub repo, so CI runs and users can file issues.
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
-3. Phase 1 is done. In Phase 2 the `Doc` layer is ported and journal entries post to the
-   ledger, matching what Books posts. Next: sales and purchase invoices and payments,
-   which reuse `LedgerPosting`.
+3. Phase 1 is done. In Phase 2 the `Doc` layer is ported, and journal entries and sales
+   and purchase invoices post to the ledger, matching what Books posts. Next: payments,
+   including payments against invoices, then returns.
