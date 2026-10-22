@@ -146,6 +146,22 @@ impl Fyo {
         Ok(doc)
     }
 
+    /// `fyo.getValue`: a field's stored value, or `None` if the document or the value
+    /// doesn't exist. Without a name, reads the single `schema_name`.
+    ///
+    /// Books loads the document to read it, so a computed field would have its formula
+    /// applied; this reads only stored values.
+    pub fn get_value(
+        &self,
+        schema_name: &str,
+        name: Option<&str>,
+        fieldname: &str,
+    ) -> Option<DocValue> {
+        let name = name.unwrap_or(schema_name);
+        let mut values = self.db.get_doc(schema_name, name).ok()?;
+        values.shift_remove(fieldname)
+    }
+
     /// `DocHandler.isTemporaryName`.
     pub fn is_temporary_name(&self, name: &str, schema: &Schema) -> bool {
         name.contains(&format!("New {} ", schema.label))

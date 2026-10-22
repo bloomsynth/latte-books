@@ -2,6 +2,7 @@
 //! @ v0.36.0. This crate must never depend on GPUI.
 
 pub mod fyo;
+pub mod models;
 
 use std::fmt;
 

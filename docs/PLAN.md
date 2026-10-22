@@ -194,6 +194,11 @@ CI runs the parity suite on every PR. Any difference fails the build.
   arithmetic is ported for it. The deviations are listed at the top of each file; the main
   ones are no document cache or observers, no links, and no CustomForm or CustomField
   models yet. Books' `Doc` doesn't check `minvalue` or `maxvalue`, so neither does this.*
+  *Journal entries post 2026-10-22 (`latte_core::models`): `Transactional`,
+  `LedgerPosting` (with round-off) and the Account, AccountingLedgerEntry, JournalEntry and
+  JournalEntryAccount models. Submitting posts the ledger entries, cancelling reverts
+  them, deleting removes them, and an entry that doesn't balance is refused. Tested on an
+  in-memory file; not yet compared with what Books posts for the same entry.*
 - Reports: General Ledger, Trial Balance, P&L, Balance Sheet.
 - Setup: create a new company from `countryInfo.json` and the charts of accounts.
 - **Exit:** parity suite passes for every core document and report.
@@ -293,5 +298,6 @@ So Phase 5 doesn't need a rework:
 1. Create the public GitHub repo, so CI runs and users can file issues.
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
-3. Phase 1 is done, and Phase 2's `Doc` layer is ported. Next: the app models that
-   journal entries need (`Transactional`, `JournalEntry`, `Account`) and `LedgerPosting`.
+3. Phase 1 is done. In Phase 2 the `Doc` layer is ported and journal entries post to the
+   ledger. Next: check a posted journal entry against Books on a copy of a real file, then
+   sales and purchase invoices and payments, which reuse `LedgerPosting`.

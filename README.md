@@ -8,8 +8,9 @@ Frappe Books built on the Frappe Framework, used from a browser. Latte Books kee
 app alive: it is a Rust port of Frappe Books v0.36.0 that works on your own computer, with
 your company in a single file.
 
-> **Status: early development. Not usable yet.** The groundwork is done and the data layer is
-> next. Follow along in [docs/PLAN.md](docs/PLAN.md).
+> **Status: early development. Not usable yet.** Latte can read and write Frappe Books files,
+> and the accounting engine is under way: journal entries post to the ledger. There is no
+> app to use yet. Follow along in [docs/PLAN.md](docs/PLAN.md).
 
 Latte Books is **not affiliated with Frappe Technologies**. It is built on their work; see
 [NOTICE](NOTICE).
@@ -33,8 +34,8 @@ Changes from Frappe Books are kept to a minimum, and every one is listed in
 | Phase | What | Status |
 |---|---|---|
 | 0 | Foundations, and prototypes to test GPUI | **Done** |
-| 1 | Data layer: read and write `.books.db` files | Next |
-| 2 | Accounting engine and reports, checked against Frappe Books | Planned |
+| 1 | Data layer: read and write `.books.db` files | **Done** |
+| 2 | Accounting engine and reports, checked against Frappe Books | In progress |
 | 3 | Desktop app: invoices, payments, reports, printing. **Public beta.** | Planned |
 | 4 | Everything else in Frappe Books v0.36.0: inventory, GST, POS and more. **1.0.** | Planned |
 
@@ -66,7 +67,14 @@ cargo build
 cargo test
 ```
 
-The app itself doesn't do anything yet. To try the prototypes:
+The app itself doesn't do anything yet. To see the data layer read a company file (it
+opens the file read-only):
+
+```sh
+cargo run -p latte-db --example dump -- "path/to/company.books.db"
+```
+
+To try the prototypes:
 
 ```sh
 cd spikes

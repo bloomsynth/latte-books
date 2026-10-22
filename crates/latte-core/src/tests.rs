@@ -6,8 +6,9 @@ use super::*;
 
 const CREATED: &str = "2025-01-01T00:00:00.000Z";
 
-/// An in-memory company file with every table, the system settings and two accounts.
-fn company() -> Fyo {
+/// An in-memory company file with every table, the system settings and three accounts,
+/// with only the core models.
+pub(crate) fn company() -> Fyo {
     let core = DatabaseCore::new(
         Connection::open_in_memory().unwrap(),
         get_schemas("in", &[]).unwrap(),
@@ -45,11 +46,14 @@ fn company() -> Fyo {
         .unwrap();
     }
     conn.execute_batch(
-        "insert into Account (name, rootType, lft, rgt, createdBy, modifiedBy, created, modified)
-             values ('Cash', 'Asset', 1, 2, 'Admin', 'Admin', '2025-01-01T00:00:00.000Z',
-                     '2025-01-01T00:00:00.000Z'),
-                    ('Sales', 'Income', 3, 4, 'Admin', 'Admin', '2025-01-01T00:00:00.000Z',
-                     '2025-01-01T00:00:00.000Z');",
+        "insert into Account (name, rootType, accountType, isGroup, lft, rgt, createdBy,
+                              modifiedBy, created, modified)
+             values ('Cash', 'Asset', NULL, 0, 1, 2, 'Admin', 'Admin',
+                     '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z'),
+                    ('Sales', 'Income', NULL, 0, 3, 4, 'Admin', 'Admin',
+                     '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z'),
+                    ('Bank Accounts', 'Asset', 'Bank', 1, 5, 6, 'Admin', 'Admin',
+                     '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z');",
     )
     .unwrap();
 
@@ -58,15 +62,15 @@ fn company() -> Fyo {
     Fyo::new(db)
 }
 
-fn text(value: &str) -> DocValue {
+pub(crate) fn text(value: &str) -> DocValue {
     DocValue::Text(value.to_owned())
 }
 
-fn map<const N: usize>(values: [(&str, DocValue); N]) -> DocValueMap {
+pub(crate) fn map<const N: usize>(values: [(&str, DocValue); N]) -> DocValueMap {
     values.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()
 }
 
-fn row(account: &str, debit: f64, credit: f64) -> DocValueMap {
+pub(crate) fn row(account: &str, debit: f64, credit: f64) -> DocValueMap {
     map([
         ("account", text(account)),
         ("debit", DocValue::Number(debit)),
@@ -74,7 +78,7 @@ fn row(account: &str, debit: f64, credit: f64) -> DocValueMap {
     ])
 }
 
-fn journal_entry(fyo: &Fyo) -> Doc {
+pub(crate) fn journal_entry(fyo: &Fyo) -> Doc {
     fyo.get_new_doc(
         "JournalEntry",
         map([
@@ -89,7 +93,7 @@ fn journal_entry(fyo: &Fyo) -> Doc {
     .unwrap()
 }
 
-fn money(doc: &Doc, fieldname: &str) -> String {
+pub(crate) fn money(doc: &Doc, fieldname: &str) -> String {
     match doc.get(fieldname) {
         Some(DocValue::Money(money)) => money.round(None),
         value => panic!("{fieldname} is {value:?}"),
