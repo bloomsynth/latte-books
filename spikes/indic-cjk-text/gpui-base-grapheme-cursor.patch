@@ -1,0 +1,69 @@
+diff --git a/crates/gpui-base/src/input/base/state.rs b/crates/gpui-base/src/input/base/state.rs
+index 295a585..529db79 100644
+--- a/crates/gpui-base/src/input/base/state.rs
++++ b/crates/gpui-base/src/input/base/state.rs
+@@ -2074,7 +2074,7 @@ impl<M: InputModeKind> InputBaseState<M> {
+         self.delete_selections(
+             false,
+             EditIntent::Backspace,
+-            |s, offset| s.previous_boundary(offset)..offset,
++            |s, offset| s.previous_char_boundary(offset)..offset,
+             window,
+             cx,
+         );
+@@ -3739,16 +3739,53 @@ impl<M: InputModeKind> InputBaseState<M> {
+         }
+     }
+ 
++    /// The cursor stop before `offset`: the start of the previous grapheme cluster, so the
++    /// cursor never lands inside a cluster such as an Indic conjunct (क्ष) or an emoji with
++    /// a skin-tone modifier.
+     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
+-        let offset = self.cursor_boundary(offset.saturating_sub(1), Bias::Left);
++        let offset = self.cursor_boundary(self.previous_grapheme_start(offset), Bias::Left);
+         self.clamp_offset_to_visible_backward(offset)
+     }
+ 
++    /// The cursor stop after `offset`: the end of the next grapheme cluster.
+     pub(super) fn next_boundary(&self, offset: usize) -> usize {
+-        let offset = self.cursor_boundary(offset.saturating_add(1), Bias::Right);
++        let offset = self.cursor_boundary(self.next_grapheme_end(offset), Bias::Right);
+         self.clamp_offset_to_visible_forward(offset)
+     }
+ 
++    /// The previous character boundary, used by Backspace. Deleting one code point at a
++    /// time lets Indic users correct a vowel sign without retyping its consonant (कि → क).
++    pub(super) fn previous_char_boundary(&self, offset: usize) -> usize {
++        let offset = self.cursor_boundary(offset.saturating_sub(1), Bias::Left);
++        self.clamp_offset_to_visible_backward(offset)
++    }
++
++    fn previous_grapheme_start(&self, offset: usize) -> usize {
++        let row = self.text.offset_to_point(offset).row;
++        let line_start = self.text.line_start_offset(row);
++        if offset <= line_start {
++            return offset.saturating_sub(1);
++        }
++        let before = self.text.slice(line_start..offset).to_string();
++        before
++            .grapheme_indices(true)
++            .next_back()
++            .map_or(offset - 1, |(ix, _)| line_start + ix)
++    }
++
++    fn next_grapheme_end(&self, offset: usize) -> usize {
++        let row = self.text.offset_to_point(offset).row;
++        let line_end = self.text.line_end_offset(row);
++        if offset >= line_end {
++            return offset.saturating_add(1);
++        }
++        let after = self.text.slice(offset..line_end).to_string();
++        after
++            .graphemes(true)
++            .next()
++            .map_or(offset + 1, |grapheme| offset + grapheme.len())
++    }
++
+     /// Returns the true to let InputElement to render cursor, when Input is focused and current BlinkCursor is visible.
+     pub(crate) fn show_cursor(&self, window: &Window, cx: &App) -> bool {
+         (self.focus_handle.is_focused(window) || M::is_context_menu_open(self, cx))

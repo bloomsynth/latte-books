@@ -142,6 +142,10 @@ CI runs the parity suite on every PR. Any difference fails the build.
      *Passed (2026-10-21): all four work, covered by 8 UI tests. With `uniform_list`, each edit
      reaches the screen in one 120 Hz frame even at 2,000 rows. See `spikes/invoice-grid/RESULTS.md`.*
   4. Text in Hindi, Gujarati, Chinese and Korean renders correctly.
+     *Passed with two known issues (2026-10-22): shaping matches Chromium and input-method
+     composition works. On stock GPUI, wrapped Hindi and Gujarati text can break mid-word, and
+     the cursor can stop inside a conjunct. We don't patch GPUI; both are listed as known
+     issues and to be reported upstream. See `spikes/indic-cjk-text/RESULTS.md`.*
 - **Exit:** all four spikes pass, or we have a written plan B.
 
 ### Phase 1 — Data layer (3–4 weeks)

@@ -1,0 +1,14 @@
+[package]
+name = "indic-cjk-text"
+description = "Phase 0 spike: Hindi, Gujarati, Chinese and Korean text in GPUI"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+csv = "1"
+gpui-kit.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
