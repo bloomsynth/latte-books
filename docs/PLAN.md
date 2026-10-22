@@ -283,6 +283,39 @@ small open-source client for it (AGPL).
 
 Accounts, billing and the servers are a separate project. They are not in this repo.
 
+### Dime — the AI layer (after the app is built)
+
+Dime lets you work in Latte Books from Claude, ChatGPT or any other AI agent: "what does
+Acme owe?", "invoice Acme for 10 chairs", "record their payment". The app keeps the name
+Latte Books; Dime is the name of this layer (dimehq.ai, Bloomsynth's earlier AI assistant
+for Tally).
+
+- **An MCP server over `latte-core`**, shipped with the app and open source (AGPL). It
+  opens the company file and offers tools to look up documents, run reports, and create,
+  submit and cancel documents. You bring your own agent, so Latte pays for no models.
+- **Set up in one click, like DaVinci Resolve 21.1.** Resolve's File > Setup AI Assistants
+  writes an entry for its bundled `ResolveMCP.exe` into each assistant's own config
+  (`~/.claude.json` for Claude Code, `~/.codex/config.toml` for Codex), and that's all the
+  user does. Latte does the same:
+  - The installer puts a small `latte-mcp` executable next to the app. It's built on
+    `latte-core` with no UI.
+  - A "Set up AI assistants" screen lists the assistants found on the computer, such as
+    Claude Desktop, Claude Code and Codex, each with Connect and Disconnect. Connect adds
+    the entry; Disconnect removes only Latte's entry.
+  - The words "MCP", "server" and "config" don't appear in the app.
+  - It works with Latte closed. It uses the company the app last opened (or the one chosen
+    on that screen), and tells the assistant which company that is. Changes an assistant
+    makes while the app is open show up in the app.
+  - Updates and moving the app keep working: the installer and updater rewrite the entries
+    that point at `latte-mcp`.
+- **No shortcuts:** every write goes through the same `Doc` sync, submit and cancel
+  checks as the app. An agent can't save what a person couldn't.
+- **You stay in control:** writes wait for your confirmation, and drafts come before
+  submitting.
+- **Starts after Phase 3,** once the app can show what an agent did. Hosted features
+  (reading receipts and invoices into entries, an assistant built into the app) are paid
+  Latte Cloud services, on Bloomsynth's servers like those above.
+
 ---
 
 ## 6. Release and distribution
