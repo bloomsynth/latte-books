@@ -165,14 +165,19 @@ CI runs the parity suite on every PR. Any difference fails the build.
   child tables, naming series, single values, custom fields, and the change log.
   *Reading done 2026-10-22: ports of the read half of `backend/database/core.ts` (get, getAll
   with Books' filters, single values, exists) and of `fyo/core/converter.ts` to document
-  values. Files must come from Books v0.36.0, which brings their tables up to date. Writing,
-  naming series and the change log are next.*
+  values. Files must come from Books v0.36.0, which brings their tables up to date.
+  Writing done 2026-10-22: insert, update, delete, deleteAll and rename with child tables
+  and single values, `#createTable`, and the converter back to database values. Each write
+  runs in one transaction (Books runs each statement on its own) and logs every row it
+  touches in `latte_changes`. Naming series move to Phase 2: in Books they are part of
+  `Doc.sync`, not the database. Migrating a file isn't ported yet.*
 - Money in and out of the `text` columns with no loss of precision. *Reading done: pesa's
   parsing, `store` and rounding are ported (`latte_db::pesa`); its arithmetic comes with
   Phase 2.*
 - **Exit:** open a real Books file and print every document type with its child rows, read-only.
   *Read-only part met 2026-10-22: `cargo run -p latte-db --example dump` reads all 564
-  documents in a real company file with no errors.*
+  documents in a real company file with no errors. Writing is tested on in-memory files
+  whose tables match a real file's; not yet tried on a copy of a real file.*
 
 ### Phase 2 — Accounting engine (5–7 weeks)
 
@@ -237,7 +242,9 @@ So Phase 5 doesn't need a rework:
 - Every document write goes through `latte-db`, which records table, name, operation, the
   changed fields, a timestamp and a device ID in `latte_changes`.
 - New documents get an ID that's unique across devices, while Books' naming series stays
-  for display.
+  for display. *Open: in Books `name` is both the primary key and the series name
+  (`SINV-1001`), so this ID needs a home outside Books' columns. Until then
+  `latte_changes` records rows by `name`.*
 - No direct SQL writes from UI or regional code.
 
 ---
@@ -276,4 +283,5 @@ So Phase 5 doesn't need a rework:
 1. Create the public GitHub repo, so CI runs and users can file issues.
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
-3. Phase 1: `latte-schema` and `latte-db` reading are done; `latte-db` writing is next.
+3. Phase 1: `latte-schema` and `latte-db` reading and writing are done. Next: write to a
+   copy of a real file and check that Books v0.36.0 still opens it, then Phase 2.

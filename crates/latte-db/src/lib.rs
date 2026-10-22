@@ -3,12 +3,15 @@
 //! Port of `backend/database/` @ v0.36.0. Every write goes through this crate and is
 //! recorded in the `latte_changes` table (see docs/PLAN.md §7).
 //!
-//! Only reading is here so far: [`Database::open_read_only`] opens a file Frappe Books
-//! v0.36.0 has already opened, and never changes it.
+//! [`Database::open_read_only`] opens a file without ever changing it; [`Database::open`]
+//! opens it for writing. Either way the file must have been opened by Frappe Books v0.36.0,
+//! as migrating isn't ported yet.
 
+mod changes;
 mod converter;
 mod core;
 pub mod pesa;
+mod write;
 
 use std::fmt;
 use std::path::Path;
@@ -18,12 +21,14 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 pub use crate::converter::{
     DocValue, DocValueMap, safe_parse_float, safe_parse_int, to_doc_value, to_doc_value_map,
+    to_raw_value, to_raw_value_map,
 };
 pub use crate::core::{
     DatabaseCore, FieldValue, FieldValueMap, Filter, FilterOperand, FilterValue, GetAllOptions,
     Order, QueryFilter, RawValue, SingleValue, SingleValueQuery,
 };
 use crate::pesa::MoneyMaker;
+pub use crate::write::{SYSTEM, get_random_string, sqlite_type};
 
 /// The Frappe Books version whose files this reads.
 pub const BOOKS_VERSION: &str = "0.36.0";
@@ -100,8 +105,18 @@ impl Database {
         Self::from_connection(Connection::open_with_flags(path, flags)?)
     }
 
+    /// Opens a company file for writing. Every write is recorded in its `latte_changes`
+    /// table as made on `device`.
+    pub fn open(path: impl AsRef<Path>, device: impl Into<String>) -> Result<Self, Error> {
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let mut db = Self::from_connection(Connection::open_with_flags(path, flags)?)?;
+        db.core.enable_change_log(device)?;
+        Ok(db)
+    }
+
     /// Port of `DatabaseManager._connect` and the version lookup in `#getAppVersion`.
     pub fn from_connection(conn: Connection) -> Result<Self, Error> {
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         let version = system_setting(&conn, "version")?.unwrap_or_else(|| "0.0.0".into());
         if version != BOOKS_VERSION {
             return Err(Error::Version { found: version });
@@ -121,6 +136,10 @@ impl Database {
 
     pub fn core(&self) -> &DatabaseCore {
         &self.core
+    }
+
+    pub fn core_mut(&mut self) -> &mut DatabaseCore {
+        &mut self.core
     }
 
     pub fn schema_map(&self) -> &SchemaMap {
@@ -157,6 +176,40 @@ impl Database {
             .iter()
             .map(|row| to_doc_value_map(self.schema_map(), &self.pesa, schema_name, row))
             .collect()
+    }
+
+    /// Inserts a document and returns it as written, with its name and its child rows'
+    /// parent fields filled in. See [`DatabaseCore::insert`].
+    pub fn insert(&mut self, schema_name: &str, doc: &DocValueMap) -> Result<DocValueMap, Error> {
+        let mut raw = to_raw_value_map(self.schema_map(), &self.pesa, schema_name, doc)?;
+        self.core.insert(schema_name, &mut raw)?;
+        to_doc_value_map(self.schema_map(), &self.pesa, schema_name, &raw)
+    }
+
+    /// See [`DatabaseCore::update`].
+    pub fn update(&mut self, schema_name: &str, doc: &DocValueMap) -> Result<(), Error> {
+        let mut raw = to_raw_value_map(self.schema_map(), &self.pesa, schema_name, doc)?;
+        self.core.update(schema_name, &mut raw)
+    }
+
+    /// See [`DatabaseCore::delete`].
+    pub fn delete(&mut self, schema_name: &str, name: &str) -> Result<(), Error> {
+        self.core.delete(schema_name, name)
+    }
+
+    /// See [`DatabaseCore::delete_all`].
+    pub fn delete_all(&mut self, schema_name: &str, filters: &QueryFilter) -> Result<usize, Error> {
+        self.core.delete_all(schema_name, filters)
+    }
+
+    /// See [`DatabaseCore::rename`].
+    pub fn rename(
+        &mut self,
+        schema_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), Error> {
+        self.core.rename(schema_name, old_name, new_name)
     }
 }
 

@@ -1,5 +1,4 @@
-// Port of fyo/core/converter.ts @ v0.36.0: database values to document values. The other
-// direction comes with writing.
+// Port of fyo/core/converter.ts @ v0.36.0: database values to document values and back.
 
 use std::str::FromStr;
 
@@ -230,6 +229,182 @@ fn js_number(text: &str) -> f64 {
         }
         _ => f64::NAN,
     }
+}
+
+/// Converts document values into values for `DatabaseCore` to write. A field the schema
+/// doesn't have is an error, as it is in Books.
+pub fn to_raw_value_map(
+    schema_map: &SchemaMap,
+    pesa: &MoneyMaker,
+    schema_name: &str,
+    doc_value_map: &DocValueMap,
+) -> Result<FieldValueMap, Error> {
+    let Some(schema) = schema_map.get(schema_name) else {
+        return Err(Error::NotFound(format!("schema {schema_name} not found")));
+    };
+
+    let mut raw_value_map = FieldValueMap::new();
+    for (fieldname, doc_value) in doc_value_map {
+        let Some(field) = schema.field(fieldname) else {
+            return Err(Error::Value(format!(
+                "{schema_name} has no field {fieldname}"
+            )));
+        };
+
+        let value = match doc_value {
+            DocValue::Table(rows) => {
+                let target = field.target.as_deref().unwrap_or_default();
+                let rows = rows
+                    .iter()
+                    .map(|row| to_raw_value_map(schema_map, pesa, target, row))
+                    .collect::<Result<_, _>>()?;
+                FieldValue::Table(rows)
+            }
+            value => FieldValue::Value(to_raw_value(value, field, pesa)?),
+        };
+        raw_value_map.insert(fieldname.clone(), value);
+    }
+    Ok(raw_value_map)
+}
+
+/// Numbers come out as `RawValue::Real`: better-sqlite3 binds every JavaScript number as a
+/// double, so an Int column stores an integer, a Float column a real, and a text column
+/// (such as `SingleValue.value`) text like `"11.0"`.
+pub fn to_raw_value(value: &DocValue, field: &Field, pesa: &MoneyMaker) -> Result<RawValue, Error> {
+    match field.fieldtype {
+        Some(FieldType::Currency) => to_raw_currency(value, field, pesa),
+        Some(FieldType::Date) => to_raw_date(value, field),
+        Some(FieldType::Datetime) => to_raw_date_time(value, field),
+        Some(FieldType::Int) => to_raw_int(value, field),
+        Some(FieldType::Float) => to_raw_float(value, field),
+        Some(FieldType::Check) => to_raw_check(value, field),
+        Some(FieldType::Link) => Ok(to_raw_link(value)),
+        Some(FieldType::Attachment) => to_raw_attachment(value, field),
+        _ => to_raw_string(value, field),
+    }
+}
+
+fn to_raw_currency(value: &DocValue, field: &Field, pesa: &MoneyMaker) -> Result<RawValue, Error> {
+    let money = match value {
+        DocValue::Money(money) => money.clone(),
+        DocValue::Null => pesa.zero(),
+        DocValue::Number(n) => pesa.from_f64(*n)?,
+        DocValue::Text(text) => pesa.parse(text)?,
+        _ => return Err(raw_conversion_error(value, field)),
+    };
+    Ok(RawValue::Text(money.store()))
+}
+
+fn to_raw_int(value: &DocValue, field: &Field) -> Result<RawValue, Error> {
+    match value {
+        DocValue::Text(text) => Ok(RawValue::Real(safe_parse_int(text))),
+        DocValue::Null => Ok(RawValue::Real(0.0)),
+        DocValue::Number(n) => Ok(RawValue::Real(n.floor())),
+        _ => Err(raw_conversion_error(value, field)),
+    }
+}
+
+fn to_raw_float(value: &DocValue, field: &Field) -> Result<RawValue, Error> {
+    match value {
+        DocValue::Text(text) => Ok(RawValue::Real(safe_parse_float(text))),
+        DocValue::Null => Ok(RawValue::Real(0.0)),
+        DocValue::Number(n) => Ok(RawValue::Real(*n)),
+        _ => Err(raw_conversion_error(value, field)),
+    }
+}
+
+/// The date in the system time zone, as Luxon's `DateTime.fromJSDate(date).toISODate()`.
+/// Text and numbers go through JavaScript's `new Date(value)` first; one that isn't a
+/// valid date is stored as null.
+fn to_raw_date(value: &DocValue, field: &Field) -> Result<RawValue, Error> {
+    let timestamp = match value {
+        DocValue::Null => return Ok(RawValue::Null),
+        DocValue::Date(timestamp) => Some(*timestamp),
+        DocValue::Text(text) => js_date_parse(text),
+        DocValue::Number(ms) if ms.is_finite() => Timestamp::from_millisecond(*ms as i64).ok(),
+        DocValue::Number(_) => None,
+        _ => return Err(raw_conversion_error(value, field)),
+    };
+    Ok(match timestamp {
+        Some(timestamp) => {
+            RawValue::Text(timestamp.to_zoned(TimeZone::system()).date().to_string())
+        }
+        None => RawValue::Null,
+    })
+}
+
+fn to_raw_date_time(value: &DocValue, field: &Field) -> Result<RawValue, Error> {
+    match value {
+        DocValue::Null => Ok(RawValue::Null),
+        DocValue::Text(text) => Ok(RawValue::Text(text.clone())),
+        DocValue::Date(timestamp) => Ok(RawValue::Text(to_iso_string(*timestamp))),
+        _ => Err(raw_conversion_error(value, field)),
+    }
+}
+
+fn to_raw_check(value: &DocValue, field: &Field) -> Result<RawValue, Error> {
+    match value {
+        DocValue::Number(n) => Ok(RawValue::Real(f64::from(*n != 0.0 && !n.is_nan()))),
+        DocValue::Bool(b) => Ok(RawValue::Real(f64::from(*b))),
+        _ => Err(raw_conversion_error(value, field)),
+    }
+}
+
+fn to_raw_string(value: &DocValue, field: &Field) -> Result<RawValue, Error> {
+    match value {
+        DocValue::Null => Ok(RawValue::Null),
+        DocValue::Text(text) => Ok(RawValue::Text(text.clone())),
+        _ => Err(raw_conversion_error(value, field)),
+    }
+}
+
+/// Anything but non-empty text is stored as null: Books checks `value?.length`, which
+/// numbers, booleans and objects don't have.
+fn to_raw_link(value: &DocValue) -> RawValue {
+    match value {
+        DocValue::Text(text) if !text.is_empty() => RawValue::Text(text.clone()),
+        _ => RawValue::Null,
+    }
+}
+
+fn to_raw_attachment(value: &DocValue, field: &Field) -> Result<RawValue, Error> {
+    match value {
+        DocValue::Null | DocValue::Bool(false) => Ok(RawValue::Null),
+        DocValue::Text(text) if text.is_empty() => Ok(RawValue::Null),
+        DocValue::Number(n) if *n == 0.0 || n.is_nan() => Ok(RawValue::Null),
+        DocValue::Attachment(json)
+            if ["name", "data", "type"]
+                .iter()
+                .all(|key| json.get(key).is_some_and(is_json_truthy)) =>
+        {
+            Ok(RawValue::Text(json.to_string()))
+        }
+        _ => Err(raw_conversion_error(value, field)),
+    }
+}
+
+fn raw_conversion_error(value: &DocValue, field: &Field) -> Error {
+    Error::Value(format!(
+        "invalid raw conversion {value:?} found, field: {}.{}",
+        field.schema_name.as_deref().unwrap_or_default(),
+        field.fieldname
+    ))
+}
+
+/// JavaScript's `Date.prototype.toISOString`: UTC with milliseconds.
+pub(crate) fn to_iso_string(timestamp: Timestamp) -> String {
+    timestamp.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// JavaScript's `new Date(text)` for ISO text: a date alone is UTC midnight, a date and
+/// time without an offset is local time.
+fn js_date_parse(text: &str) -> Option<Timestamp> {
+    if text.len() == 10
+        && let Ok(date) = civil::Date::from_str(text)
+    {
+        return date.to_zoned(TimeZone::UTC).ok().map(|z| z.timestamp());
+    }
+    parse_iso(text)
 }
 
 #[cfg(test)]

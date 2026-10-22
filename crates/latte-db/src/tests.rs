@@ -3,19 +3,6 @@ use rusqlite::params;
 
 use super::*;
 
-/// SQLite column types by field type. Port of `sqliteTypeMap` in `backend/helpers.ts`.
-fn column_type(fieldtype: FieldType) -> Option<&'static str> {
-    Some(match fieldtype {
-        FieldType::Int => "integer",
-        FieldType::Float => "float",
-        FieldType::Check => "boolean",
-        FieldType::Date => "date",
-        FieldType::Datetime => "datetime",
-        FieldType::Table | FieldType::Button => return None,
-        _ => "text",
-    })
-}
-
 /// A table as Books creates it, with column defaults but without constraints, so tests can
 /// insert partial rows. Check fields without a default get 0, as Books' documents write
 /// `false` for them.
@@ -26,7 +13,7 @@ fn create_table(conn: &Connection, schema: &Schema) {
         .filter(|f| !f.computed)
         .filter_map(|f| {
             let fieldtype = f.fieldtype?;
-            let mut column = format!("`{}` {}", f.fieldname, column_type(fieldtype)?);
+            let mut column = format!("`{}` {}", f.fieldname, sqlite_type(fieldtype)?);
             match &f.default {
                 Some(latte_schema::RawValue::Bool(b)) => {
                     column += &format!(" default '{}'", *b as u8)

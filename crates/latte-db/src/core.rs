@@ -1,5 +1,5 @@
 // Port of backend/database/core.ts @ v0.36.0: the read half (get, getAll, getSingleValues,
-// exists) and the query builder. Writing comes next.
+// exists) and the query builder. The write half is in write.rs.
 
 use indexmap::IndexMap;
 use latte_schema::{FieldType, Schema, SchemaMap};
@@ -35,6 +35,17 @@ impl RawValue {
             Self::Text(t) => Some(t),
             _ => None,
         }
+    }
+}
+
+impl ToSql for RawValue {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(match self {
+            Self::Null => ToSqlOutput::Owned(Value::Null),
+            Self::Integer(i) => ToSqlOutput::Owned(Value::Integer(*i)),
+            Self::Real(r) => ToSqlOutput::Owned(Value::Real(*r)),
+            Self::Text(t) => ToSqlOutput::Borrowed(ValueRef::Text(t.as_bytes())),
+        })
     }
 }
 
@@ -182,11 +193,17 @@ pub struct SingleValue {
 pub struct DatabaseCore {
     pub(crate) conn: Connection,
     pub(crate) schema_map: SchemaMap,
+    /// Set once the change log is on; writing needs it.
+    pub(crate) device: Option<String>,
 }
 
 impl DatabaseCore {
     pub fn new(conn: Connection, schema_map: SchemaMap) -> Self {
-        Self { conn, schema_map }
+        Self {
+            conn,
+            schema_map,
+            device: None,
+        }
     }
 
     pub fn schema_map(&self) -> &SchemaMap {
@@ -197,7 +214,7 @@ impl DatabaseCore {
         &self.conn
     }
 
-    fn schema(&self, schema_name: &str) -> Result<&Schema, Error> {
+    pub(crate) fn schema(&self, schema_name: &str) -> Result<&Schema, Error> {
         self.schema_map
             .get(schema_name)
             .ok_or_else(|| Error::NotFound(format!("schema {schema_name} not found")))
@@ -463,7 +480,7 @@ impl DatabaseCore {
         Ok(field_value_map)
     }
 
-    fn query(
+    pub(crate) fn query(
         &self,
         sql: &str,
         params: &[FilterValue],
@@ -488,7 +505,7 @@ impl DatabaseCore {
 }
 
 /// The schema's child table fields: (fieldname, target).
-fn table_fields(schema: &Schema) -> Vec<(&str, &str)> {
+pub(crate) fn table_fields(schema: &Schema) -> Vec<(&str, &str)> {
     schema
         .fields
         .iter()
@@ -504,7 +521,7 @@ fn take_text(row: &mut IndexMap<String, RawValue>, key: &str) -> String {
     }
 }
 
-fn is_no_such_table(e: &Error) -> bool {
+pub(crate) fn is_no_such_table(e: &Error) -> bool {
     matches!(e, Error::Sqlite(e) if e.to_string().contains("no such table"))
 }
 
@@ -524,7 +541,11 @@ fn quote_field(field: &str) -> String {
 /// Port of `#applyFiltersToBuilder` and `#getFiltersArray`. Conditions are joined with
 /// `and`, except that an `in` list holding `null` adds `or field is null` right after it,
 /// as knex does, without brackets.
-fn apply_filters(sql: &mut String, params: &mut Vec<FilterValue>, filters: &QueryFilter) {
+pub(crate) fn apply_filters(
+    sql: &mut String,
+    params: &mut Vec<FilterValue>,
+    filters: &QueryFilter,
+) {
     let mut filters_array: Vec<(&str, String, FilterOperand)> = Vec::new();
     for (field, value) in filters {
         let mut push = |operator: &str, operand: &FilterOperand| {
