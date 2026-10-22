@@ -157,7 +157,10 @@ CI runs the parity suite on every PR. Any difference fails the build.
 
 ### Phase 1 — Data layer (3–4 weeks)
 
-- `latte-schema`: load and validate all vendored schemas.
+- `latte-schema`: load and validate all vendored schemas. *Done 2026-10-22: a port of
+  `schemas/index.ts` that combines regional, abstract, meta and custom fields as Books does,
+  with the schema files embedded in the binary. 17 tests check it against every vendored
+  file. Not yet compared with the output of Books' own `getSchemas`.*
 - `latte-db`: open a `.books.db`, check the schema version, generic get/list/insert/update/delete,
   child tables, naming series, single values, custom fields, and the change log.
 - Money in and out of the `text` columns with no loss of precision.
@@ -265,4 +268,4 @@ So Phase 5 doesn't need a rework:
 1. Create the public GitHub repo, so CI runs and users can file issues.
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
-3. Start Phase 1 with `latte-schema`.
+3. Phase 1: `latte-schema` is done; `latte-db` reading is next.
