@@ -29,7 +29,7 @@ between cells, add and remove rows, item autocomplete, and totals that update li
 
 ## Correctness: UI tests
 
-`src/tests.rs` has 8 tests built on gpui-kit's test harness (`#[gpui_kit::test]`). They send real
+`src/tests.rs` has 11 tests built on gpui-kit's test harness (`#[gpui_kit::test]`). They send real
 key and mouse events to a headless window, then check focus and state. They don't check pixels.
 
 | Test | Covers |
@@ -42,8 +42,11 @@ key and mouse events to a headless window, then check focus and state. They don'
 | `add_row_focuses_the_new_item_cell_and_remove_deletes_the_row` | Mouse clicks on Add Row and × |
 | `totals_follow_edits` | Quantity edit plus a second row: 6,207.00 net, 37.26 GST-18, 6,244.26 grand |
 | `tab_runs_through_every_row_of_a_long_grid` | Tab and Shift+Tab across all cells of 20 rows, beyond the ~12 in view |
+| `cells_fill_their_columns` | Each input in a virtualized row is wider than 150 px in a 1,100 px window |
+| `clicking_a_cell_focuses_it_and_clicking_item_reopens_the_list` | Mouse clicks on every cell; clicking Item opens the list again after Esc and after picking |
+| `clicking_outside_closes_the_list_and_clicking_an_entry_picks_it` | A click on empty space closes the list; a mouse click on an entry picks it |
 
-All 8 pass. `cargo test -p invoice-grid` takes about 50 s in a debug build; the long-grid test
+All 11 pass. `cargo test -p invoice-grid` takes about 50 s in a debug build; the long-grid test
 takes most of that.
 
 ## Performance
@@ -94,9 +97,18 @@ events. With virtualization, editing stays within one frame at 2,000 rows.
 
 ## Still open
 
-- **Not tried by hand.** Computer use can't drive a non-installed exe, so mouse and pointer
-  feel, dropdown placement near the window edge, and the scroll-into-view behaviour on Tab have
-  not been checked by a person. Run `target\release\invoice-grid.exe` and try it.
+- **Tried by hand (2026-10-22): three bugs found and fixed.** The tests had focused cells from code
+  and never clicked one, so all three slipped through:
+  - Every cell was about 18 px wide. A `uniform_list` row is only as wide as its content, and
+    the cells' flex basis is 0, so they shrank to their padding. Fixed with `w_full()` on the row.
+  - Clicking the Item cell didn't reopen the list after Esc or after picking an item, because
+    the input already had focus. It now also opens on click, as in Books.
+  - Clicking empty space didn't close the list. In a browser that click takes focus off the
+    input; GPUI leaves focus where it is. The list now closes on any click outside it
+    (`on_mouse_down_out`). Unmatched typed text is still only cleared when the input loses focus.
+
+  Each now has a test with real mouse clicks, and each test fails with its fix removed. Apart from
+  these, the hand test went well.
 - **Fuzzy matching.** Books ranks matches fuzzily; the spike uses a substring match.
 - **Quick-create form.** Books opens a quick-create form for "Create"; the spike adds a
   zero-rate item.

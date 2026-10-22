@@ -1,8 +1,8 @@
 //! A Link field: a text input with a dropdown of matching records, typed into directly.
 //!
 //! Behaviour follows Books' `src/components/Controls/AutoComplete.vue` and `Link.vue` @ v0.36.0:
-//! the list opens on focus and while typing, ↑/↓ move the highlight, Enter picks,
-//! Tab and Esc close, and a "Create" entry is offered when nothing matches exactly.
+//! the list opens on focus, on click and while typing, ↑/↓ move the highlight, Enter picks,
+//! Tab, Esc and a click elsewhere close, and a "Create" entry is offered when nothing matches exactly.
 //! Books uses fuzzy matching; this spike uses a case-insensitive substring match.
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -233,6 +233,8 @@ impl Render for LinkInput {
                         }),
                     )
                     .child(label)
+                    // Registers the entry with the UI test harness; does nothing in normal builds.
+                    .test_support()
             });
             deferred(
                 anchored().snap_to_window().child(
@@ -250,7 +252,8 @@ impl Render for LinkInput {
                         .border_color(theme.border)
                         .rounded_md()
                         .shadow_md()
-                        .children(rows),
+                        .children(rows)
+                        .test_support(),
                 ),
             )
             .with_priority(1)
@@ -260,7 +263,26 @@ impl Render for LinkInput {
             .v_flex()
             .w_full()
             .capture_key_down(cx.listener(Self::on_key_down))
-            .child(Input::new(&self.input).small())
+            // Clicking opens the list even when the input already has focus (after Esc, or
+            // after picking), as in Books. The capture phase runs before the input handles
+            // the click, and the click still reaches the input to place the cursor.
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                if !this.open {
+                    this.refilter(cx);
+                    this.open = true;
+                    cx.notify();
+                }
+            }))
+            // A click elsewhere closes the list, as the input's blur does in Books. GPUI keeps
+            // focus when empty space is clicked, so Blur alone doesn't cover it. A click on an
+            // entry also lands here first; the entry's own handler still picks it afterwards.
+            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                if this.open {
+                    this.open = false;
+                    cx.notify();
+                }
+            }))
+            .child(Input::new(&self.input).id("input").small())
             .children(dropdown)
     }
 }

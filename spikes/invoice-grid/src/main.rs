@@ -239,8 +239,11 @@ impl InvoiceGrid {
         let border = cx.theme().border;
         let row = &self.rows[index];
         let id = row.id;
+        // A uniform_list row is only as wide as its content unless told otherwise, and every
+        // cell's flex basis is 0, so without w_full the cells shrink to their padding.
         div()
             .h_flex()
+            .w_full()
             .py_1()
             .border_b_1()
             .border_color(border)
@@ -261,6 +264,7 @@ impl InvoiceGrid {
             // next row's cells may not be in the window's tab order yet.
             .child(
                 cell(1.)
+                    .id(("item", id))
                     .key_context("FirstCell")
                     .child(row.item.clone())
                     .on_action(cx.listener(move |this, _: &PrevRow, window, cx| {
@@ -269,12 +273,17 @@ impl InvoiceGrid {
                         }
                     })),
             )
-            .child(cell(1.).child(row.tax.clone()))
-            .child(cell(1.).child(Input::new(&row.quantity).small()))
+            .child(cell(1.).id(("tax", id)).child(row.tax.clone()))
             .child(
                 cell(1.)
+                    .id(("quantity", id))
+                    .child(Input::new(&row.quantity).id("input").small()),
+            )
+            .child(
+                cell(1.)
+                    .id(("rate", id))
                     .key_context("LastCell")
-                    .child(Input::new(&row.rate).small())
+                    .child(Input::new(&row.rate).id("input").small())
                     .on_action(cx.listener(move |this, _: &NextRow, window, cx| {
                         if !this.focus_row(index + 1, false, window, cx) {
                             cx.propagate();

@@ -3,8 +3,9 @@
 
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext, Bounds, Entity, Focusable, Point, TestAppContext, Window,
-    WindowBounds, WindowOptions, px, size,
+    AnyWindowHandle, App, AppContext, Bounds, Entity, Focusable, InputEvent as _, MouseButton,
+    MouseDownEvent, MouseUpEvent, Point, TestAppContext, Window, WindowBounds, WindowOptions,
+    point, px, size,
 };
 use rust_decimal::Decimal;
 
@@ -128,6 +129,11 @@ fn totals(
     })
 }
 
+/// Clicks the input in a row's cell, as a person would.
+fn click_cell(window: &mut Window, column: &'static str, row_id: usize, cx: &mut App) {
+    window.within((column, row_id)).click("input", cx);
+}
+
 fn dec(text: &str) -> Decimal {
     text.parse().unwrap()
 }
@@ -208,6 +214,81 @@ fn escape_closes_and_tab_away_restores_unmatched_text(cx: &mut TestAppContext) {
     let text = cx.read(|cx| grid.read(cx).rows[0].item.read(cx).text(cx).to_string());
     assert_eq!(text, "", "text that names no item is dropped on blur");
     assert_eq!(row(cx, &grid, 0).item, None);
+}
+
+#[gpui_kit::test]
+fn cells_fill_their_columns(cx: &mut TestAppContext) {
+    let (handle, _) = open(cx);
+    // 1,100 px window: each of the five full columns gets about 190 px, and the input fills it.
+    for column in ["item", "tax", "quantity", "rate"] {
+        let width = act(cx, handle, |window, _| {
+            window.within((column, 0usize)).find("input").bounds().size.width
+        });
+        assert!(width > px(150.), "{column} cell is {width:?} wide");
+    }
+}
+
+#[gpui_kit::test]
+fn clicking_a_cell_focuses_it_and_clicking_item_reopens_the_list(cx: &mut TestAppContext) {
+    let (handle, grid) = open(cx);
+    for column in ["quantity", "rate", "tax", "item"] {
+        act(cx, handle, |window, cx| click_cell(window, column, 0, cx));
+        assert_eq!(focused(cx, handle, &grid), Some((0, column)));
+    }
+    assert!(row(cx, &grid, 0).dropdown.is_some(), "clicking opens the list");
+
+    // The input keeps focus after Esc, so only the click itself can reopen the list.
+    press(cx, handle, "escape");
+    assert_eq!(row(cx, &grid, 0).dropdown, None);
+    act(cx, handle, |window, cx| click_cell(window, "item", 0, cx));
+    assert!(row(cx, &grid, 0).dropdown.is_some(), "clicking again reopens it");
+
+    // And after picking an item.
+    type_text(cx, handle, "dry");
+    press(cx, handle, "enter");
+    assert_eq!(row(cx, &grid, 0).dropdown, None);
+    act(cx, handle, |window, cx| click_cell(window, "item", 0, cx));
+    assert!(row(cx, &grid, 0).dropdown.is_some());
+}
+
+/// Presses and releases the mouse at a point, such as empty space no element ID covers.
+fn click_at(window: &mut Window, x: f32, y: f32, cx: &mut App) {
+    let position = point(px(x), px(y));
+    let down = MouseDownEvent {
+        button: MouseButton::Left,
+        position,
+        click_count: 1,
+        ..Default::default()
+    };
+    let up = MouseUpEvent {
+        button: MouseButton::Left,
+        position,
+        click_count: 1,
+        ..Default::default()
+    };
+    window.dispatch_event(down.to_platform_input(), cx);
+    window.dispatch_event(up.to_platform_input(), cx);
+}
+
+#[gpui_kit::test]
+fn clicking_outside_closes_the_list_and_clicking_an_entry_picks_it(cx: &mut TestAppContext) {
+    let (handle, grid) = open(cx);
+    act(cx, handle, |window, cx| click_cell(window, "item", 0, cx));
+    assert!(row(cx, &grid, 0).dropdown.is_some());
+
+    // Empty space below the totals, in the 1,100 × 820 window.
+    act(cx, handle, |window, cx| click_at(window, 300., 780., cx));
+    assert_eq!(row(cx, &grid, 0).dropdown, None, "a click elsewhere closes it");
+
+    act(cx, handle, |window, cx| click_cell(window, "item", 0, cx));
+    type_text(cx, handle, "dry");
+    act(cx, handle, |window, cx| {
+        window.within("link-dropdown").click(0usize, cx)
+    });
+    let state = row(cx, &grid, 0);
+    assert_eq!(state.item.as_deref(), Some("Dry-Cleaning"));
+    assert_eq!(state.rate, "69.00");
+    assert_eq!(state.dropdown, None);
 }
 
 #[gpui_kit::test]
