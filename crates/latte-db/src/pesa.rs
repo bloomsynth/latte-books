@@ -1,11 +1,18 @@
 // Port of pesa 1.1.13 (https://github.com/frappe/pesa, MIT): src/preciseNumber.ts, src/utils.ts
-// and the parts of src/money.ts that read and store amounts. Arithmetic comes with the
-// accounting engine.
+// and src/money.ts.
 //
 // pesa keeps an amount as a bigint scaled by 10^precision. Here it is an `i128`, which holds
-// amounts up to about 10^27 at Books' precision of 11; parsing a larger one is an error.
+// amounts up to about 10^27 at Books' precision of 11; parsing a larger one, or arithmetic
+// whose result or intermediate product doesn't fit, is an error.
+//
+// Not ported: the static `PreciseNumber` methods, `Money.options`, `Money.internal`,
+// `Money.toJSON`, and the `currency` and `rate` arguments of the arithmetic and comparison
+// methods (a `Money` of another currency still converts through the rates set with
+// `Money::rate`). Conversion rates are numbers; pesa also takes text.
 
 use std::fmt;
+
+use indexmap::IndexMap;
 
 pub const MIN_PREC: u32 = 0;
 pub const MAX_PREC: u32 = 36;
@@ -15,6 +22,12 @@ pub const USE_BNKR: bool = true;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PesaError(String);
+
+impl PesaError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
 
 impl fmt::Display for PesaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -168,6 +181,116 @@ impl PreciseNumber {
             format!("-{no_sign}")
         }
     }
+
+    /// The amount rounded to `to` decimal places, at the same precision.
+    pub fn clip(&self, to: u32) -> Result<Self, PesaError> {
+        Self::parse(&self.round(to as i64, None), self.precision)
+    }
+
+    /// A copy with pesa's default rounding.
+    pub fn copy(&self) -> Self {
+        Self::from_scaled(self.value, self.precision)
+    }
+
+    pub fn add(&self, value: &Self) -> Result<Self, PesaError> {
+        self.operate(Operator::Add, value)
+    }
+
+    pub fn sub(&self, value: &Self) -> Result<Self, PesaError> {
+        self.operate(Operator::Sub, value)
+    }
+
+    /// Rounds the last digit as pesa's `neutralizedMul` does, which looks only at the first
+    /// dropped digit and always rounds up, even for a negative product.
+    pub fn mul(&self, value: &Self) -> Result<Self, PesaError> {
+        self.operate(Operator::Mul, value)
+    }
+
+    /// Truncates toward zero, as bigint division does.
+    pub fn div(&self, value: &Self) -> Result<Self, PesaError> {
+        self.operate(Operator::Div, value)
+    }
+
+    /// `executeComparison`: compares the amounts at this number's precision. pesa's `eq`,
+    /// `gt`, `lt`, `gte` and `lte`.
+    pub fn compare(&self, value: &Self) -> std::cmp::Ordering {
+        self.value.cmp(&value.scaled_to(self.precision))
+    }
+
+    /// `scaleAndConvert` for a `PreciseNumber`: pesa's `matchPrecision`, which truncates
+    /// when lowering the precision. Raising it past i128 saturates, which only comparisons
+    /// see; arithmetic checks for it first.
+    fn scaled_to(&self, precision: u32) -> i128 {
+        self.checked_scaled_to(precision)
+            .unwrap_or(if self.value < 0 { i128::MIN } else { i128::MAX })
+    }
+
+    fn checked_scaled_to(&self, precision: u32) -> Option<i128> {
+        match self.precision.cmp(&precision) {
+            std::cmp::Ordering::Greater => Some(
+                10i128
+                    .checked_pow(self.precision - precision)
+                    .map_or(0, |scale| self.value / scale),
+            ),
+            std::cmp::Ordering::Less => 10i128
+                .checked_pow(precision - self.precision)
+                .and_then(|scale| self.value.checked_mul(scale)),
+            std::cmp::Ordering::Equal => Some(self.value),
+        }
+    }
+
+    /// `executeOperation` with two values.
+    fn operate(&self, operator: Operator, value: &Self) -> Result<Self, PesaError> {
+        let overflow = || {
+            PesaError(format!(
+                "the result of {self} {operator} {value} is too large"
+            ))
+        };
+        let precision = self.precision;
+        let a = self.value;
+        let b = value.checked_scaled_to(precision).ok_or_else(overflow)?;
+        let neutralizer = 10i128.pow(precision);
+        let result = match operator {
+            Operator::Add => a.checked_add(b),
+            Operator::Sub => a.checked_sub(b),
+            Operator::Div if b == 0 => return Err(PesaError("division by zero".into())),
+            Operator::Div => a.checked_mul(neutralizer).map(|n| n / b),
+            Operator::Mul => a
+                .checked_mul(b)
+                .map(|product| neutralized_mul(product, precision, neutralizer)),
+        };
+        Ok(Self::from_scaled(result.ok_or_else(overflow)?, precision))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Operator {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl fmt::Display for Operator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+        })
+    }
+}
+
+fn neutralized_mul(product: i128, precision: u32, neutralizer: i128) -> i128 {
+    let text = product.to_string();
+    // `temp.charAt(temp.length - precision)`, where the text keeps its minus sign.
+    let rounding = text
+        .len()
+        .checked_sub(precision as usize)
+        .and_then(|i| text.as_bytes().get(i))
+        .is_some_and(|d| d.is_ascii_digit() && *d > b'4');
+    product / neutralizer + i128::from(rounding)
 }
 
 /// The shortest decimal text, with trailing zeros removed. `toString` in pesa.
@@ -177,16 +300,58 @@ impl fmt::Display for PreciseNumber {
     }
 }
 
-/// `Money` in pesa, without currency conversion yet: an amount, its currency and how many
-/// decimals to display.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `Money` in pesa: an amount, its currency, how many decimals to display, and rates for
+/// converting other currencies into it.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Money {
     pub number: PreciseNumber,
     pub currency: String,
     pub display: u32,
+    /// Keyed `"FROM-TO"`, as in pesa.
+    conversion_rates: IndexMap<String, f64>,
+}
+
+/// A value to do arithmetic with: pesa's `ArithmeticInput`.
+#[derive(Debug, Clone, Copy)]
+pub enum Amount<'a> {
+    Money(&'a Money),
+    Number(f64),
+    Text(&'a str),
+}
+
+impl<'a> From<&'a Money> for Amount<'a> {
+    fn from(money: &'a Money) -> Self {
+        Self::Money(money)
+    }
+}
+
+impl From<f64> for Amount<'_> {
+    fn from(number: f64) -> Self {
+        Self::Number(number)
+    }
+}
+
+impl<'a> From<&'a str> for Amount<'a> {
+    fn from(text: &'a str) -> Self {
+        Self::Text(text)
+    }
 }
 
 impl Money {
+    /// `new Money(amount, { currency, display })`. A currency that isn't three capital
+    /// letters is an error, as in pesa; an empty one leaves the money without a currency.
+    pub fn new(number: PreciseNumber, currency: &str, display: u32) -> Result<Self, PesaError> {
+        if !currency.is_empty() {
+            throw_if_invalid_currency_code(currency)?;
+        }
+        Ok(Self {
+            number: number.copy(),
+            currency: currency.to_owned(),
+            display,
+            conversion_rates: IndexMap::new(),
+        })
+    }
+
     pub fn store(&self) -> String {
         self.number.store()
     }
@@ -199,6 +364,264 @@ impl Money {
     pub fn float(&self) -> f64 {
         self.number.float()
     }
+
+    /// Sets the rate for converting `from` into `to`. pesa's `rate` with a `RateSetting`.
+    pub fn rate(&mut self, from: &str, to: &str, rate: f64) -> Result<&mut Self, PesaError> {
+        let key = get_conversion_rate_key(from, to)?;
+        self.conversion_rates.insert(key, rate);
+        Ok(self)
+    }
+
+    pub fn get_conversion_rate(&self, from: &str, to: &str) -> Result<f64, PesaError> {
+        let rate = self
+            .conversion_rates
+            .get(&get_conversion_rate_key(from, to)?)
+            .copied()
+            .filter(|rate| *rate != 0.0)
+            .or_else(|| {
+                let inverse = get_conversion_rate_key(to, from).ok()?;
+                let rate = self.conversion_rates.get(&inverse).copied()?;
+                (rate != 0.0).then(|| 1.0 / rate)
+            });
+        rate.ok_or_else(|| PesaError(format!("please set the conversion rate for {from} to {to}")))
+    }
+
+    pub fn has_conversion_rate(&self, to: &str) -> bool {
+        let (Ok(key), Ok(inverse)) = (
+            get_conversion_rate_key(&self.currency, to),
+            get_conversion_rate_key(to, &self.currency),
+        ) else {
+            return false;
+        };
+        self.conversion_rates.contains_key(&key) || self.conversion_rates.contains_key(&inverse)
+    }
+
+    /// Converts into the currency `to`, at `rate` (which is then kept) or at a rate set
+    /// before.
+    pub fn to(&mut self, to: &str, rate: Option<f64>) -> Result<Self, PesaError> {
+        self.throw_currency_not_set_if_not_set()?;
+        let rate = match rate {
+            Some(rate) => {
+                let from = self.currency.clone();
+                self.rate(&from, to, rate)?;
+                rate
+            }
+            None => self.get_conversion_rate(&self.currency, to)?,
+        };
+        let rate = PreciseNumber::from_f64(rate, self.number.precision)?;
+        self.copy_self(self.number.mul(&rate)?, to)
+    }
+
+    pub fn add<'a>(&self, value: impl Into<Amount<'a>>) -> Result<Self, PesaError> {
+        let rhs = self.convert_input(value.into())?;
+        self.copy_self(self.number.add(&rhs)?, "")
+    }
+
+    pub fn sub<'a>(&self, value: impl Into<Amount<'a>>) -> Result<Self, PesaError> {
+        let rhs = self.convert_input(value.into())?;
+        self.copy_self(self.number.sub(&rhs)?, "")
+    }
+
+    pub fn mul<'a>(&self, value: impl Into<Amount<'a>>) -> Result<Self, PesaError> {
+        let rhs = self.convert_input(value.into())?;
+        self.copy_self(self.number.mul(&rhs)?, "")
+    }
+
+    pub fn div<'a>(&self, value: impl Into<Amount<'a>>) -> Result<Self, PesaError> {
+        let rhs = self.convert_input(value.into())?;
+        self.copy_self(self.number.div(&rhs)?, "")
+    }
+
+    /// `value` percent of the amount.
+    pub fn percent(&self, value: f64) -> Result<Self, PesaError> {
+        let rate = PreciseNumber::from_f64(value / 100.0, self.number.precision)?;
+        self.copy_self(self.number.mul(&rate)?, "")
+    }
+
+    /// Splits the amount into `values` equal parts, or by the given percentages, each
+    /// rounded to `round` decimals (the display precision by default). If the percentages
+    /// add up to 100, the last part takes what rounding left over.
+    pub fn split(&self, values: Split<'_>, round: Option<u32>) -> Result<Vec<Self>, PesaError> {
+        // Where pesa's `reduce` would throw on an empty list.
+        let empty = || PesaError("reduce of empty array with no initial value".into());
+        let round = round.unwrap_or(self.display);
+        let precision = self.number.precision;
+        let percents = match values {
+            Split::Count(n) => {
+                let part = PreciseNumber::from_f64(100.0 / n as f64, precision)?
+                    .clip(round)?
+                    .float();
+                let mut percents = vec![part; n.saturating_sub(1)];
+                let sum = percents
+                    .iter()
+                    .copied()
+                    .reduce(|a, b| a + b)
+                    .ok_or_else(empty)?;
+                percents.push(100.0 - sum);
+                percents
+            }
+            Split::Percents(percents) => percents.to_vec(),
+        };
+
+        let mut total: Option<PreciseNumber> = None;
+        for percent in &percents {
+            let percent = PreciseNumber::from_f64(*percent, DEF_PREC)?;
+            total = Some(match total {
+                Some(total) => total.add(&percent)?,
+                None => percent,
+            });
+        }
+        let is_full = total.ok_or_else(empty)?.float() == 100.0;
+        let last = if is_full {
+            percents.len() - 1
+        } else {
+            percents.len()
+        };
+
+        let mut splits = Vec::with_capacity(percents.len());
+        for percent in &percents[..last] {
+            let rate = PreciseNumber::from_f64(percent / 100.0, precision)?;
+            let part = self.number.mul(&rate)?.round(round as i64, None);
+            splits.push(self.copy_self(PreciseNumber::parse(&part, precision)?, "")?);
+        }
+
+        if is_full {
+            let (first, rest) = splits.split_first().ok_or_else(empty)?;
+            let mut sum = first.clone();
+            for split in rest {
+                sum = sum.add(split)?;
+            }
+            let sum = sum.round(Some(round as i64));
+            let whole = PreciseNumber::parse(&self.round(Some(round as i64)), precision)?;
+            splits.push(self.copy_self(whole, "")?.sub(sum.as_str())?);
+        }
+        Ok(splits)
+    }
+
+    pub fn abs(&self) -> Result<Self, PesaError> {
+        if self.lt(0.0)? {
+            return self.mul(-1.0);
+        }
+        Ok(self.copy())
+    }
+
+    pub fn neg(&self) -> Result<Self, PesaError> {
+        self.mul(-1.0)
+    }
+
+    /// Rounds to `to` decimals, or to the display precision, keeping the precision.
+    pub fn clip(&self, to: Option<u32>) -> Result<Self, PesaError> {
+        let to = to.unwrap_or(self.display);
+        self.copy_self(self.number.clip(to)?, "")
+    }
+
+    pub fn copy(&self) -> Self {
+        let mut copy = self.clone();
+        copy.number = self.number.copy();
+        copy
+    }
+
+    pub fn eq<'a>(&self, value: impl Into<Amount<'a>>) -> Result<bool, PesaError> {
+        Ok(self.compare(value.into())?.is_eq())
+    }
+
+    pub fn neq<'a>(&self, value: impl Into<Amount<'a>>) -> Result<bool, PesaError> {
+        Ok(self.compare(value.into())?.is_ne())
+    }
+
+    pub fn gt<'a>(&self, value: impl Into<Amount<'a>>) -> Result<bool, PesaError> {
+        Ok(self.compare(value.into())?.is_gt())
+    }
+
+    pub fn lt<'a>(&self, value: impl Into<Amount<'a>>) -> Result<bool, PesaError> {
+        Ok(self.compare(value.into())?.is_lt())
+    }
+
+    pub fn gte<'a>(&self, value: impl Into<Amount<'a>>) -> Result<bool, PesaError> {
+        Ok(self.compare(value.into())?.is_ge())
+    }
+
+    pub fn lte<'a>(&self, value: impl Into<Amount<'a>>) -> Result<bool, PesaError> {
+        Ok(self.compare(value.into())?.is_le())
+    }
+
+    pub fn is_positive(&self) -> bool {
+        self.number.is_positive()
+    }
+
+    pub fn is_negative(&self) -> bool {
+        self.number.is_negative()
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.number.is_zero()
+    }
+
+    fn compare(&self, value: Amount<'_>) -> Result<std::cmp::Ordering, PesaError> {
+        Ok(self.number.compare(&self.convert_input(value)?))
+    }
+
+    /// `#convertInput`: the value as a number, converted into this currency if it is money
+    /// of another one.
+    fn convert_input(&self, value: Amount<'_>) -> Result<PreciseNumber, PesaError> {
+        let precision = self.number.precision;
+        let (rhs, money) = match value {
+            Amount::Money(money) => (money.number, Some(money)),
+            Amount::Number(number) => (PreciseNumber::from_f64(number, precision)?, None),
+            Amount::Text(text) => (PreciseNumber::parse(text, precision)?, None),
+        };
+        let Some(money) = money.filter(|m| !m.currency.is_empty() && m.currency != self.currency)
+        else {
+            return Ok(rhs);
+        };
+
+        let currency = &money.currency;
+        let rate = money
+            .get_conversion_rate(currency, &self.currency)
+            .or_else(|_| self.get_conversion_rate(currency, &self.currency))
+            .map_err(|_| {
+                PesaError(format!(
+                    "rate not provided for conversion from {currency} to {}",
+                    self.currency
+                ))
+            })?;
+        rhs.mul(&PreciseNumber::from_f64(rate, rhs.precision)?)
+    }
+
+    /// `#copySelf`: new money at this precision and display, in `currency` or this one,
+    /// with this money's conversion rates.
+    fn copy_self(&self, number: PreciseNumber, currency: &str) -> Result<Self, PesaError> {
+        let currency = if currency.is_empty() {
+            &self.currency
+        } else {
+            currency
+        };
+        let precision = self.number.precision;
+        let scaled = number
+            .checked_scaled_to(precision)
+            .ok_or_else(|| PesaError(format!("'{number}' is too large")))?;
+        let mut money = Self::new(
+            PreciseNumber::from_scaled(scaled, precision),
+            currency,
+            self.display,
+        )?;
+        money.conversion_rates = self.conversion_rates.clone();
+        Ok(money)
+    }
+
+    fn throw_currency_not_set_if_not_set(&self) -> Result<(), PesaError> {
+        if self.currency.is_empty() {
+            return Err(PesaError("currency has not been set for conversion".into()));
+        }
+        Ok(())
+    }
+}
+
+/// How to split money: into equal parts, or by percentages.
+#[derive(Debug, Clone, Copy)]
+pub enum Split<'a> {
+    Count(usize),
+    Percents(&'a [f64]),
 }
 
 impl fmt::Display for Money {
@@ -233,6 +656,7 @@ impl MoneyMaker {
             number,
             currency: self.currency.clone(),
             display: self.display,
+            conversion_rates: IndexMap::new(),
         }
     }
 }
@@ -257,6 +681,19 @@ fn add_digit(digits: &str, digit: u8) -> String {
         "" => "0".into(),
         trimmed => trimmed.into(),
     }
+}
+
+fn throw_if_invalid_currency_code(code: &str) -> Result<(), PesaError> {
+    if code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase()) {
+        return Ok(());
+    }
+    Err(PesaError(format!("invalid currency code '{code}'")))
+}
+
+fn get_conversion_rate_key(from: &str, to: &str) -> Result<String, PesaError> {
+    throw_if_invalid_currency_code(from)?;
+    throw_if_invalid_currency_code(to)?;
+    Ok(format!("{from}-{to}"))
 }
 
 fn digit_at(digits: &str, i: usize) -> Option<u32> {
@@ -431,5 +868,168 @@ mod tests {
         assert_eq!(parse("0.50", 11).to_string(), "0.5");
         assert_eq!(parse("-0.05", 11).to_string(), "-0.05");
         assert_eq!(parse("0", 11).to_string(), "0");
+    }
+
+    #[test]
+    fn add_and_sub_match_the_precision_by_truncating() {
+        let a = parse("1.10", 2);
+        assert_eq!(a.add(&parse("2.25", 2)).unwrap().integer(), 335);
+        assert_eq!(a.add(&parse("0.0199", 4)).unwrap().integer(), 111);
+        assert_eq!(a.sub(&parse("2.25", 2)).unwrap().integer(), -115);
+        assert_eq!(parse("0.0199", 4).add(&a).unwrap().integer(), 11199);
+    }
+
+    #[test]
+    fn mul_rounds_on_the_first_dropped_digit() {
+        let mul = |a: &str, b: &str, precision| {
+            parse(a, precision)
+                .mul(&parse(b, precision))
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(mul("1.25", "1.25", 2), "1.56");
+        assert_eq!(mul("1.5", "1.7", 1), "2.6");
+        // pesa adds the rounding digit without minding the sign.
+        assert_eq!(mul("-1.5", "1.7", 1), "-2.4");
+        assert_eq!(mul("-1.4", "1.2", 1), "-1.5");
+        assert_eq!(mul("3", "4", 0), "12");
+        assert_eq!(mul("0.05", "0.1", 2), "0.01");
+        assert_eq!(mul("-0.05", "0.1", 2), "0.01");
+    }
+
+    #[test]
+    fn div_truncates() {
+        let div = |a: &str, b: &str| parse(a, 2).div(&parse(b, 2)).map(|n| n.to_string());
+        assert_eq!(div("1", "3").unwrap(), "0.33");
+        assert_eq!(div("2", "3").unwrap(), "0.66");
+        assert_eq!(div("-2", "3").unwrap(), "-0.66");
+        assert!(div("1", "0").is_err());
+    }
+
+    #[test]
+    fn arithmetic_that_overflows_is_an_error() {
+        let big = parse("99999999999999999999999999", 11);
+        assert!(big.mul(&big).is_err());
+        assert!(big.add(&big).is_ok());
+        assert!(big.div(&parse("0.5", 11)).is_err());
+    }
+
+    #[test]
+    fn compare_matches_the_precision() {
+        use std::cmp::Ordering;
+        assert_eq!(
+            parse("1.00", 2).compare(&parse("1.005", 3)),
+            Ordering::Equal
+        );
+        assert_eq!(
+            parse("1.01", 2).compare(&parse("1.005", 3)),
+            Ordering::Greater
+        );
+        assert_eq!(parse("-1", 2).compare(&parse("0", 2)), Ordering::Less);
+    }
+
+    #[test]
+    fn clip_rounds_and_keeps_the_precision() {
+        let clipped = parse("2.345", 11).clip(2).unwrap();
+        assert_eq!(clipped.precision(), 11);
+        assert_eq!(clipped.store(), "2.34000000000");
+    }
+
+    fn inr() -> MoneyMaker {
+        MoneyMaker {
+            currency: "INR".into(),
+            precision: 11,
+            display: 2,
+        }
+    }
+
+    #[test]
+    fn money_arithmetic() {
+        let pesa = inr();
+        let m = pesa.from_f64(0.2).unwrap();
+        assert_eq!(m.add(0.1).unwrap().store(), "0.30000000000");
+        assert_eq!(m.sub("1,000").unwrap().to_string(), "-999.8");
+        assert_eq!(m.mul(3.0).unwrap().to_string(), "0.6");
+        assert_eq!(
+            m.div(&pesa.parse("3").unwrap()).unwrap().round(None),
+            "0.07"
+        );
+        assert_eq!(
+            pesa.parse("200")
+                .unwrap()
+                .percent(18.0)
+                .unwrap()
+                .to_string(),
+            "36"
+        );
+        let negative = pesa.parse("-5.5").unwrap();
+        assert_eq!(negative.abs().unwrap().to_string(), "5.5");
+        assert_eq!(negative.neg().unwrap().to_string(), "5.5");
+        assert_eq!(m.abs().unwrap(), m);
+        assert_eq!(
+            pesa.parse("2.345").unwrap().clip(None).unwrap().store(),
+            "2.34000000000"
+        );
+        let sum = m.add(&m).unwrap();
+        assert_eq!(sum.currency, "INR");
+        assert_eq!(sum.display, 2);
+    }
+
+    #[test]
+    fn money_comparisons() {
+        let ten = inr().parse("10").unwrap();
+        assert!(ten.eq("10").unwrap());
+        assert!(ten.eq(10.0).unwrap());
+        assert!(ten.neq(&inr().zero()).unwrap());
+        assert!(ten.gt(9.99).unwrap());
+        assert!(ten.lt(10.01).unwrap());
+        assert!(ten.gte(10.0).unwrap() && ten.lte(10.0).unwrap());
+        assert!(ten.eq("ten").is_err());
+    }
+
+    #[test]
+    fn money_of_another_currency_needs_a_rate() {
+        let usd = MoneyMaker {
+            currency: "USD".into(),
+            ..inr()
+        };
+        let dollar = usd.parse("1").unwrap();
+        let rupees = inr().parse("160").unwrap();
+        assert_eq!(
+            dollar.add(&rupees).unwrap_err().to_string(),
+            "rate not provided for conversion from INR to USD"
+        );
+
+        let mut dollar = dollar;
+        dollar.rate("USD", "INR", 80.0).unwrap();
+        assert_eq!(dollar.add(&rupees).unwrap().to_string(), "3");
+        assert!(dollar.has_conversion_rate("INR"));
+        assert_eq!(dollar.get_conversion_rate("INR", "USD").unwrap(), 0.0125);
+
+        let mut two = usd.parse("2").unwrap();
+        let converted = two.to("INR", Some(80.0)).unwrap();
+        assert_eq!(converted.currency, "INR");
+        assert_eq!(converted.to_string(), "160");
+        assert!(two.rate("usd", "INR", 1.0).is_err());
+    }
+
+    #[test]
+    fn money_splits() {
+        let hundred = inr().parse("100").unwrap();
+        let rounded = |splits: Vec<Money>| splits.iter().map(|m| m.round(None)).collect::<Vec<_>>();
+        assert_eq!(
+            rounded(hundred.split(Split::Count(3), None).unwrap()),
+            ["33.33", "33.33", "33.34"]
+        );
+        assert_eq!(
+            rounded(hundred.split(Split::Percents(&[50.0, 25.0]), None).unwrap()),
+            ["50.00", "25.00"]
+        );
+        assert_eq!(
+            rounded(hundred.split(Split::Percents(&[70.0, 30.0]), None).unwrap()),
+            ["70.00", "30.00"]
+        );
+        assert!(hundred.split(Split::Count(1), None).is_err());
+        assert!(hundred.split(Split::Percents(&[]), None).is_err());
     }
 }

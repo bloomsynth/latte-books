@@ -77,6 +77,42 @@ pub fn to_doc_value(value: &RawValue, field: &Field, pesa: &MoneyMaker) -> Resul
     }
 }
 
+/// `Converter.toDocValue` given a value that may already be a document value, as Books
+/// does with the data for a new document: money, dates and booleans that fit the field are
+/// kept, and text and numbers are read as database values are. A table is an error; rows
+/// are made into documents by the caller.
+pub fn convert_doc_value(
+    value: &DocValue,
+    field: &Field,
+    pesa: &MoneyMaker,
+) -> Result<DocValue, Error> {
+    let fieldtype = field.fieldtype;
+    match value {
+        DocValue::Money(_) if fieldtype == Some(FieldType::Currency) => Ok(value.clone()),
+        DocValue::Date(_) if matches!(fieldtype, Some(FieldType::Date | FieldType::Datetime)) => {
+            Ok(value.clone())
+        }
+        DocValue::Attachment(_) if fieldtype == Some(FieldType::Attachment) => Ok(value.clone()),
+        DocValue::Bool(_) if fieldtype == Some(FieldType::Check) => Ok(value.clone()),
+        DocValue::Bool(b)
+            if matches!(
+                fieldtype,
+                Some(FieldType::Currency | FieldType::Int | FieldType::Float)
+            ) =>
+        {
+            to_doc_value(&RawValue::Real(f64::from(*b)), field, pesa)
+        }
+        DocValue::Null => to_doc_value(&RawValue::Null, field, pesa),
+        DocValue::Text(text) => to_doc_value(&RawValue::Text(text.clone()), field, pesa),
+        DocValue::Number(n) => to_doc_value(&RawValue::Real(*n), field, pesa),
+        _ => Err(Error::Value(format!(
+            "invalid doc conversion {value:?} found, field: {}.{}",
+            field.schema_name.as_deref().unwrap_or_default(),
+            field.fieldname
+        ))),
+    }
+}
+
 fn to_doc_string(value: &RawValue, field: &Field) -> Result<DocValue, Error> {
     match value {
         RawValue::Null => Ok(DocValue::Null),
@@ -392,7 +428,7 @@ fn raw_conversion_error(value: &DocValue, field: &Field) -> Error {
 }
 
 /// JavaScript's `Date.prototype.toISOString`: UTC with milliseconds.
-pub(crate) fn to_iso_string(timestamp: Timestamp) -> String {
+pub fn to_iso_string(timestamp: Timestamp) -> String {
     timestamp.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 

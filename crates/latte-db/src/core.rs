@@ -214,6 +214,12 @@ impl DatabaseCore {
         &self.conn
     }
 
+    /// Gives the connection back, e.g. to open it as a [`crate::Database`] once its tables
+    /// are made.
+    pub fn into_connection(self) -> Connection {
+        self.conn
+    }
+
     pub(crate) fn schema(&self, schema_name: &str) -> Result<&Schema, Error> {
         self.schema_map
             .get(schema_name)

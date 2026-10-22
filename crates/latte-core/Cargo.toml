@@ -9,3 +9,8 @@ publish.workspace = true
 [dependencies]
 latte-schema.workspace = true
 latte-db.workspace = true
+indexmap.workspace = true
+jiff.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true

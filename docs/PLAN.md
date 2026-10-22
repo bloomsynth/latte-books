@@ -188,6 +188,12 @@ CI runs the parity suite on every PR. Any difference fails the build.
 - Port `LedgerPosting` and the rules for accounts, journal entries, sales and purchase
   invoices, payments (incl. against invoices), taxes, multi-currency, round-off,
   submit and cancel.
+  *`Doc` done 2026-10-22 (`latte_core::Doc` and `Fyo`): defaults, child rows, `set`,
+  formulas, validation, meta values, naming and Number Series, load, sync, submit, cancel,
+  delete, rename and duplicate, with the NumberSeries and SystemSettings models. pesa's
+  arithmetic is ported for it. The deviations are listed at the top of each file; the main
+  ones are no document cache or observers, no links, and no CustomForm or CustomField
+  models yet. Books' `Doc` doesn't check `minvalue` or `maxvalue`, so neither does this.*
 - Reports: General Ledger, Trial Balance, P&L, Balance Sheet.
 - Setup: create a new company from `countryInfo.json` and the charts of accounts.
 - **Exit:** parity suite passes for every core document and report.
@@ -287,5 +293,5 @@ So Phase 5 doesn't need a rework:
 1. Create the public GitHub repo, so CI runs and users can file issues.
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
-3. Phase 1 is done. Next: Phase 2, starting with porting `Doc` (meta values, naming
-   series, validation, sync) and then `LedgerPosting`.
+3. Phase 1 is done, and Phase 2's `Doc` layer is ported. Next: the app models that
+   journal entries need (`Transactional`, `JournalEntry`, `Account`) and `LedgerPosting`.

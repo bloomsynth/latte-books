@@ -222,8 +222,11 @@ dependencies = [
 name = "latte-core"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
+ "jiff",
  "latte-db",
  "latte-schema",
+ "rusqlite",
 ]
 
 [[package]]

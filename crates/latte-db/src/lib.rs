@@ -20,8 +20,8 @@ use latte_schema::{FieldType, RawCustomField, SchemaMap, get_schemas};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 pub use crate::converter::{
-    DocValue, DocValueMap, safe_parse_float, safe_parse_int, to_doc_value, to_doc_value_map,
-    to_raw_value, to_raw_value_map,
+    DocValue, DocValueMap, convert_doc_value, safe_parse_float, safe_parse_int, to_doc_value,
+    to_doc_value_map, to_iso_string, to_raw_value, to_raw_value_map,
 };
 pub use crate::core::{
     DatabaseCore, FieldValue, FieldValueMap, Filter, FilterOperand, FilterValue, GetAllOptions,
