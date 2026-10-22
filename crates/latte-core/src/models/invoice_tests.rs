@@ -11,7 +11,7 @@ const CREATED: &str = "2025-01-01T00:00:00.000Z";
 
 /// The test company with what invoices need: receivable, payable, tax, round-off,
 /// discount and cost accounts; a customer, a supplier, an item and an 18% GST template.
-fn books() -> Fyo {
+pub(super) fn books() -> Fyo {
     let mut fyo = company();
     fyo.register_models(models(), HashMap::new());
 
@@ -87,13 +87,13 @@ fn books() -> Fyo {
 }
 
 /// Writes settings as they'd be saved, without the company details the form needs too.
-fn set_accounting_settings(fyo: &mut Fyo, values: DocValueMap) {
+pub(super) fn set_accounting_settings(fyo: &mut Fyo, values: DocValueMap) {
     fyo.db.update("AccountingSettings", &values).unwrap();
 }
 
 /// A new invoice for `party`, dated 2025-04-01, with the values set as the form sets
 /// them, then a row per `(quantity, values)`, each for a Widget with the 18% GST.
-fn invoice(
+pub(super) fn invoice(
     fyo: &mut Fyo,
     schema_name: &str,
     party: &str,
@@ -124,7 +124,7 @@ fn invoice(
     doc
 }
 
-fn sales_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
+pub(super) fn sales_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
     invoice(
         fyo,
         "SalesInvoice",
@@ -136,7 +136,7 @@ fn sales_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
 
 /// The document's ledger entries that aren't reverted, oldest first, as
 /// `(account, debit, credit)`.
-fn postings(fyo: &Fyo, name: &str) -> Vec<(String, String, String)> {
+pub(super) fn postings(fyo: &Fyo, name: &str) -> Vec<(String, String, String)> {
     let options = GetAllOptions {
         fields: Some(vec!["*".to_owned()]),
         filters: QueryFilter::from([
@@ -168,11 +168,11 @@ fn postings(fyo: &Fyo, name: &str) -> Vec<(String, String, String)> {
         .collect()
 }
 
-fn posting(account: &str, debit: &str, credit: &str) -> (String, String, String) {
+pub(super) fn posting(account: &str, debit: &str, credit: &str) -> (String, String, String) {
     (account.to_owned(), debit.to_owned(), credit.to_owned())
 }
 
-fn outstanding(fyo: &Fyo, schema_name: &str, name: &str) -> String {
+pub(super) fn outstanding(fyo: &Fyo, schema_name: &str, name: &str) -> String {
     match fyo.get_value(schema_name, Some(name), "outstandingAmount") {
         Some(DocValue::Money(money)) => money.round(None),
         value => panic!("outstandingAmount is {value:?}"),
@@ -344,7 +344,7 @@ fn discounts_come_off_before_tax_and_post_to_the_discount_account() {
 }
 
 /// Inserts a document as it'd be saved, with its meta values.
-fn insert(fyo: &mut Fyo, schema_name: &str, values: DocValueMap) {
+pub(super) fn insert(fyo: &mut Fyo, schema_name: &str, values: DocValueMap) {
     let mut values = values;
     for fieldname in ["createdBy", "modifiedBy"] {
         values.insert(fieldname.to_owned(), text("Admin"));

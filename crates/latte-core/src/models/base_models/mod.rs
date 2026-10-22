@@ -8,6 +8,8 @@ pub mod item;
 pub mod journal_entry;
 pub mod journal_entry_account;
 pub mod party;
+pub mod payment;
+pub mod payment_for;
 pub mod purchase_invoice;
 pub mod sales_invoice;
 pub mod tax_summary;

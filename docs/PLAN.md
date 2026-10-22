@@ -219,6 +219,19 @@ CI runs the parity suite on every PR. Any difference fails the build.
   rate box shows the rate to two decimals and writes that back when you leave it, even
   unchanged, so its row rate was 13.33 against Latte's 13.3333…. The sums from either
   rate agree. That rewrite is a Books UI bug for Phase 3 not to copy.*
+  *Payments post 2026-10-23: the Payment and PaymentFor models. A payment takes its
+  party, type, accounts and amount from the invoices it pays; submitting posts it and
+  lowers what the invoices and the party owe, cancelling puts it back, and cancelling or
+  deleting an invoice does the same to its payments. An invoice set to make its payment on
+  submit does so. Write-offs are refused until their postings are settled. Four Books bugs
+  are fixed (see DEVIATIONS.md); two of them were seen in Books. Checked against Books
+  2026-10-23: the `payment_test` example paid the two invoices from the invoice check in
+  a copy of a real file, and Books v0.36.0 paid its own two by Make Payment. PAY-1014
+  and Books' PAY-1016 match field for field: payment, row, ledger entries and what the
+  invoice and party owe, apart from `createdBy`/`modifiedBy` and the amount, which is
+  each invoice's outstanding (they differ by the Books rate box bug above). Books' other
+  payment, PAY-1015, was lost to the failed-cancel bug; its ledger entries, which Books
+  left behind, match Latte's PAY-1013.*
 - Reports: General Ledger, Trial Balance, P&L, Balance Sheet.
 - Setup: create a new company from `countryInfo.json` and the charts of accounts.
 - **Exit:** parity suite passes for every core document and report.
@@ -319,5 +332,5 @@ So Phase 5 doesn't need a rework:
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
 3. Phase 1 is done. In Phase 2 the `Doc` layer is ported, and journal entries and sales
-   and purchase invoices post to the ledger, matching what Books posts. Next: payments,
-   including payments against invoices, then returns.
+   and purchase invoices and payments post to the ledger, matching what Books posts.
+   Next: returns.

@@ -1031,7 +1031,7 @@ impl Doc {
 
         let model = self.model.clone();
         model.before_submit(self, fyo)?;
-        self.set_and_sync(fyo, "submitted", DocValue::Bool(true))?;
+        self.set_and_sync_or_restore(fyo, "submitted")?;
         model.after_submit(self, fyo)
     }
 
@@ -1043,8 +1043,20 @@ impl Doc {
 
         let model = self.model.clone();
         model.before_cancel(self, fyo)?;
-        self.set_and_sync(fyo, "cancelled", DocValue::Bool(true))?;
+        self.set_and_sync_or_restore(fyo, "cancelled")?;
         model.after_cancel(self, fyo)
+    }
+
+    /// Sets the `submitted` or `cancelled` flag and saves. If the save fails, the document
+    /// is put back as it was. Books leaves the flag set, so a submitted document whose
+    /// cancel failed passes for cancelled and can be deleted without being reverted.
+    fn set_and_sync_or_restore(&mut self, fyo: &mut Fyo, fieldname: &str) -> Result<(), Error> {
+        let before = self.clone();
+        let result = self.set_and_sync(fyo, fieldname, DocValue::Bool(true));
+        if result.is_err() {
+            *self = before;
+        }
+        result
     }
 
     /// `rename`. Does nothing if the document is submitted.

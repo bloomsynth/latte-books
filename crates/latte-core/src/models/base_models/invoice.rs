@@ -11,12 +11,12 @@
 //     rules on), with coupons, or redeeming loyalty points. Books would apply a rule only
 //     where its quantities, amounts, dates and coupons fit, but Latte refuses on any;
 //   - submitting a return, an invoice that earns loyalty points, or one set to make its
-//     payment or its shipment or receipt on submit;
-//   - cancelling a return, or an invoice with payments, coupons or loyalty points;
-//   - deleting an invoice with payments or cancelled shipments or receipts.
+//     shipment or receipt on submit;
+//   - cancelling a return, or an invoice with coupons or loyalty points;
+//   - deleting an invoice with cancelled shipments or receipts.
 //
-// Not ported yet: returns (`getReturnDoc` and what submitting one updates), payments
-// (`getPayment`, `getLinkedPayments`), stock transfers (`getStockTransfer`,
+// Not ported yet: returns (`getReturnDoc` and what submitting one updates),
+// `getLinkedPayments` (for the UI), stock transfers (`getStockTransfer`,
 // `getLinkedStockTransfers`), pricing rules, coupons and loyalty points, `addItem`, and, as
 // the UI needs them, `filters` and `createFilters`.
 
@@ -126,16 +126,18 @@ fn required_money(doc: &Doc, fieldname: &str) -> Result<Money, Error> {
     money(doc, fieldname).ok_or_else(|| Error::Value(format!("{fieldname} is not money")))
 }
 
-/// One tax on one row: `InvoiceTaxItem`, less what isn't used.
-struct TaxItem {
-    account: String,
-    rate: f64,
-    tax_amount: Money,
+/// One tax on one row: `InvoiceTaxItem`, less `fullAmount`, which isn't used.
+pub(crate) struct TaxItem {
+    pub(crate) account: String,
+    pub(crate) payment_account: Option<String>,
+    pub(crate) rate: f64,
+    pub(crate) tax_amount: Money,
+    pub(crate) exchange_rate: f64,
 }
 
 /// `getTaxItems`: each row's taxes, on its amount less its discount. With the discount
 /// applied after tax there are none, as in Books.
-fn get_tax_items(doc: &Doc, fyo: &Fyo) -> Result<Vec<TaxItem>, Error> {
+pub(crate) fn get_tax_items(doc: &Doc, fyo: &Fyo) -> Result<Vec<TaxItem>, Error> {
     let mut tax_items = Vec::new();
     for item in doc.table("items") {
         let Some(tax) = text(item, "tax").filter(|t| !t.is_empty()) else {
@@ -174,10 +176,16 @@ fn get_tax_items(doc: &Doc, fyo: &Fyo) -> Result<Vec<TaxItem>, Error> {
                 Some(DocValue::Text(account)) => account.clone(),
                 _ => String::new(),
             };
+            let payment_account = match details.get("payment_account") {
+                Some(DocValue::Text(account)) => Some(account.clone()),
+                _ => None,
+            };
             tax_items.push(TaxItem {
                 account,
+                payment_account,
                 rate,
                 tax_amount: amount.mul(rate / 100.0)?,
+                exchange_rate: exchange_rate(doc),
             });
         }
     }
@@ -192,6 +200,7 @@ pub(crate) fn get_tax_summary(doc: &Doc, fyo: &Fyo) -> Result<Vec<DocValueMap>, 
         account,
         rate,
         tax_amount,
+        ..
     } in get_tax_items(doc, fyo)?
     {
         let entry = taxes
@@ -771,6 +780,85 @@ fn has_loyalty_point_entry(doc: &Doc, fyo: &Fyo) -> Result<bool, Error> {
         .is_empty())
 }
 
+/// `getPayment`: a new payment of what is outstanding on a submitted invoice, or `None`
+/// if nothing is.
+pub fn get_payment(doc: &Doc, fyo: &Fyo) -> Result<Option<Doc>, Error> {
+    if !doc.is_submitted() {
+        return Ok(None);
+    }
+    let Some(outstanding_amount) = money(doc, "outstandingAmount") else {
+        return Ok(None);
+    };
+    if outstanding_amount.is_zero() {
+        return Ok(None);
+    }
+
+    let (mut account_field, mut payment_type) = ("account", "Receive");
+    let reference_type = if is_sales(doc) {
+        if is_return(doc) {
+            (account_field, payment_type) = ("paymentAccount", "Pay");
+        }
+        "SalesInvoice"
+    } else {
+        (account_field, payment_type) = ("paymentAccount", "Pay");
+        if is_return(doc) {
+            (account_field, payment_type) = ("account", "Receive");
+        }
+        "PurchaseInvoice"
+    };
+    let payment_amount = if is_return(doc) {
+        outstanding_amount.clone()
+    } else {
+        outstanding_amount.abs()?
+    };
+    let row_amount = if is_return(doc) {
+        doc.get("grandTotal").cloned().unwrap_or(DocValue::Null)
+    } else {
+        DocValue::Money(outstanding_amount)
+    };
+
+    let value = |fieldname: &str| doc.get(fieldname).cloned().unwrap_or(DocValue::Null);
+    let text = |value: &str| DocValue::Text(value.to_owned());
+    let mut data = DocValueMap::from([
+        ("party".to_owned(), value("party")),
+        ("date".to_owned(), DocValue::Date(Timestamp::now())),
+        ("paymentType".to_owned(), text(payment_type)),
+        ("amount".to_owned(), DocValue::Money(payment_amount)),
+        (account_field.to_owned(), value("account")),
+        ("referenceType".to_owned(), text(reference_type)),
+        (
+            "for".to_owned(),
+            DocValue::Table(vec![DocValueMap::from([
+                ("referenceType".to_owned(), text(doc.schema_name())),
+                ("referenceName".to_owned(), value("name")),
+                ("amount".to_owned(), row_amount),
+            ])]),
+        ),
+    ]);
+
+    if is_truthy(doc.get("makeAutoPayment"))
+        && let Some(auto_payment_account) = auto_payment_account(doc, fyo)
+    {
+        let fieldname = if is_sales(doc) {
+            "paymentAccount"
+        } else {
+            "account"
+        };
+        data.insert(fieldname.to_owned(), DocValue::Text(auto_payment_account));
+    }
+
+    Ok(Some(fyo.get_new_doc("Payment", data)?))
+}
+
+/// `_cancelPayments`.
+fn cancel_payments(doc: &Doc, fyo: &mut Fyo) -> Result<(), Error> {
+    for payment_id in get_payment_ids(doc, fyo)? {
+        let mut payment = fyo.get_doc("Payment", Some(&payment_id))?;
+        payment.cancel(fyo)?;
+    }
+    Ok(())
+}
+
 /// `_updatePartyOutStanding`.
 fn update_party_outstanding(doc: &Doc, fyo: &mut Fyo) -> Result<(), Error> {
     let mut party = fyo.get_doc("Party", text(doc, "party"))?;
@@ -935,9 +1023,6 @@ impl Model for Invoice {
         if earns_loyalty_points(doc, fyo)? {
             return Err(not_ported("Earning loyalty points"));
         }
-        if is_truthy(doc.get("makeAutoPayment")) && auto_payment_account(doc, fyo).is_some() {
-            return Err(not_ported("Making the payment on submit"));
-        }
         if is_truthy(doc.get("makeAutoStockTransfer"))
             && auto_stock_transfer_location(doc, fyo).is_some()
         {
@@ -963,16 +1048,22 @@ impl Model for Invoice {
             ),
         ]);
         fyo.db.update(doc.schema_name(), &data)?;
-        update_party_outstanding(doc, fyo)
+        update_party_outstanding(doc, fyo)?;
+
+        if is_truthy(doc.get("makeAutoPayment")) && auto_payment_account(doc, fyo).is_some() {
+            if let Some(mut payment) = get_payment(doc, fyo)? {
+                payment.sync(fyo)?;
+                payment.submit(fyo)?;
+            }
+            doc.load(fyo)?;
+        }
+        Ok(())
     }
 
     fn before_cancel(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
         validate_stock_transfer_cancelled(doc, fyo)?;
         validate_has_linked_return_invoices(doc, fyo)?;
 
-        if !get_payment_ids(doc, fyo)?.is_empty() {
-            return Err(not_ported("Cancelling an invoice with payments"));
-        }
         if is_return(doc) {
             return Err(not_ported("Cancelling a return"));
         }
@@ -987,6 +1078,7 @@ impl Model for Invoice {
 
     fn after_cancel(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
         transactional::after_cancel(self, doc, fyo)?;
+        cancel_payments(doc, fyo)?;
         update_party_outstanding(doc, fyo)
     }
 
@@ -997,13 +1089,15 @@ impl Model for Invoice {
                 "Deleting an invoice with cancelled shipments or receipts",
             ));
         }
-        if !get_payment_ids(doc, fyo)?.is_empty() {
-            return Err(not_ported("Deleting an invoice with payments"));
-        }
         Ok(())
     }
 
     fn after_delete(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
-        transactional::after_delete(self, doc, fyo)
+        transactional::after_delete(self, doc, fyo)?;
+        for name in get_payment_ids(doc, fyo)? {
+            let mut payment = fyo.get_doc("Payment", Some(&name))?;
+            payment.delete(fyo)?;
+        }
+        Ok(())
     }
 }

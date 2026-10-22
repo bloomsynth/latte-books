@@ -192,6 +192,11 @@ impl Database {
         self.core.update(schema_name, &mut raw)
     }
 
+    /// See [`DatabaseCore::exists`].
+    pub fn exists(&self, schema_name: &str, name: Option<&str>) -> Result<bool, Error> {
+        self.core.exists(schema_name, name)
+    }
+
     /// See [`DatabaseCore::delete`].
     pub fn delete(&mut self, schema_name: &str, name: &str) -> Result<(), Error> {
         self.core.delete(schema_name, name)

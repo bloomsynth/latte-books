@@ -222,6 +222,22 @@ fn update_refuses_a_document_changed_since_it_was_loaded() {
 }
 
 #[test]
+fn a_failed_cancel_leaves_the_document_submitted() {
+    let mut fyo = company();
+    let mut doc = journal_entry(&fyo);
+    doc.sync(&mut fyo).unwrap();
+    doc.submit(&mut fyo).unwrap();
+
+    let mut stale = fyo.get_doc("JournalEntry", Some("JV-1001")).unwrap();
+    doc.cancel(&mut fyo).unwrap();
+
+    // Books leaves the stale copy marked cancelled, so it offers to delete it.
+    assert!(matches!(stale.cancel(&mut fyo), Err(Error::Conflict(_))));
+    assert!(stale.is_submitted() && !stale.is_cancelled());
+    assert!(!stale.can_delete());
+}
+
+#[test]
 fn number_series_names_are_checked() {
     let mut fyo = company();
     let mut series = fyo
