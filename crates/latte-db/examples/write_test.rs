@@ -44,7 +44,11 @@ fn main() -> ExitCode {
 
 fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut db = Database::open(path, "latte-write-test")?;
-    for (schema, name) in [("Party", PARTY), ("Party", PARTY_DRAFT), ("JournalEntry", ENTRY)] {
+    for (schema, name) in [
+        ("Party", PARTY),
+        ("Party", PARTY_DRAFT),
+        ("JournalEntry", ENTRY),
+    ] {
         if db.core().exists(schema, Some(name))? {
             return Err(format!("{schema} {name} is already there; use a fresh copy").into());
         }
@@ -125,7 +129,10 @@ fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let flipped = DocValue::Bool(!matches!(hide, DocValue::Bool(true)));
     db.update("SystemSettings", &doc(&[("hideGetStarted", flipped)]))?;
     db.update("SystemSettings", &doc(&[("hideGetStarted", hide.clone())]))?;
-    println!("changed SystemSettings.hideGetStarted and set it back to {}", show(&hide));
+    println!(
+        "changed SystemSettings.hideGetStarted and set it back to {}",
+        show(&hide)
+    );
 
     println!("\nlatte_changes:");
     let conn = db.core().connection();
