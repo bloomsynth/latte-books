@@ -224,7 +224,7 @@ CI runs the parity suite on every PR. Any difference fails the build.
   lowers what the invoices and the party owe, cancelling puts it back, and cancelling or
   deleting an invoice does the same to its payments. An invoice set to make its payment on
   submit does so. Write-offs are refused until their postings are settled. Four Books bugs
-  are fixed (see DEVIATIONS.md); two of them were seen in Books. Checked against Books
+  are fixed (see BOOKS-BUGS.md); two of them were seen in Books. Checked against Books
   2026-10-23: the `payment_test` example paid the two invoices from the invoice check in
   a copy of a real file, and Books v0.36.0 paid its own two by Make Payment. PAY-1014
   and Books' PAY-1016 match field for field: payment, row, ledger entries and what the
@@ -232,6 +232,17 @@ CI runs the parity suite on every PR. Any difference fails the build.
   each invoice's outstanding (they differ by the Books rate box bug above). Books' other
   payment, PAY-1015, was lost to the failed-cancel bug; its ledger entries, which Books
   left behind, match Latte's PAY-1013.*
+  *Write-offs post 2026-10-23, corrected: the cash or bank account takes the amount less
+  the write-off, the write-off account the rest (a loss when receiving, a gain when
+  paying), and the party's account the whole amount. The amount alone must cover the
+  invoices, a write-off doesn't excuse a partial payment, and it can't be negative or
+  more than the amount. Checked against Books 2026-10-23: Books paid SINV-1023 (₹1,416)
+  with ₹4 written off as PAY-1017, and the `payment_test` example paid SINV-1022 (₹1,180)
+  the same way as PAY-1018. The payments match field for field apart from
+  `createdBy`/`modifiedBy` and the amounts, which follow each invoice. The postings differ
+  as intended: Books posted Cash ₹1,416, Debtors ₹1,416 credit and ₹4 debit, and Write
+  Off ₹4 credit, leaving the customer owing ₹4 in the ledger while the invoice and party
+  say ₹0; Latte posted Cash ₹1,176, Write Off ₹4 debit and Debtors ₹1,180 credit.*
 - Reports: General Ledger, Trial Balance, P&L, Balance Sheet.
 - Setup: create a new company from `countryInfo.json` and the charts of accounts.
 - **Exit:** parity suite passes for every core document and report.

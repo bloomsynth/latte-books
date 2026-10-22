@@ -2,7 +2,8 @@
 
 Latte Books follows Frappe Books **v0.36.0** as closely as possible (see
 [PLAN.md](PLAN.md#porting-principle-stay-as-close-to-the-original-as-possible)).
-Every place where it behaves differently is listed here, with the reason.
+Every place where it behaves differently is listed here, with the reason. The Books bugs
+Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 
 | Area | Frappe Books v0.36.0 | Latte Books | Why |
 |---|---|---|---|
@@ -16,7 +17,9 @@ Every place where it behaves differently is listed here, with the reason.
 | Custom forms and fields | Custom fields can be added and edited | Custom fields in a file are read and saved, but can't be added or edited | The CustomForm and CustomField models aren't ported yet |
 | Exchange rates | An invoice in a foreign currency fetches today's rate from api.vatcomply.com | The rate is 1 until you set it, as in Books when it can't fetch | No network calls yet |
 | Invoice features not ported yet | Pricing rules, coupons, loyalty points, returns, and making the shipment on submit | Refused with "… isn't supported in Latte yet." Saving refuses a sales invoice with a row an enabled pricing rule is for; submitting, cancelling and deleting refuse what would need the rest | An invoice Latte saves is never one Books would have saved differently |
-| Payment write-offs | A payment's Write Off amount posts to the write-off account | Refused with "Write-offs aren't supported in Latte yet." | Books has no tests for them and its postings look wrong; to be settled before porting |
+| Payment write-offs | The whole amount posts to the cash or bank account; the write-off goes against the party's account and to the write-off account the other way round | The cash or bank account takes the amount less the write-off, and the write-off account the rest: a loss when receiving, a gain when paying | Books bug: the cash is overstated, the party still owes the write-off in the ledger, and a loss shows as a gain |
+| A payment short of its invoices, made up by a write-off | The amount and write-off together must cover what is allocated to the invoices; with partial payments off, any payment with a write-off is let through | The amount alone must cover them, and a write-off doesn't excuse a partial payment | Books bug: more comes off the invoices than the party is credited with |
+| A negative write-off, or one more than the amount | Not checked | Refused | Books bug |
 | A submit or cancel that fails to save | The document keeps the `submitted` or `cancelled` mark in memory. After a failed cancel the form offers Delete, which removes the document without reverting what it posted | The document goes back to how it was before the submit or cancel | Books bug, seen 2026-10-23: a deleted payment left its invoice paid and its ledger entries behind |
 | Cancelling a payment | Checks the amount against what its invoices owe now, so after a restart (0 owed) it refuses: "Payment amount cannot exceed ₹ 0.00." Cancelling the invoice fails the same way | The amount is checked only while the payment is a draft | Books bug, seen 2026-10-23 |
 | A payment for several invoices | The amount may be no more than the last invoice's outstanding | No more than the sum of all of them | Books bug |

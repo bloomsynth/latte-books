@@ -27,6 +27,15 @@ fn payments() -> Fyo {
         ("modified", text("2025-01-02T00:00:00.000Z")),
     ]);
     fyo.db.insert("Account", &bank).unwrap();
+    let write_off = map([
+        ("name", text("Write Off")),
+        ("rootType", text("Expense")),
+        ("isGroup", DocValue::Bool(false)),
+        ("lft", DocValue::Number(23.0)),
+        ("rgt", DocValue::Number(24.0)),
+    ]);
+    insert(&mut fyo, "Account", write_off);
+    set_accounting_settings(&mut fyo, map([("writeOffAccount", text("Write Off"))]));
     for name in ["Cash", "Bank"] {
         let method = map([("name", text(name)), ("type", text(name))]);
         insert(&mut fyo, "PaymentMethod", method);
@@ -282,18 +291,135 @@ fn a_bank_payment_needs_its_clearance_date_and_reference() {
     payment.sync(&mut fyo).unwrap();
 }
 
+fn set_money(fyo: &mut Fyo, doc: &mut Doc, fieldname: &str, amount: &str) -> Result<bool, Error> {
+    let amount = fyo.pesa().parse(amount).unwrap();
+    doc.set(fyo, fieldname, DocValue::Money(amount))
+}
+
 #[test]
-fn write_offs_are_refused_for_now() {
+fn a_write_off_on_a_receipt_is_a_loss_and_clears_the_invoice() {
     let mut fyo = payments();
     submitted_invoice(&mut fyo, 3.0);
 
     let mut payment = payment_for(&mut fyo, &["SINV-1001"], None);
-    let writeoff = fyo.pesa().parse("4").unwrap();
-    payment
-        .set(&mut fyo, "writeoff", DocValue::Money(writeoff))
-        .unwrap();
+    set_money(&mut fyo, &mut payment, "writeoff", "4").unwrap();
+    assert_eq!(money(&payment, "amountPaid"), "350.00");
+    payment.sync(&mut fyo).unwrap();
+    payment.submit(&mut fyo).unwrap();
+
+    // Books posts Cash 354 and Debtors 354 less 4, with the 4 credited to Write Off.
+    assert_eq!(
+        postings(&fyo, "PAY-1001"),
+        vec![
+            posting("Cash", "350.00", "0.00"),
+            posting("Debtors", "0.00", "354.00"),
+            posting("Write Off", "4.00", "0.00"),
+        ]
+    );
+    assert_eq!(outstanding(&fyo, "SalesInvoice", "SINV-1001"), "0.00");
+    assert_eq!(outstanding(&fyo, "Party", "Acme"), "0.00");
+
+    payment.cancel(&mut fyo).unwrap();
+    assert!(postings(&fyo, "PAY-1001").is_empty());
+    assert_eq!(outstanding(&fyo, "SalesInvoice", "SINV-1001"), "354.00");
+}
+
+#[test]
+fn a_write_off_on_a_payment_to_a_supplier_is_a_gain() {
+    let mut fyo = payments();
+    let mut invoice = invoice(
+        &mut fyo,
+        "PurchaseInvoice",
+        "Parts Co",
+        DocValueMap::new(),
+        &[(2.0, DocValueMap::new())],
+    );
+    invoice.sync(&mut fyo).unwrap();
+    invoice.submit(&mut fyo).unwrap();
+
+    let mut payment = get_payment(&invoice, &fyo).unwrap().unwrap();
+    set_money(&mut fyo, &mut payment, "writeoff", "6").unwrap();
+    payment.sync(&mut fyo).unwrap();
+    payment.submit(&mut fyo).unwrap();
+
+    assert_eq!(
+        postings(&fyo, "PAY-1001"),
+        vec![
+            posting("Creditors", "236.00", "0.00"),
+            posting("Cash", "0.00", "230.00"),
+            posting("Write Off", "0.00", "6.00"),
+        ]
+    );
+    assert_eq!(outstanding(&fyo, "PurchaseInvoice", "PINV-1001"), "0.00");
+    assert_eq!(outstanding(&fyo, "Party", "Parts Co"), "0.00");
+}
+
+#[test]
+fn a_write_off_needs_the_write_off_account() {
+    let mut fyo = payments();
+    submitted_invoice(&mut fyo, 3.0);
+    set_accounting_settings(&mut fyo, map([("writeOffAccount", text("Gone"))]));
+
+    let mut payment = payment_for(&mut fyo, &["SINV-1001"], None);
+    set_money(&mut fyo, &mut payment, "writeoff", "4").unwrap();
+    let error = payment.sync(&mut fyo).unwrap_err();
+    assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "Write Off Account Gone does not exist. Please set Write Off Account in General Settings"
+    );
+}
+
+#[test]
+fn a_write_off_is_no_less_than_zero_and_no_more_than_the_amount() {
+    let mut fyo = payments();
+    submitted_invoice(&mut fyo, 3.0);
+
+    let mut payment = payment_for(&mut fyo, &["SINV-1001"], None);
+    set_money(&mut fyo, &mut payment, "writeoff", "-1").unwrap();
     let message = validation_message(payment.sync(&mut fyo));
-    assert_eq!(message, "Write-offs aren't supported in Latte yet.");
+    assert_eq!(message, "Write Off cannot be less than zero.");
+
+    set_money(&mut fyo, &mut payment, "writeoff", "400").unwrap();
+    let message = validation_message(payment.sync(&mut fyo));
+    assert_eq!(
+        message,
+        "Write Off cannot exceed the payment amount 354.00."
+    );
+}
+
+#[test]
+fn a_write_off_doesnt_make_a_partial_payment_whole() {
+    let mut fyo = payments();
+    submitted_invoice(&mut fyo, 3.0);
+
+    // Books saves this, and the invoice is left owing 4.
+    let mut payment = payment_for(&mut fyo, &["SINV-1001"], Some("350"));
+    set_money(&mut fyo, &mut payment, "writeoff", "4").unwrap();
+    let message = validation_message(payment.sync(&mut fyo));
+    assert_eq!(message, "Enable Partial payment to pay partial amount");
+}
+
+#[test]
+fn the_amount_alone_covers_what_is_allocated_to_the_invoices() {
+    let mut fyo = payments();
+    set_accounting_settings(
+        &mut fyo,
+        map([("enablePartialPayment", DocValue::Bool(true))]),
+    );
+    submitted_invoice(&mut fyo, 3.0);
+    submitted_invoice(&mut fyo, 1.0);
+
+    // Books lets the 72 written off make up the difference, and takes 472 off the
+    // invoices while crediting the party with 400.
+    let mut payment = payment_for(&mut fyo, &["SINV-1001", "SINV-1002"], None);
+    set_money(&mut fyo, &mut payment, "amount", "400").unwrap();
+    set_money(&mut fyo, &mut payment, "writeoff", "72").unwrap();
+    let message = validation_message(payment.sync(&mut fyo));
+    assert_eq!(
+        message,
+        "Amount: 400.00 is less than the total amount allocated to references: 472.00."
+    );
 }
 
 #[test]

@@ -19,10 +19,20 @@
 //   from that same check, so a new payment whose amount wasn't typed in can be saved for
 //   less, and is refused only when submitted.
 //
-// Not ported yet: write-offs (`validateWriteOffAccount` and `applyWriteOffPosting`). A
-// payment with one is refused whenever it is saved, as Books' postings for it don't
-// balance the accounts the way a write-off should, and what the fix should be is still
-// to be decided. And, as the UI needs them: `filters`, `getActions` and
+// - Write-offs post as write-offs. The amount is what the payment settles, and comes off
+//   the invoices; the amount paid, the amount less the write-off, is what the cash or bank
+//   account takes, and the write-off account takes the rest: a loss when receiving, a gain
+//   when paying. Books posts the whole amount to the cash or bank account and the
+//   write-off against the party's account, the wrong way round, so the cash is overstated,
+//   the party still owes the write-off in the ledger, and a loss is posted as a gain.
+// - The amount alone must cover what is allocated to the invoices. Books lets the
+//   write-off make up the difference, which takes more off the invoices than the payment
+//   credits the party with.
+// - With partial payments off, a payment with a write-off must still settle all that is
+//   outstanding. Books lets any payment with a write-off through.
+// - A write-off can't be less than zero or more than the amount. Books doesn't check.
+//
+// Not ported yet, as the UI needs them: `filters`, `getActions` and
 // `getListViewSettings`.
 
 use indexmap::IndexMap;
@@ -38,7 +48,7 @@ use crate::fyo::model::types::{DocContext, Formula, FormulaValue, Model};
 use crate::models::base_models::invoice::{TaxItem, get_tax_items};
 use crate::models::base_models::party;
 use crate::models::helpers::{
-    get_number_series, linked_value, money, money_or_zero, single_is_truthy, text,
+    get_number_series, linked_value, money, money_or_zero, single_is_truthy, single_text, text,
 };
 use crate::models::transactional::ledger_posting::LedgerPosting;
 use crate::models::transactional::{self, Transactional};
@@ -445,8 +455,8 @@ fn validate_accounts(doc: &Doc) -> Result<(), Error> {
     )))
 }
 
-/// `validateTotalReferenceAmount`: the amount and write-off cover what is allocated to the
-/// invoices.
+/// `validateTotalReferenceAmount`: the amount covers what is allocated to the invoices. The
+/// write-off is part of the amount, so unlike Books it doesn't count again.
 fn validate_total_reference_amount(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
     if doc.table("for").is_empty() {
         return Ok(());
@@ -454,20 +464,12 @@ fn validate_total_reference_amount(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
 
     let reference_amount_total = doc.get_sum(fyo, "for", "amount")?;
     let amount = money_or_zero(doc, "amount", fyo);
-    let writeoff = money_or_zero(doc, "writeoff", fyo);
-    if amount.add(&writeoff)?.gte(&reference_amount_total)? {
+    if amount.gte(&reference_amount_total)? {
         return Ok(());
     }
 
     let payment = amount.round(None);
     let ref_amount = reference_amount_total.round(None);
-    if writeoff.is_positive() {
-        return Err(Error::Validation(format!(
-            "Amount: {payment} and writeoff: {} is less than the total amount allocated to \
-             references: {ref_amount}.",
-            writeoff.round(None)
-        )));
-    }
     Err(Error::Validation(format!(
         "Amount: {payment} is less than the total amount allocated to references: \
          {ref_amount}."
@@ -509,6 +511,45 @@ fn validate_references(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
         "Payment amount: {} should be less than Outstanding amount: {}.",
         amount.round(None),
         outstanding_amount.round(None)
+    )))
+}
+
+/// The write-off is no less than zero and no more than the amount.
+fn validate_write_off(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
+    let writeoff = money_or_zero(doc, "writeoff", fyo);
+    if writeoff.is_negative() {
+        return Err(Error::Validation(
+            "Write Off cannot be less than zero.".into(),
+        ));
+    }
+    let amount = money_or_zero(doc, "amount", fyo);
+    if writeoff.gt(&amount)? {
+        return Err(Error::Validation(format!(
+            "Write Off cannot exceed the payment amount {}.",
+            amount.round(None)
+        )));
+    }
+    Ok(())
+}
+
+/// `validateWriteOffAccount`: a payment with a write-off needs the write-off account,
+/// which it returns.
+fn validate_write_off_account(fyo: &Fyo) -> Result<String, Error> {
+    let account = match single_text(fyo, "AccountingSettings", "writeOffAccount") {
+        Some(account) if !account.is_empty() => account,
+        _ => {
+            return Err(Error::NotFound(
+                "Write Off Account not set. Please set Write Off Account in General Settings"
+                    .into(),
+            ));
+        }
+    };
+    if fyo.db.exists("Account", Some(&account))? {
+        return Ok(account);
+    }
+    Err(Error::NotFound(format!(
+        "Write Off Account {account} does not exist. Please set Write Off Account in General \
+         Settings"
     )))
 }
 
@@ -556,15 +597,37 @@ fn update_party_outstanding(doc: &Doc, fyo: &mut Fyo) -> Result<(), Error> {
 
 impl Transactional for Payment {
     /// `getPosting`. `account` is the From Account and `paymentAccount` the To Account:
-    /// Debtors and Cash when receiving, Cash and Creditors when paying.
+    /// Debtors and Cash when receiving, Cash and Creditors when paying. The party's
+    /// account takes the whole amount and the cash or bank account the amount paid; the
+    /// write-off account takes the difference (`applyWriteOffPosting`, fixed).
     fn get_posting(&self, doc: &Doc, fyo: &mut Fyo) -> Result<Option<LedgerPosting>, Error> {
+        let writeoff = money_or_zero(doc, "writeoff", fyo);
+        let write_off_account = if writeoff.is_zero() {
+            None
+        } else {
+            Some(validate_write_off_account(fyo)?)
+        };
         let mut posting = LedgerPosting::new(doc);
 
         let payment_account = text(doc, "paymentAccount").unwrap_or_default().to_owned();
         let account = text(doc, "account").unwrap_or_default().to_owned();
         let amount = money_or_zero(doc, "amount", fyo);
-        posting.debit(fyo, &payment_account, &amount)?;
-        posting.credit(fyo, &account, &amount)?;
+        let amount_paid = amount.sub(&writeoff)?;
+        let is_pay = text(doc, "paymentType") == Some("Pay");
+        if is_pay {
+            posting.debit(fyo, &payment_account, &amount)?;
+            posting.credit(fyo, &account, &amount_paid)?;
+        } else {
+            posting.debit(fyo, &payment_account, &amount_paid)?;
+            posting.credit(fyo, &account, &amount)?;
+        }
+        if let Some(write_off_account) = write_off_account {
+            if is_pay {
+                posting.credit(fyo, &write_off_account, &writeoff)?;
+            } else {
+                posting.debit(fyo, &write_off_account, &writeoff)?;
+            }
+        }
 
         let payment_type = text(doc, "paymentType");
         for tax in doc.table("taxes") {
@@ -675,23 +738,18 @@ impl Model for Payment {
 
         validate_for(doc, fyo)?;
         validate_accounts(doc)?;
+        validate_write_off(doc, fyo)?;
         validate_total_reference_amount(doc, fyo)?;
         validate_references(doc, fyo)?;
         validate_references_are_set(doc, fyo)
     }
 
-    /// `beforeSync`: with partial payments off, a payment without a write-off must pay all
-    /// that is outstanding.
+    /// `beforeSync`: with partial payments off, a payment must settle all that is
+    /// outstanding, write-off or not.
     fn before_sync(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
-        if !money_or_zero(doc, "writeoff", fyo).is_zero() {
-            return Err(Error::Validation(
-                "Write-offs aren't supported in Latte yet.".into(),
-            ));
-        }
         if is_truthy(doc.get("cancelled"))
             || doc.table("for").is_empty()
             || single_is_truthy(fyo, "AccountingSettings", "enablePartialPayment")
-            || !money_or_zero(doc, "writeoff", fyo).is_zero()
         {
             return Ok(());
         }

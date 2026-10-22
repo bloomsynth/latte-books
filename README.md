@@ -23,6 +23,9 @@ Latte Books is **not affiliated with Frappe Technologies**. It is built on their
   export, no import.
 - **Give the same numbers.** The same documents, fields, reports and rules as Frappe Books
   v0.36.0. Every ledger entry and report is checked against Frappe Books itself.
+- **Without Frappe Books' bugs.** Where Frappe Books gets something wrong, Latte fixes it
+  rather than copying it. So far that's 12 bugs, from write-offs posted the wrong way
+  round to payments that can't be cancelled; see [docs/BOOKS-BUGS.md](docs/BOOKS-BUGS.md).
 - **Speak your language.** All 18 of Frappe Books' community translations, kept as they are.
 - **Feel native and fast.** Written in Rust with [GPUI](https://www.gpui.rs/), the UI framework
   behind the Zed editor. No Electron, no browser engine.

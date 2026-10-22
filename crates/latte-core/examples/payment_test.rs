@@ -2,10 +2,11 @@
 //! and posts with what Frappe Books v0.36.0 does for the same payments.
 //!
 //!     cargo run -p latte-core --example payment_test -- "path/to/Latte write test.books.db" \
-//!         <invoice> [<invoice>…]
+//!         [--writeoff <amount>] <invoice> [<invoice>…]
 //!
 //! Each invoice (a sales or purchase invoice's name, like SINV-1001) gets a payment made as
-//! the invoice's Make Payment button makes it, dated now, which is then submitted. It
+//! the invoice's Make Payment button makes it, dated now, with the write-off if one is
+//! given, which is then submitted. It
 //! prints what each payment saved and posted, and what is still owed. It refuses invoices
 //! with nothing outstanding, so it can't pay one twice, and files whose name doesn't
 //! contain "test", so it can't touch a real company file by mistake.
@@ -17,14 +18,20 @@ use latte_core::Fyo;
 use latte_core::models::base_models::invoice::get_payment;
 use latte_db::{Database, DocValue, Filter, GetAllOptions, Order, QueryFilter};
 
+const USAGE: &str = "usage: payment_test <path to a copy of a .books.db> \
+                     [--writeoff <amount>] <invoice> [<invoice>…]";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [path, invoices @ ..] = args.as_slice() else {
-        eprintln!("usage: payment_test <path to a copy of a .books.db> <invoice> [<invoice>…]");
-        return ExitCode::FAILURE;
+    let (path, writeoff, invoices) = match args.as_slice() {
+        [path, flag, writeoff, invoices @ ..] if flag == "--writeoff" => {
+            (path.as_str(), Some(writeoff.as_str()), invoices)
+        }
+        [path, invoices @ ..] => (path.as_str(), None, invoices),
+        [] => ("", None, &[][..]),
     };
     if invoices.is_empty() {
-        eprintln!("usage: payment_test <path to a copy of a .books.db> <invoice> [<invoice>…]");
+        eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     }
     let file_name = std::path::Path::new(path)
@@ -36,7 +43,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    match run(path, invoices) {
+    match run(path, writeoff, invoices) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -45,7 +52,11 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(path: &str, invoices: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+fn run(
+    path: &str,
+    writeoff: Option<&str>,
+    invoices: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::open(path, "latte-payment-test")?;
     let mut fyo = Fyo::new(db);
     fyo.register_models(latte_core::models::models(), HashMap::new());
@@ -68,6 +79,10 @@ fn run(path: &str, invoices: &[String]) -> Result<(), Box<dyn std::error::Error>
 
     for invoice in docs {
         let mut payment = get_payment(&invoice, &fyo)?.expect("checked above");
+        if let Some(writeoff) = writeoff {
+            let writeoff = fyo.pesa().parse(writeoff)?;
+            payment.set(&mut fyo, "writeoff", DocValue::Money(writeoff))?;
+        }
         payment.sync(&mut fyo)?;
         payment.submit(&mut fyo)?;
         print_payment(&fyo, payment.name().unwrap_or_default())?;
