@@ -10,6 +10,8 @@
 //! "Add Row", remove a row, and watch the totals update. "Add 50 rows" checks
 //! that the grid stays responsive with many rows.
 //!
+//! `--demo` starts with a few rows filled in, for screenshots.
+//!
 //! `--bench [rows]` adds rows (default 500), then edits a rate 20 times, and prints how long each change
 //! takes to reach the screen.
 
@@ -211,6 +213,26 @@ impl InvoiceGrid {
         self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
         cx.notify();
         true
+    }
+
+    /// `--demo`: fills a few rows from Books' sample items, for screenshots.
+    fn fill_demo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rows = [
+            ("611 Jeans - PCH", "2"),
+            ("Bominga Shoes", "1"),
+            ("Full Sleeve - BLK", "3"),
+            ("Dry-Cleaning", "4"),
+        ];
+        for (index, (name, quantity)) in rows.into_iter().enumerate() {
+            if index == self.rows.len() {
+                self.add_row(window, cx);
+            }
+            let row = &self.rows[index];
+            let (id, item, quantity_input) = (row.id, row.item.clone(), row.quantity.clone());
+            item.update(cx, |link, cx| link.set_value(name.into(), window, cx));
+            quantity_input.update(cx, |input, cx| input.set_value(quantity, window, cx));
+            self.on_item_chosen(id, &LinkEvent::Selected(name.into()), window, cx);
+        }
     }
 
     fn remove_row(&mut self, row_id: usize, cx: &mut Context<Self>) {
@@ -487,6 +509,7 @@ fn main() {
             .and_then(|rows| rows.parse().ok())
             .unwrap_or(500)
     });
+    let demo = args.iter().any(|arg| arg == "--demo");
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
@@ -504,6 +527,13 @@ fn main() {
                 cx.new(|cx| InvoiceGrid::new(window, cx))
             })
             .expect("failed to open window");
+            if demo {
+                handle
+                    .update(cx, |_, window, cx| {
+                        grid.update(cx, |grid, cx| grid.fill_demo(window, cx))
+                    })
+                    .expect("window is open");
+            }
             if let Some(rows) = bench_rows {
                 handle
                     .update(cx, |_, window, _| {

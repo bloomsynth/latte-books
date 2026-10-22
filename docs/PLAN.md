@@ -234,8 +234,13 @@ So Phase 5 doesn't need a rework:
 ## 8. Before going public
 
 - [ ] Trademark search for "Latte" in software (class 9) and accounting (class 36), in India and the US.
+  *Web search (2026-10-22) found no accounting or finance software named Latte. Only "LATTE
+  SMART" (coffee-machine software, US, dead) came up. The official registers (USPTO, IP India)
+  are still to be searched.*
 - [ ] Contact Frappe: introduce the project and ask for a link from the `frappe/books` README or #1566.
-- [ ] Create the GitHub repo under Bloomsynth.
+  *`frappe/books` is archived (read-only), so contact goes through `frappe/frappe-books`, the
+  forum or email.*
+- [x] Create the GitHub repo under Bloomsynth (public, 2026-10-22).
 - [ ] Short legal review of the AGPL setup and the paid-services model.
 
 ---
