@@ -176,8 +176,12 @@ CI runs the parity suite on every PR. Any difference fails the build.
   Phase 2.*
 - **Exit:** open a real Books file and print every document type with its child rows, read-only.
   *Read-only part met 2026-10-22: `cargo run -p latte-db --example dump` reads all 564
-  documents in a real company file with no errors. Writing is tested on in-memory files
-  whose tables match a real file's; not yet tried on a copy of a real file.*
+  documents in a real company file with no errors. Writing met 2026-10-22: the
+  `write_test` example added a party, renamed it, added and edited a journal entry and
+  changed a setting in a copy of a real file. Books v0.36.0 opened the copy, showed the
+  documents, and edited and saved the journal entry. Latte then read Books' edit back.
+  Books' own edits aren't in `latte_changes`, and Books signs documents with the
+  signed-in user (an email), not `Admin`.*
 
 ### Phase 2 — Accounting engine (5–7 weeks)
 
@@ -283,5 +287,5 @@ So Phase 5 doesn't need a rework:
 1. Create the public GitHub repo, so CI runs and users can file issues.
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
-3. Phase 1: `latte-schema` and `latte-db` reading and writing are done. Next: write to a
-   copy of a real file and check that Books v0.36.0 still opens it, then Phase 2.
+3. Phase 1 is done. Next: Phase 2, starting with porting `Doc` (meta values, naming
+   series, validation, sync) and then `LedgerPosting`.
