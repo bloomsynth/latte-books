@@ -1,8 +1,15 @@
 //! Port of `fyo/` (documents and their models) and, later, `models/` and `reports/`
 //! @ v0.36.0. This crate must never depend on GPUI.
 
+pub mod config;
+pub mod dashboard;
 pub mod fyo;
+pub mod importer;
 pub mod models;
+pub mod pos;
+pub mod reports;
+pub mod setup;
+pub mod views;
 
 use std::fmt;
 
@@ -45,6 +52,12 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Db(e.into())
+    }
+}
+
 impl From<latte_db::Error> for Error {
     fn from(e: latte_db::Error) -> Self {
         match e {
@@ -60,5 +73,7 @@ impl From<latte_db::pesa::PesaError> for Error {
     }
 }
 
+#[cfg(test)]
+mod setup_tests;
 #[cfg(test)]
 mod tests;

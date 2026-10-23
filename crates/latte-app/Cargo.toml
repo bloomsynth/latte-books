@@ -13,3 +13,41 @@ path = "src/main.rs"
 [dependencies]
 latte-core.workspace = true
 latte-ui.workspace = true
+gpui-kit.workspace = true
+
+# The app's icon in the .exe, where GPUI looks for it (see build.rs). GPUI uses this crate
+# too, so it adds nothing new.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
+# Installers, made with cargo-packager (`cargo packager --release -p latte-app`). Not signed
+# yet (docs/PLAN.md §6). latte-mcp goes beside the app, where "Set up AI assistants" looks
+# for it.
+[package.metadata.packager]
+product-name = "Latte Books"
+identifier = "com.bloomsynth.lattebooks"
+description = "Accounting for small businesses, opening Frappe Books files"
+homepage = "https://github.com/bloomsynth/latte-books"
+authors = ["Bloomsynth"]
+publisher = "Bloomsynth"
+category = "Finance"
+license-file = "../../LICENSE"
+before-packaging-command = "cargo build --release -p latte-app -p latte-mcp"
+out-dir = "../../target/packages"
+formats = ["nsis", "dmg", "deb", "appimage"]
+# Made from icons/icon.svg (see icons/README.md).
+icons = [
+    "icons/32x32.png",
+    "icons/128x128.png",
+    "icons/128x128@2x.png",
+    "icons/icon.png",
+    "icons/icon.icns",
+    "icons/icon.ico",
+]
+binaries = [
+    { path = "latte-books", main = true },
+    { path = "latte-mcp", main = false },
+]
+
+[package.metadata.packager.nsis]
+installer-mode = "currentUser"

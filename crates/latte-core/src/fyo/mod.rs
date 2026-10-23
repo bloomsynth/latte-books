@@ -5,6 +5,7 @@
 // afresh, and `Doc` has no `on` listeners), `fyo.singles`, telemetry, and the translation
 // of `t` strings (they are English).
 
+pub mod format;
 pub mod model;
 pub mod models;
 
@@ -55,6 +56,15 @@ impl Fyo {
         fyo
     }
 
+    /// Wraps an open file with every model Latte has registered, as the app does
+    /// (`initializeAndRegister`).
+    pub fn with_models(db: Database) -> Self {
+        let mut fyo = Self::new(db);
+        let regional_models = crate::models::regional_models(fyo.db.country_code());
+        fyo.register_models(crate::models::models(), regional_models);
+        fyo
+    }
+
     /// `DocHandler.registerModels`: a core model wins over a regional one, which wins over
     /// an app model; schemas with none get the base `Doc`.
     pub fn register_models(
@@ -85,6 +95,38 @@ impl Fyo {
             DEFAULT_USER
         } else {
             &self.user
+        }
+    }
+
+    /// `translateSchemaMap`: puts each schema's labels, descriptions, placeholders,
+    /// sections, tabs and option labels into the language `translate` reads, leaving the
+    /// ones it has no translation for.
+    pub fn translate_schemas(&mut self, translate: &dyn Fn(&str) -> Option<String>) {
+        let swap = |text: &mut String| {
+            if let Some(translation) = translate(text) {
+                *text = translation;
+            }
+        };
+        for schema in self.schemas.values_mut() {
+            let schema = Arc::make_mut(schema);
+            swap(&mut schema.label);
+            for field in &mut schema.fields {
+                for text in [
+                    &mut field.label,
+                    &mut field.description,
+                    &mut field.placeholder,
+                    &mut field.section,
+                    &mut field.tab,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    swap(text);
+                }
+                for option in field.options.iter_mut().flatten() {
+                    swap(&mut option.label);
+                }
+            }
         }
     }
 

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Latte Books: a mug that is also a book, with steam. -->
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="#D18738"/>
+  <g fill="none" stroke="#FFF8EE" stroke-width="44" stroke-linecap="round">
+    <path d="M402 190 C 360 235, 444 270, 402 330"/>
+    <path d="M532 190 C 490 235, 574 270, 532 330"/>
+  </g>
+  <circle cx="704" cy="586" r="104" fill="none" stroke="#4A1F07" stroke-width="56"/>
+  <path d="M300 390 H 708 V 834 H 300 a 56 56 0 0 1 -56 -56 V 446 a 56 56 0 0 1 56 -56 Z" fill="#4A1F07"/>
+  <rect x="292" y="722" width="416" height="48" rx="24" fill="#FFF8EE"/>
+  <rect x="660" y="722" width="48" height="48" fill="#FFF8EE"/>
+</svg>

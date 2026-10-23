@@ -649,3 +649,32 @@ fn converts_document_values_as_books_does() {
         .is_err()
     );
 }
+
+#[test]
+fn changes_from_another_device_are_found() {
+    let mut db = company();
+    let account = |name: &str| {
+        doc(&[
+            ("name", text(name)),
+            ("rootType", text("Asset")),
+            ("lft", DocValue::Number(4.0)),
+            ("rgt", DocValue::Number(5.0)),
+        ])
+        .with_meta()
+    };
+    let start = db.core().last_change_id().unwrap();
+    db.insert("Account", &account("Bank")).unwrap();
+    // Our own change isn't another device's.
+    assert_eq!(db.core().changes_from_others(start).unwrap().1, vec![]);
+
+    db.core_mut().enable_change_log("device-b").unwrap();
+    db.insert("Account", &account("Petty Cash")).unwrap();
+    db.core_mut().enable_change_log(DEVICE).unwrap();
+    let (last, changed) = db.core().changes_from_others(start).unwrap();
+    assert_eq!(last, db.core().last_change_id().unwrap());
+    assert_eq!(
+        changed,
+        vec![("Account".to_owned(), "Petty Cash".to_owned())]
+    );
+    assert_eq!(db.core().changes_from_others(last).unwrap(), (last, vec![]));
+}

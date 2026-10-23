@@ -1,3 +1,5 @@
+<img src="crates/latte-app/icons/icon.png" alt="Latte Books icon: a brown mug shaped like a book, with steam, on a caramel tile" width="96">
+
 # Latte Books
 
 **A fast, native desktop accounting app for Frappe Books users.**
@@ -24,7 +26,7 @@ Latte Books is **not affiliated with Frappe Technologies**. It is built on their
 - **Give the same numbers.** The same documents, fields, reports and rules as Frappe Books
   v0.36.0. Every ledger entry and report is checked against Frappe Books itself.
 - **Without Frappe Books' bugs.** Where Frappe Books gets something wrong, Latte fixes it
-  rather than copying it. So far that's 12 bugs, from write-offs posted the wrong way
+  rather than copying it. So far that's 61 bugs, from write-offs posted the wrong way
   round to payments that can't be cancelled; see [docs/BOOKS-BUGS.md](docs/BOOKS-BUGS.md).
 - **Speak your language.** All 18 of Frappe Books' community translations, kept as they are.
 - **Feel native and fast.** Written in Rust with [GPUI](https://www.gpui.rs/), the UI framework
@@ -40,9 +42,9 @@ Changes from Frappe Books are kept to a minimum, and every one is listed in
 |---|---|---|
 | 0 | Foundations, and prototypes to test GPUI | **Done** |
 | 1 | Data layer: read and write `.books.db` files | **Done** |
-| 2 | Accounting engine and reports, checked against Frappe Books | In progress |
-| 3 | Desktop app: invoices, payments, reports, printing. **Public beta.** | Planned |
-| 4 | Everything else in Frappe Books v0.36.0: inventory, GST, POS and more. **1.0.** | Planned |
+| 2 | Accounting engine and reports, checked against Frappe Books | **Done** |
+| 3 | Desktop app: invoices, payments, reports, printing. **Public beta.** | Built; being tested |
+| 4 | Everything else in Frappe Books v0.36.0: inventory, GST, POS and more. **1.0.** | Mostly built; being tested |
 
 What the Phase 0 prototypes showed:
 
@@ -72,12 +74,46 @@ cargo build
 cargo test
 ```
 
-The app itself doesn't do anything yet. To see the data layer read a company file (it
-opens the file read-only):
+To run the app:
+
+```sh
+cargo run -p latte-app
+```
+
+It isn't ready for real books yet: try it on a copy of your company file.
+
+To see the data layer read a company file (it opens the file read-only):
 
 ```sh
 cargo run -p latte-db --example dump -- "path/to/company.books.db"
 ```
+
+To print a report of a company file, also read-only, or to set up a new company as
+Frappe Books' setup wizard does:
+
+```sh
+cargo run -p latte-core --example report_test -- "path/to/company.books.db" trial-balance
+cargo run -p latte-core --example setup_test -- "path/to/new test.books.db" India "Acme" "Acme Bank"
+```
+
+To make installers (not signed yet) with
+[cargo-packager](https://github.com/crabnebula-dev/cargo-packager), on each OS:
+
+```sh
+cargo install cargo-packager --locked
+cargo packager --release -p latte-app
+```
+
+They land in `target/packages`. Pushing a `v*` tag builds them on GitHub and attaches them to a
+draft release.
+
+### AI assistants
+
+**Set up AI assistants** in the app's sidebar connects Claude Desktop, Claude Code, Codex
+or Cursor to your books. The assistant runs `latte-mcp`, which is built beside the app and
+works in the company you opened last (or the one chosen on that screen). It can look up
+documents, run reports, and save, submit and cancel documents, with the same checks as the
+app. To try it from a build, `cargo build` first so `latte-mcp` is next to `latte-books`.
 
 To try the prototypes:
 
@@ -98,7 +134,8 @@ cargo run --release -p indic-cjk-text
 | `crates/latte-print` | PDF printing with Typst |
 | `crates/latte-regional` | Country modules (India GST, Switzerland) |
 | `crates/latte-ui` | GPUI screens |
-| `crates/latte-app` | The `latte-books` executable |
+| `crates/latte-app` | The `latte-books` executable, and its installer settings |
+| `crates/latte-mcp` | Dime: the `latte-mcp` executable AI assistants run, and their setup |
 | `vendor/books` | Files copied unchanged from Frappe Books v0.36.0 |
 | `spikes` | Phase 0 prototypes and their results |
 | `docs` | The plan and the list of deviations from Frappe Books |

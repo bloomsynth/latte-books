@@ -1,8 +1,9 @@
-// Port of models/baseModels/Party/Party.ts @ v0.36.0.
+// Port of models/baseModels/Party/Party.ts @ v0.36.0, and of
+// models/regionalModels/in/Party.ts, India's, which clears the GSTIN of a party that
+// isn't a regular registered one and hides the GSTIN and loyalty fields.
+// `updateLoyaltyPoints` is in loyalty.rs.
 //
-// Not ported yet: `updateLoyaltyPoints` (loyalty programs), and, as the UI needs them,
-// `filters`, `getListViewSettings` and `getActions`. The Lead a party was made from is
-// saved with the base `Doc`, as the Lead model isn't ported.
+// Not ported yet, as the UI needs them: `filters`, `getListViewSettings` and `getActions`.
 
 use latte_db::{DocValue, Filter, GetAllOptions, QueryFilter};
 
@@ -11,7 +12,7 @@ use crate::fyo::Fyo;
 use crate::fyo::model::doc::Doc;
 use crate::fyo::model::helpers::is_truthy;
 use crate::fyo::model::types::{DocContext, Formula, Model};
-use crate::models::helpers::{single_value, text};
+use crate::models::helpers::{one_of, query, single_is_truthy, single_value, text};
 
 pub struct Party;
 
@@ -71,6 +72,31 @@ fn get_total_outstanding_amount(
 }
 
 impl Model for Party {
+    fn link_filters(&self, fieldname: &str, ctx: &DocContext<'_>) -> Option<QueryFilter> {
+        if fieldname != "defaultAccount" {
+            return None;
+        }
+        let role = text(ctx.doc, "role");
+        Some(if role == Some("Both") {
+            query([
+                ("isGroup", Filter::from(false)),
+                ("accountType", one_of(&["Payable", "Receivable"])),
+            ])
+        } else {
+            query([
+                ("isGroup", Filter::from(false)),
+                (
+                    "accountType",
+                    Filter::from(if role == Some("Customer") {
+                        "Receivable"
+                    } else {
+                        "Payable"
+                    }),
+                ),
+            ])
+        })
+    }
+
     fn formulas(&self) -> Vec<Formula> {
         vec![
             Formula {
@@ -127,6 +153,59 @@ impl Model for Party {
     }
 }
 
+/// India's Party.
+pub struct IndianParty;
+
+impl Model for IndianParty {
+    fn link_filters(&self, fieldname: &str, ctx: &DocContext<'_>) -> Option<QueryFilter> {
+        Party.link_filters(fieldname, ctx)
+    }
+
+    fn formulas(&self) -> Vec<Formula> {
+        Party.formulas()
+    }
+
+    fn validate_field(
+        &self,
+        fieldname: &str,
+        value: &DocValue,
+        ctx: &DocContext<'_>,
+    ) -> Result<(), Error> {
+        Party.validate_field(fieldname, value, ctx)
+    }
+
+    fn hidden(&self, fieldname: &str, ctx: &DocContext<'_>) -> Option<bool> {
+        let role = text(ctx.doc, "role");
+        match fieldname {
+            "gstin" => Some(text(ctx.doc, "gstType") != Some("Registered Regular")),
+            "loyaltyProgram" => Some(
+                !single_is_truthy(ctx.fyo, "AccountingSettings", "enableLoyaltyProgram")
+                    || role == Some("Supplier"),
+            ),
+            "loyaltyPoints" => {
+                Some(!is_truthy(ctx.doc.get("loyaltyProgram")) || role == Some("Supplier"))
+            }
+            _ => None,
+        }
+    }
+
+    fn before_sync(&self, doc: &mut Doc, _fyo: &mut Fyo) -> Result<(), Error> {
+        let has_gstin = text(doc, "gstin").is_some_and(|gstin| !gstin.is_empty());
+        if has_gstin && text(doc, "gstType") != Some("Registered Regular") {
+            doc.set_value("gstin", DocValue::Text(String::new()));
+        }
+        Ok(())
+    }
+
+    fn after_delete(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
+        Party.after_delete(doc, fyo)
+    }
+
+    fn after_sync(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
+        Party.after_sync(doc, fyo)
+    }
+}
+
 /// The status of the Lead the party was made from, if any.
 fn set_lead_status(doc: &Doc, fyo: &mut Fyo, status: &str) -> Result<(), Error> {
     if !is_truthy(doc.get("fromLead")) {
@@ -140,7 +219,7 @@ fn set_lead_status(doc: &Doc, fyo: &mut Fyo, status: &str) -> Result<(), Error> 
 /// `validateEmail` in fyo/model/validationFunction.ts, which tests
 /// `/(.+)@(.+){2,}\.(.+){2,}/`: something, an `@`, at least two characters, a dot, and at
 /// least two characters more.
-fn validate_email(value: &DocValue) -> Result<(), Error> {
+pub(crate) fn validate_email(value: &DocValue) -> Result<(), Error> {
     let DocValue::Text(email) = value else {
         return Err(Error::Value(format!("Invalid email {value:?}")));
     };
@@ -161,7 +240,7 @@ fn validate_email(value: &DocValue) -> Result<(), Error> {
 }
 
 /// `validatePhoneNumber`, which tests `/[+]{0,1}[\d ]+/`: a digit or a space anywhere.
-fn validate_phone_number(value: &DocValue) -> Result<(), Error> {
+pub(crate) fn validate_phone_number(value: &DocValue) -> Result<(), Error> {
     let DocValue::Text(phone) = value else {
         return Err(Error::Value(format!("Invalid phone {value:?}")));
     };

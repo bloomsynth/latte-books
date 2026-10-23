@@ -8,7 +8,7 @@
 // Not ported yet: `filters`, `createFilters`, `emptyMessages`, `getListViewSettings`,
 // `getTreeSettings` and `getActions`, which the UI needs.
 
-use latte_db::{DocValue, DocValueMap};
+use latte_db::{DocValue, DocValueMap, QueryFilter};
 use latte_schema::SelectOption;
 
 use crate::Error;
@@ -103,10 +103,18 @@ pub trait Model: Send + Sync {
         None
     }
 
+    /// `static filters[fieldname](doc)`: which documents a Link field may pick.
+    fn link_filters(&self, _fieldname: &str, _ctx: &DocContext<'_>) -> Option<QueryFilter> {
+        None
+    }
+
     /// The `change` hook. `changed` is `None` after the values are loaded or saved.
     fn change(&self, _doc: &mut Doc, _fyo: &mut Fyo, _changed: Option<&str>) -> Result<(), Error> {
         Ok(())
     }
+
+    /// `duplicate`: what a model changes on a copy, after the base copy is made.
+    fn duplicate(&self, _doc: &mut Doc) {}
 
     fn validate(&self, _doc: &mut Doc, _fyo: &mut Fyo) -> Result<(), Error> {
         Ok(())

@@ -1,0 +1,19 @@
+[package]
+name = "latte-mcp"
+description = "Dime: lets AI assistants work in a Latte Books company file"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "latte-mcp"
+path = "src/main.rs"
+
+[dependencies]
+latte-core.workspace = true
+latte-db.workspace = true
+latte-schema.workspace = true
+jiff.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+toml_edit = "0.25"

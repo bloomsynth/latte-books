@@ -716,6 +716,17 @@ impl Doc {
         Ok(())
     }
 
+    /// A saved document with its computed values, loaded without the `change` hook that
+    /// `load` runs, so a formula, which can't write to the file, can read one.
+    pub(crate) fn read(fyo: &Fyo, schema_name: &str, name: &str) -> Result<Doc, Error> {
+        let data = fyo.db.get_doc(schema_name, name)?;
+        let mut doc = fyo.new_doc(schema_name, data, false)?;
+        doc.set_computed_values_from_formulas(fyo)?;
+        doc.dirty = false;
+        doc.not_inserted = false;
+        Ok(doc)
+    }
+
     /// `_syncValues`.
     fn sync_values(&mut self, fyo: &mut Fyo, data: &DocValueMap) -> Result<(), Error> {
         self.clear_values();
@@ -1129,7 +1140,10 @@ impl Doc {
         let schema_map = fyo.db.schema_map();
         let raw = to_raw_value_map(schema_map, fyo.pesa(), &self.schema.name, &update_map)?;
         let data = to_doc_value_map(schema_map, fyo.pesa(), &self.schema.name, &raw)?;
-        fyo.new_doc(&self.schema.name, data, false)
+        let mut doc = fyo.new_doc(&self.schema.name, data, false)?;
+        let model = Arc::clone(&self.model);
+        model.duplicate(&mut doc);
+        Ok(doc)
     }
 }
 

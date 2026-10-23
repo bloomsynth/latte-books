@@ -1,8 +1,8 @@
 // Port of the parts of models/helpers.ts @ v0.36.0 that the ported models use, and the
 // reads of document and single values they share.
 
-use latte_db::DocValue;
 use latte_db::pesa::Money;
+use latte_db::{DocValue, Filter, FilterValue, QueryFilter};
 
 use crate::fyo::Fyo;
 use crate::fyo::model::doc::Doc;
@@ -12,7 +12,7 @@ use crate::fyo::model::helpers::is_truthy;
 pub const DEFAULT_CURRENCY: &str = "INR";
 
 /// `numberSeriesDefaultsMap` in models/baseModels/Defaults/Defaults.ts.
-fn number_series_defaults_key(schema_name: &str) -> Option<&'static str> {
+pub(crate) fn number_series_defaults_key(schema_name: &str) -> Option<&'static str> {
     Some(match schema_name {
         "SalesInvoice" => "salesInvoiceNumberSeries",
         "PurchaseInvoice" => "purchaseInvoiceNumberSeries",
@@ -78,7 +78,7 @@ pub(crate) fn single_value(fyo: &Fyo, schema_name: &str, fieldname: &str) -> Opt
 }
 
 /// `!!fyo.singles[schema_name]?.[fieldname]`.
-pub(crate) fn single_is_truthy(fyo: &Fyo, schema_name: &str, fieldname: &str) -> bool {
+pub fn single_is_truthy(fyo: &Fyo, schema_name: &str, fieldname: &str) -> bool {
     is_truthy(single_value(fyo, schema_name, fieldname).as_ref())
 }
 
@@ -107,4 +107,23 @@ pub(crate) fn linked_value(
     fieldname: &str,
 ) -> Option<DocValue> {
     fyo.get_value(schema_name, Some(name?), fieldname)
+}
+
+/// A `QueryFilter` written as Books writes one: `{ field: value, ... }`.
+pub(crate) fn query<const N: usize>(pairs: [(&str, Filter); N]) -> QueryFilter {
+    pairs
+        .into_iter()
+        .map(|(field, filter)| (field.to_owned(), filter))
+        .collect()
+}
+
+/// `['in', values]`.
+pub(crate) fn one_of(values: &[&str]) -> Filter {
+    Filter::list(
+        "in",
+        values
+            .iter()
+            .map(|value| FilterValue::from(*value))
+            .collect(),
+    )
 }

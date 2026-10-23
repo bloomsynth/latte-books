@@ -10,11 +10,24 @@ use crate::fyo::Fyo;
 use crate::fyo::model::doc::Doc;
 use crate::fyo::model::helpers::is_truthy;
 use crate::fyo::model::types::{DocContext, Formula, Model};
-use crate::models::helpers::{number, single_is_truthy, single_value, text};
+use crate::models::helpers::{number, query, single_is_truthy, single_value, text};
 
 pub struct Item;
 
 impl Model for Item {
+    fn link_filters(&self, fieldname: &str, ctx: &DocContext<'_>) -> Option<QueryFilter> {
+        let root_type = match fieldname {
+            "incomeAccount" => "Income",
+            "expenseAccount" if is_truthy(ctx.doc.get("trackItem")) => "Liability",
+            "expenseAccount" => "Expense",
+            _ => return None,
+        };
+        Some(query([
+            ("isGroup", Filter::from(false)),
+            ("rootType", Filter::from(root_type)),
+        ]))
+    }
+
     fn formulas(&self) -> Vec<Formula> {
         vec![
             Formula {

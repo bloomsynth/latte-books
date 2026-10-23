@@ -560,8 +560,12 @@ fn with_pricing_rules_on_but_none_for_its_items_an_invoice_saves_as_usual() {
     let mut fyo = books();
     set_accounting_settings(&mut fyo, map([("enablePricingRule", DocValue::Bool(true))]));
     let mut doc = sales_invoice(&mut fyo, 3.0);
-    // Books' `getPricingRule` gives an empty list, which counts as applied.
-    assert_eq!(doc.get("isPricingRuleApplied"), Some(&DocValue::Bool(true)));
+    // Books' `getPricingRule` gives an empty list, which it counts as applied; Latte
+    // doesn't.
+    assert_eq!(
+        doc.get("isPricingRuleApplied"),
+        Some(&DocValue::Bool(false))
+    );
     assert_eq!(money(&doc, "grandTotal"), "354.00");
     doc.sync(&mut fyo).unwrap();
 
@@ -578,50 +582,4 @@ fn with_pricing_rules_on_but_none_for_its_items_an_invoice_saves_as_usual() {
         "PurchaseInvoice has no such field"
     );
     purchase.sync(&mut fyo).unwrap();
-}
-
-#[test]
-fn an_invoice_an_enabled_pricing_rule_is_for_is_refused() {
-    let mut fyo = books();
-    set_accounting_settings(&mut fyo, map([("enablePricingRule", DocValue::Bool(true))]));
-    let meta = [
-        ("createdBy", text("Admin")),
-        ("modifiedBy", text("Admin")),
-        ("created", text(CREATED)),
-        ("modified", text(CREATED)),
-    ];
-    let mut series = map([
-        ("name", text("PRLE-")),
-        ("start", DocValue::Number(1001.0)),
-        ("padZeros", DocValue::Number(4.0)),
-        ("referenceType", text("PricingRule")),
-        ("current", DocValue::Number(1001.0)),
-    ]);
-    series.extend(meta.clone().map(|(k, v)| (k.to_owned(), v)));
-    fyo.db.insert("NumberSeries", &series).unwrap();
-    let mut rule = map([
-        ("name", text("PRLE-1001")),
-        ("numberSeries", text("PRLE-")),
-        ("title", text("Bulk")),
-        ("discountType", text("Price Discount")),
-        ("priority", text("1")),
-        ("roundingMethod", text("round")),
-        ("isEnabled", DocValue::Bool(true)),
-        (
-            "appliedItems",
-            DocValue::Table(vec![map([
-                ("item", text("Widget")),
-                ("unit", text("Unit")),
-            ])]),
-        ),
-    ]);
-    rule.extend(meta.map(|(k, v)| (k.to_owned(), v)));
-    fyo.db.insert("PricingRule", &rule).unwrap();
-
-    let mut doc = sales_invoice(&mut fyo, 1.0);
-    let error = doc.sync(&mut fyo).unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "Pricing rules isn't supported in Latte yet."
-    );
 }

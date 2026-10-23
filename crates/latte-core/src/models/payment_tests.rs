@@ -9,7 +9,7 @@ use crate::{Doc, Error, Fyo};
 
 /// The invoice test company, with cash and bank accounts and the Cash and Bank payment
 /// methods.
-fn payments() -> Fyo {
+pub(super) fn payments() -> Fyo {
     let mut fyo = books();
     let cash = map([("name", text("Cash")), ("accountType", text("Cash"))]);
     fyo.db.update("Account", &cash).unwrap();
@@ -44,7 +44,7 @@ fn payments() -> Fyo {
 }
 
 /// A submitted sales invoice for `quantity` Widgets with 18% GST, for Acme.
-fn submitted_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
+pub(super) fn submitted_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
     let mut doc = sales_invoice(fyo, quantity);
     doc.sync(fyo).unwrap();
     doc.submit(fyo).unwrap();
@@ -73,7 +73,7 @@ fn add_rows(fyo: &mut Fyo, doc: &mut Doc, invoices: &[&str]) {
     }
 }
 
-fn validation_message(result: Result<impl std::fmt::Debug, Error>) -> String {
+pub(super) fn validation_message(result: Result<impl std::fmt::Debug, Error>) -> String {
     match result {
         Err(Error::Validation(message)) => message,
         result => panic!("expected a validation error, got {result:?}"),
@@ -94,6 +94,8 @@ fn paying_an_invoice_in_full_posts_it_and_clears_what_is_owed() {
     assert_eq!(payment.get("paymentAccount"), Some(&text("Cash")));
     assert_eq!(payment.get("paymentMethod"), Some(&text("Cash")));
     payment.submit(&mut fyo).unwrap();
+    let loaded = fyo.get_doc("Payment", Some("PAY-1001")).unwrap();
+    assert_eq!(money(&loaded, "amountPaid"), "354.00");
 
     assert_eq!(
         postings(&fyo, "PAY-1001"),
@@ -305,6 +307,9 @@ fn a_write_off_on_a_receipt_is_a_loss_and_clears_the_invoice() {
     set_money(&mut fyo, &mut payment, "writeoff", "4").unwrap();
     assert_eq!(money(&payment, "amountPaid"), "350.00");
     payment.sync(&mut fyo).unwrap();
+    // A computed value is worked out again when the payment is loaded.
+    let loaded = fyo.get_doc("Payment", payment.name()).unwrap();
+    assert_eq!(money(&loaded, "amountPaid"), "350.00");
     payment.submit(&mut fyo).unwrap();
 
     // Books posts Cash 354 and Debtors 354 less 4, with the 4 credited to Write Off.

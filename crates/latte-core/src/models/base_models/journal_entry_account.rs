@@ -2,15 +2,20 @@
 //
 // Not ported yet, as the UI needs it: `filters`.
 
-use latte_db::DocValue;
 use latte_db::pesa::Money;
+use latte_db::{DocValue, Filter, QueryFilter};
 
 use crate::Error;
 use crate::fyo::model::types::{DocContext, Formula, FormulaValue, Model};
+use crate::models::helpers::query;
 
 pub struct JournalEntryAccount;
 
 impl Model for JournalEntryAccount {
+    fn link_filters(&self, fieldname: &str, _ctx: &DocContext<'_>) -> Option<QueryFilter> {
+        (fieldname == "account").then(|| query([("isGroup", Filter::from(false))]))
+    }
+
     fn formulas(&self) -> Vec<Formula> {
         vec![
             Formula {

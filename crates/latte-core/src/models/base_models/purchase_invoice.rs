@@ -20,7 +20,8 @@ fn get_posting(doc: &Doc, fyo: &mut Fyo) -> Result<LedgerPosting, Error> {
     let is_return = invoice::is_return(doc);
     let mut posting = LedgerPosting::new(doc);
     let account = text(doc, "account").unwrap_or_default();
-    let base_grand_total = money_or_zero(doc, "baseGrandTotal", fyo);
+    let base_grand_total =
+        invoice::posting_amount(money_or_zero(doc, "baseGrandTotal", fyo), is_return)?;
     if is_return {
         posting.debit(fyo, account, &base_grand_total)?;
     } else {
@@ -30,6 +31,7 @@ fn get_posting(doc: &Doc, fyo: &mut Fyo) -> Result<LedgerPosting, Error> {
     for item in doc.table("items") {
         let account = text(item, "account").unwrap_or_default();
         let amount = money_or_zero(item, "amount", fyo).mul(exchange_rate)?;
+        let amount = invoice::posting_amount(amount, is_return)?;
         if is_return {
             posting.credit(fyo, account, &amount)?;
             continue;
@@ -40,6 +42,7 @@ fn get_posting(doc: &Doc, fyo: &mut Fyo) -> Result<LedgerPosting, Error> {
     for tax in doc.table("taxes") {
         let account = text(tax, "account").unwrap_or_default();
         let amount = money_or_zero(tax, "amount", fyo).mul(exchange_rate)?;
+        let amount = invoice::posting_amount(amount, is_return)?;
         if is_return {
             posting.credit(fyo, account, &amount)?;
             continue;
@@ -47,7 +50,8 @@ fn get_posting(doc: &Doc, fyo: &mut Fyo) -> Result<LedgerPosting, Error> {
         posting.debit(fyo, account, &amount)?;
     }
 
-    let discount_amount = invoice::get_total_discount(doc, fyo)?;
+    let discount_amount =
+        invoice::posting_amount(invoice::get_total_discount(doc, fyo)?, is_return)?;
     let discount_account = single_text(fyo, "AccountingSettings", "discountAccount");
     if let Some(discount_account) = discount_account
         && discount_amount.is_positive()

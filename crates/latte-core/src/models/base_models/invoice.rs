@@ -5,25 +5,41 @@
 // Deviations:
 // - Exchange rates aren't fetched from api.vatcomply.com. An invoice in a foreign
 //   currency gets the rate 1, as Books does where it can't fetch, until the rate is set.
-// - What isn't ported yet is refused rather than skipped, so an invoice Latte saves is
-//   never one Books would have saved differently:
-//   - saving a sales invoice with a row an enabled pricing rule is for (with pricing
-//     rules on), with coupons, or redeeming loyalty points. Books would apply a rule only
-//     where its quantities, amounts, dates and coupons fit, but Latte refuses on any;
-//   - submitting a return, an invoice that earns loyalty points, or one set to make its
-//     shipment or receipt on submit;
-//   - cancelling a return, or an invoice with coupons or loyalty points;
-//   - deleting an invoice with cancelled shipments or receipts.
+// - Pricing rules are applied in the `change` hook when the items or coupons change, as
+//   formulas can't change other fields here. Books applies them in the
+//   `isPricingRuleApplied` formula.
+// - A return of an invoice with loyalty points is refused (loyalty.rs).
 //
-// Not ported yet: returns (`getReturnDoc` and what submitting one updates),
-// `getLinkedPayments` (for the UI), stock transfers (`getStockTransfer`,
-// `getLinkedStockTransfers`), pricing rules, coupons and loyalty points, `addItem`, and, as
-// the UI needs them, `filters` and `createFilters`.
+// Books bugs Latte fixes, for returns:
+// - What is left to return counts only submitted returns. Books counts drafts and
+//   cancelled returns too, so a cancelled return's items can't be returned again.
+// - An item on two rows is returned once, not twice over.
+// - A return can't take back more than is left to return. Books doesn't check.
+// - A return doesn't copy whether its invoice was returned.
+// - Cancelling a return clears the invoice's Fully Returned flag. Books only sets it.
+// - A refund for a return is for the positive amount the return is owed. Books makes it
+//   for the negative outstanding amount it saved, which the payment refuses.
+// - A return posts the size of its amounts on the swapped sides, so it reverses its
+//   invoice. Books posts its negative amounts there, which posts the invoice again, and
+//   skips a return's discount, which is negative, leaving it to the round-off.
+//
+// - A return's shipment or receipt is made against its invoice's own. Books looks for a
+//   shipment of a sales invoice even for a purchase return, and fails where there's none.
+//
+// Books bugs Latte fixes, for pricing rules and loyalty points:
+// - Is Pricing Rule Applied is set only when a rule applies. Books sets it on every sales
+//   invoice once pricing rules are on.
+// - Redeemed loyalty points come off the grand total once. Books takes them off the grand
+//   total and then credits the customer with them again, leaving the round-off account
+//   to balance the entry.
+//
+// Not ported yet: `getLinkedPayments` and `getLinkedStockTransfers` (for the UI),
+// `addItem`, and, as the UI needs them, `filters` and `createFilters`.
 
 use indexmap::IndexMap;
 use jiff::Timestamp;
 use latte_db::pesa::Money;
-use latte_db::{DocValue, DocValueMap, Filter, FilterValue, GetAllOptions, QueryFilter};
+use latte_db::{DocValue, DocValueMap, Filter, GetAllOptions, QueryFilter};
 use latte_schema::FieldType;
 
 use crate::Error;
@@ -31,28 +47,39 @@ use crate::fyo::Fyo;
 use crate::fyo::model::doc::Doc;
 use crate::fyo::model::helpers::{is_truthy, js_number_string};
 use crate::fyo::model::types::{DocContext, Formula, FormulaValue, Model};
-use crate::models::base_models::party;
+use crate::models::base_models::pricing_rule::{
+    ApplicablePricingRule, apply_product_discount, get_invoice_pricing_rules,
+};
+use crate::models::base_models::{coupon_code, loyalty, party};
 use crate::models::helpers::{
     DEFAULT_CURRENCY, company_currency, get_number_series, linked_value, money, money_or_zero,
-    number, single_is_truthy, single_text, single_value, text,
+    number, one_of, query, single_is_truthy, single_text, single_value, text,
 };
+use crate::models::inventory::helpers::{get_item_visibility, get_stock_quantity};
 use crate::models::transactional::ledger_posting::LedgerPosting;
 use crate::models::transactional::{self, Transactional};
 
 type GetPosting = fn(&Doc, &mut Fyo) -> Result<LedgerPosting, Error>;
 type ValidateField = fn(&str, &DocValue, &DocContext<'_>) -> Result<(), Error>;
 
-/// SalesInvoice's or PurchaseInvoice's model, which differ in their posting and
-/// `validations`.
+/// SalesInvoice's, PurchaseInvoice's or SalesQuote's model, which differ in their posting
+/// and `validations`. A quote posts nothing.
 pub struct Invoice {
-    get_posting: GetPosting,
+    get_posting: Option<GetPosting>,
     validate_field: ValidateField,
 }
 
 impl Invoice {
     pub(crate) const fn new(get_posting: GetPosting, validate_field: ValidateField) -> Self {
         Self {
-            get_posting,
+            get_posting: Some(get_posting),
+            validate_field,
+        }
+    }
+
+    pub(crate) const fn without_posting(validate_field: ValidateField) -> Self {
+        Self {
+            get_posting: None,
             validate_field,
         }
     }
@@ -64,7 +91,7 @@ fn some(value: DocValue) -> FormulaResult {
     Ok(Some(value.into()))
 }
 
-fn not_ported(what: &str) -> Error {
+pub(crate) fn not_ported(what: &str) -> Error {
     Error::Validation(format!("{what} isn't supported in Latte yet."))
 }
 
@@ -74,7 +101,7 @@ pub(crate) fn is_sales(doc: &Doc) -> bool {
 }
 
 /// `isQuote`.
-fn is_quote(doc: &Doc) -> bool {
+pub(crate) fn is_quote(doc: &Doc) -> bool {
     doc.schema_name() == "SalesQuote"
 }
 
@@ -104,7 +131,7 @@ fn auto_payment_account(doc: &Doc, fyo: &Fyo) -> Option<String> {
 }
 
 /// `autoStockTransferLocation`.
-fn auto_stock_transfer_location(doc: &Doc, fyo: &Fyo) -> Option<String> {
+pub(crate) fn auto_stock_transfer_location(doc: &Doc, fyo: &Fyo) -> Option<String> {
     let fieldname = if is_sales(doc) {
         "shipmentLocation"
     } else {
@@ -114,7 +141,7 @@ fn auto_stock_transfer_location(doc: &Doc, fyo: &Fyo) -> Option<String> {
 }
 
 /// `stockTransferSchemaName`.
-fn stock_transfer_schema_name(doc: &Doc) -> &'static str {
+pub(crate) fn stock_transfer_schema_name(doc: &Doc) -> &'static str {
     if is_sales(doc) {
         "Shipment"
     } else {
@@ -135,8 +162,11 @@ pub(crate) struct TaxItem {
     pub(crate) exchange_rate: f64,
 }
 
-/// `getTaxItems`: each row's taxes, on its amount less its discount. With the discount
-/// applied after tax there are none, as in Books.
+/// `getTaxItems`: each row's taxes, on its amount less its discount, or on its whole
+/// amount when the discount is applied after tax.
+///
+/// Books bug Latte fixes: with the discount after tax, Books leaves out every tax, so the
+/// invoice charges and posts none.
 pub(crate) fn get_tax_items(doc: &Doc, fyo: &Fyo) -> Result<Vec<TaxItem>, Error> {
     let mut tax_items = Vec::new();
     for item in doc.table("items") {
@@ -155,18 +185,17 @@ pub(crate) fn get_tax_items(doc: &Doc, fyo: &Fyo) -> Result<Vec<TaxItem>, Error>
                 amount = amount.neg()?;
             }
 
-            if is_truthy(doc.get("discountAfterTax")) {
-                continue;
+            if !is_truthy(doc.get("discountAfterTax")) {
+                let mut item_discount_amount = get_discount_amount(doc, fyo, item)?;
+                if is_return(doc) && item_discount_amount.is_negative() {
+                    item_discount_amount = item_discount_amount.abs()?;
+                }
+                amount = if is_return(doc) {
+                    amount.add(&item_discount_amount)?
+                } else {
+                    amount.sub(&item_discount_amount)?
+                };
             }
-            let mut item_discount_amount = get_discount_amount(doc, fyo, item)?;
-            if is_return(doc) && item_discount_amount.is_negative() {
-                item_discount_amount = item_discount_amount.abs()?;
-            }
-            amount = if is_return(doc) {
-                amount.add(&item_discount_amount)?
-            } else {
-                amount.sub(&item_discount_amount)?
-            };
 
             let rate = match details.get("rate") {
                 Some(DocValue::Number(rate)) => *rate,
@@ -194,7 +223,7 @@ pub(crate) fn get_tax_items(doc: &Doc, fyo: &Fyo) -> Result<Vec<TaxItem>, Error>
 
 /// `getTaxSummary`: the taxes by account, as TaxSummary rows, less those that come to
 /// zero.
-pub(crate) fn get_tax_summary(doc: &Doc, fyo: &Fyo) -> Result<Vec<DocValueMap>, Error> {
+pub fn get_tax_summary(doc: &Doc, fyo: &Fyo) -> Result<Vec<DocValueMap>, Error> {
     let mut taxes: IndexMap<String, (f64, Money)> = IndexMap::new();
     for TaxItem {
         account,
@@ -226,7 +255,17 @@ pub(crate) fn get_tax_summary(doc: &Doc, fyo: &Fyo) -> Result<Vec<DocValueMap>, 
 }
 
 /// `getTotalDiscount`: the rows' discounts and the invoice's.
-pub(crate) fn get_total_discount(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
+/// An amount as a posting takes it. A return's totals are negative, and Books posts them
+/// as they are, on the swapped sides, which posts the invoice again instead of reversing
+/// it. Latte posts their size, as Books' own tests expect.
+pub(crate) fn posting_amount(amount: Money, is_return: bool) -> Result<Money, Error> {
+    if is_return {
+        return Ok(amount.abs()?);
+    }
+    Ok(amount)
+}
+
+pub fn get_total_discount(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
     if !enable_discounting(fyo) {
         return Ok(fyo.pesa().zero());
     }
@@ -246,7 +285,7 @@ fn get_grand_total(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
     let net_total = required_money(doc, "netTotal")?;
     let taxes = doc.table("taxes");
     if is_truthy(doc.get("redeemLoyaltyPoints")) {
-        return Err(not_ported("Redeeming loyalty points"));
+        return get_lp_added_base_grand_total(doc, fyo);
     }
     if taxes.is_empty() {
         return Ok(net_total.sub(&total_discount)?);
@@ -262,6 +301,34 @@ fn get_grand_total(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
         };
     }
     Ok(grand_total.sub(&total_discount)?)
+}
+
+/// The grand total before redeemed points come off it, as `getLPAddedBaseGrandTotal` and
+/// the `loyaltyPoints` validation work it out.
+pub(crate) fn base_grand_total_before_points(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
+    let total_discount = get_total_discount(doc, fyo)?;
+    let net_total = required_money(doc, "netTotal")?;
+    let base_total = if doc.table("taxes").is_empty() {
+        net_total
+    } else {
+        let mut total = net_total.abs()?;
+        for tax in doc.table("taxes") {
+            total = total.add(&required_money(tax, "amount")?.abs()?)?;
+        }
+        total
+    };
+    Ok(base_total.sub(&total_discount)?)
+}
+
+/// `getLPAddedBaseGrandTotal` for an invoice that isn't a return: the grand total less
+/// what the redeemed points are worth.
+fn get_lp_added_base_grand_total(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
+    let base_total = base_grand_total_before_points(doc, fyo)?;
+    let program = text(doc, "loyaltyProgram").unwrap_or_default();
+    let points = number(doc, "loyaltyPoints").unwrap_or(0.0);
+    Ok(base_total.sub(&loyalty::get_added_lp_with_grand_total(
+        fyo, program, points,
+    )?)?)
 }
 
 /// `getInvoiceDiscountAmount`. The fields for it are always hidden in Books.
@@ -359,81 +426,321 @@ fn get_exchange_rate(doc: &Doc, fyo: &Fyo) -> f64 {
 }
 
 /// `getStockNotTransferred`.
-fn get_stock_not_transferred(doc: &Doc) -> f64 {
+pub(crate) fn get_stock_not_transferred(doc: &Doc) -> f64 {
     doc.table("items")
         .iter()
         .map(|item| number(item, "stockNotTransferred").unwrap_or(0.0))
         .sum()
 }
 
-/// `ignorePricingRules`: whether the POS settings or their profile say to.
-fn ignore_pricing_rules(fyo: &Fyo) -> bool {
-    if let Some(profile) = single_text(fyo, "POSSettings", "posProfile")
-        && let Ok(profile) = fyo.db.get_doc("POSProfile", &profile)
-    {
-        return is_truthy(profile.get("ignorePricingRule"));
+/// `appendPricingRuleDetail`, as the `isPricingRuleApplied` formula does it: lists the
+/// rules that apply in `pricingRuleDetail`, if they changed.
+fn update_pricing_rule_detail(doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
+    if !single_is_truthy(fyo, "AccountingSettings", "enablePricingRule") {
+        return Ok(());
     }
-    single_is_truthy(fyo, "POSSettings", "ignorePricingRule")
-}
-
-/// `getPricingRule` as far as Latte goes: `None` where Books returns nothing, and
-/// `Some(())` where it returns the rules that apply, as long as there are none. Where an
-/// enabled pricing rule is for one of the rows, it's refused, as applying them isn't
-/// ported.
-pub(crate) fn get_pricing_rule(doc: &Doc, fyo: &Fyo) -> Result<Option<()>, Error> {
-    if ignore_pricing_rules(fyo) || !is_sales(doc) {
-        return Ok(None);
-    }
-
-    for item in doc.table("items") {
-        if is_truthy(item.get("isFreeItem")) {
-            continue;
-        }
-        let options = GetAllOptions {
-            fields: Some(vec!["parent".to_owned()]),
-            filters: QueryFilter::from([
-                (
-                    "item".to_owned(),
-                    Filter::from(text(item, "item").unwrap_or_default()),
-                ),
-                (
-                    "unit".to_owned(),
-                    Filter::from(text(item, "unit").unwrap_or_default()),
-                ),
-            ]),
-            ..GetAllOptions::default()
-        };
-        let names: Vec<FilterValue> = fyo
-            .db
-            .get_all_docs("PricingRuleItem", &options)?
-            .into_iter()
-            .filter_map(|row| match row.get("parent") {
-                Some(DocValue::Text(parent)) => Some(FilterValue::from(parent.as_str())),
+    let rules = get_invoice_pricing_rules(doc, fyo)?.unwrap_or_default();
+    let rows: Vec<DocValueMap> = rules
+        .iter()
+        .map(
+            |ApplicablePricingRule {
+                 apply_on_item,
+                 pricing_rule,
+             }| {
+                DocValueMap::from([
+                    (
+                        "referenceName".to_owned(),
+                        pricing_rule.get("name").cloned().unwrap_or(DocValue::Null),
+                    ),
+                    (
+                        "referenceItem".to_owned(),
+                        DocValue::Text(apply_on_item.clone()),
+                    ),
+                ])
+            },
+        )
+        .collect();
+    let current: Vec<(Option<&str>, Option<&str>)> = doc
+        .table("pricingRuleDetail")
+        .iter()
+        .map(|row| (text(row, "referenceName"), text(row, "referenceItem")))
+        .collect();
+    let wanted: Vec<(Option<&str>, Option<&str>)> = rows
+        .iter()
+        .map(|row| {
+            let get = |fieldname| match row.get(fieldname) {
+                Some(DocValue::Text(text)) => Some(text.as_str()),
                 _ => None,
+            };
+            (get("referenceName"), get("referenceItem"))
+        })
+        .collect();
+    if current == wanted {
+        return Ok(());
+    }
+
+    // Books' rows keep the rule they last had (`prule`) and clear its discount when it
+    // stops applying.
+    let dropped: Vec<String> = current
+        .iter()
+        .filter_map(|(_, item)| *item)
+        .filter(|item| !wanted.iter().any(|(_, wanted)| wanted == &Some(*item)))
+        .map(str::to_owned)
+        .collect();
+    if !dropped.is_empty() {
+        let zero = fyo.pesa().zero();
+        let items = doc
+            .table("items")
+            .iter()
+            .cloned()
+            .map(|mut row| {
+                if text(&row, "item").is_some_and(|item| dropped.iter().any(|d| d == item)) {
+                    row.set_value("itemDiscountAmount", DocValue::Money(zero.clone()));
+                    row.set_value("itemDiscountPercent", DocValue::Number(0.0));
+                    row.set_value("setItemDiscountAmount", DocValue::Bool(false));
+                }
+                row
             })
             .collect();
-        if names.is_empty() {
-            continue;
-        }
-
-        let options = GetAllOptions {
-            filters: QueryFilter::from([
-                ("name".to_owned(), Filter::list("in", names)),
-                ("isEnabled".to_owned(), Filter::from(true)),
-            ]),
-            ..GetAllOptions::default()
-        };
-        if !fyo.db.get_all_docs("PricingRule", &options)?.is_empty() {
-            return Err(not_ported("Pricing rules"));
-        }
+        doc.set_table_rows("items", items);
     }
-    Ok(Some(()))
+    // `set('pricingRuleDetail', null)`, then the rows: a table value adds rows.
+    doc.set_table_rows("pricingRuleDetail", Vec::new());
+    doc.set(fyo, "pricingRuleDetail", DocValue::Table(rows))?;
+    Ok(())
 }
 
 /// The values of the invoice a return is against.
 fn return_against(doc: &Doc, fyo: &Fyo) -> Result<DocValueMap, Error> {
     let name = text(doc, "returnAgainst").unwrap_or_default();
     Ok(fyo.db.get_doc(doc.schema_name(), name)?)
+}
+
+/// An item and its batch, as returns count them.
+pub(crate) type ItemKey = (String, Option<String>);
+
+pub(crate) fn map_text(row: &DocValueMap, fieldname: &str) -> Option<String> {
+    match row.get(fieldname) {
+        Some(DocValue::Text(text)) if !text.is_empty() => Some(text.clone()),
+        _ => None,
+    }
+}
+
+pub(crate) fn map_number(row: &DocValueMap, fieldname: &str) -> f64 {
+    match row.get(fieldname) {
+        Some(DocValue::Number(number)) => *number,
+        _ => 0.0,
+    }
+}
+
+/// The quantity of each item and batch on an invoice's rows, free items left out.
+pub(crate) fn item_quantities(rows: &[DocValueMap]) -> IndexMap<ItemKey, f64> {
+    let mut quantities = IndexMap::new();
+    for row in rows {
+        let Some(item) = map_text(row, "item") else {
+            continue;
+        };
+        if is_truthy(row.get("isFreeItem")) {
+            continue;
+        }
+        *quantities
+            .entry((item, map_text(row, "batch")))
+            .or_insert(0.0) += map_number(row, "quantity");
+    }
+    quantities
+}
+
+/// The submitted returns against an invoice, other than `except`.
+pub(crate) fn submitted_returns(
+    fyo: &Fyo,
+    schema_name: &str,
+    name: &str,
+    except: Option<&str>,
+) -> Result<Vec<DocValueMap>, Error> {
+    let options = GetAllOptions {
+        fields: Some(vec!["name".to_owned()]),
+        filters: QueryFilter::from([
+            ("returnAgainst".to_owned(), Filter::from(name)),
+            ("submitted".to_owned(), Filter::from(true)),
+            ("cancelled".to_owned(), Filter::from(false)),
+        ]),
+        ..GetAllOptions::default()
+    };
+    let mut returns = Vec::new();
+    for row in fyo.db.get_all_docs(schema_name, &options)? {
+        let Some(DocValue::Text(return_name)) = row.get("name") else {
+            continue;
+        };
+        if Some(return_name.as_str()) == except {
+            continue;
+        }
+        returns.push(fyo.db.get_doc(schema_name, return_name)?);
+    }
+    Ok(returns)
+}
+
+pub(crate) fn table_rows(values: &DocValueMap, fieldname: &str) -> Vec<DocValueMap> {
+    match values.get(fieldname) {
+        Some(DocValue::Table(rows)) => rows.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// `getReturnQtyTotal`: what is left to return of each item and batch on an invoice, after
+/// its submitted returns other than `except`. Books counts draft and cancelled returns
+/// too, so cancelling a return doesn't let the items be returned again.
+pub(crate) fn get_return_qty_total(
+    fyo: &Fyo,
+    schema_name: &str,
+    name: &str,
+    except: Option<&str>,
+) -> Result<IndexMap<ItemKey, f64>, Error> {
+    let invoice = fyo.db.get_doc(schema_name, name)?;
+    let mut quantities = item_quantities(&table_rows(&invoice, "items"));
+    for returned in submitted_returns(fyo, schema_name, name, except)? {
+        for (key, quantity) in item_quantities(&table_rows(&returned, "items")) {
+            if let Some(left) = quantities.get_mut(&key) {
+                *left -= quantity.abs();
+            }
+        }
+    }
+    Ok(quantities)
+}
+
+/// `getReturnDoc`: a new return of what is left to return on a submitted invoice, dated
+/// now, or `None` if the invoice isn't saved.
+///
+/// Each row takes back what is left of its item and batch, up to its own quantity, so an
+/// item on two rows is returned once. Books gives each row all that is left of its item,
+/// so such an item is returned twice over. The return doesn't copy whether the invoice
+/// was returned, which Books does, marking a second return as returned itself.
+pub fn get_return_doc(doc: &Doc, fyo: &Fyo) -> Result<Option<Doc>, Error> {
+    let Some(name) = doc.name() else {
+        return Ok(None);
+    };
+
+    let mut data = doc.get_valid_dict(true, true);
+    data.insert("pricingRuleDetail".to_owned(), DocValue::Table(Vec::new()));
+    let Some(DocValue::Table(rows)) = data.get("items") else {
+        return Ok(None);
+    };
+
+    let mut left = get_return_qty_total(fyo, doc.schema_name(), name, None)?;
+    let mut items = Vec::new();
+    for row in rows {
+        let quantity = map_number(row, "quantity");
+        let mut row = row.clone();
+        row.shift_remove("name");
+        let unit_conversion_factor = map_number(&row, "unitConversionFactor");
+
+        let returned = if is_truthy(row.get("isFreeItem")) {
+            quantity
+        } else {
+            let Some(item) = map_text(&row, "item") else {
+                continue;
+            };
+            let Some(left) = left.get_mut(&(item, map_text(&row, "batch"))) else {
+                continue;
+            };
+            let returned = quantity.min(*left);
+            *left -= returned.max(0.0);
+            returned
+        };
+        if returned <= 0.0 {
+            continue;
+        }
+
+        row.insert("quantity".to_owned(), DocValue::Number(-returned));
+        row.insert(
+            "transferQuantity".to_owned(),
+            DocValue::Number(-returned / unit_conversion_factor),
+        );
+        items.push(row);
+    }
+
+    data.shift_remove("name");
+    data.insert("date".to_owned(), DocValue::Date(Timestamp::now()));
+    data.insert("items".to_owned(), DocValue::Table(items));
+    data.insert("returnAgainst".to_owned(), DocValue::Text(name.to_owned()));
+    data.insert("isReturned".to_owned(), DocValue::Bool(false));
+    data.insert("isFullyReturned".to_owned(), DocValue::Bool(false));
+
+    let mut return_doc = fyo.get_new_doc(doc.schema_name(), data)?;
+    return_doc.run_formulas(fyo)?;
+    Ok(Some(return_doc))
+}
+
+/// A return takes back no more of each item and batch than the invoice has left to
+/// return. Books doesn't check, so a return can take back more than was sold.
+pub(crate) fn validate_return_quantities(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
+    let against = text(doc, "returnAgainst").unwrap_or_default();
+    let left = get_return_qty_total(fyo, doc.schema_name(), against, doc.name())?;
+    let rows: Vec<DocValueMap> = doc
+        .table("items")
+        .iter()
+        .map(|row| row.get_valid_dict(false, false))
+        .collect();
+    for ((item, batch), quantity) in item_quantities(&rows) {
+        let returning = quantity.abs();
+        let what = match &batch {
+            Some(batch) => format!("{item} (batch {batch})"),
+            None => item.clone(),
+        };
+        let Some(&left) = left.get(&(item, batch)) else {
+            return Err(Error::Validation(format!("{what} is not on {against}.")));
+        };
+        if returning > left {
+            return Err(Error::Validation(format!(
+                "Cannot return {} of {what}: only {} is left to return on {against}.",
+                js_number_string(returning),
+                js_number_string(left.max(0.0))
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `_updateIsItemsReturned`: marks the invoice a return is against as returned while it
+/// has a submitted return.
+fn update_is_items_returned(doc: &Doc, fyo: &mut Fyo) -> Result<(), Error> {
+    if !is_return(doc) || is_quote(doc) {
+        return Ok(());
+    }
+    let against = text(doc, "returnAgainst").unwrap_or_default().to_owned();
+    let is_returned = !submitted_returns(fyo, doc.schema_name(), &against, None)?.is_empty();
+    let mut invoice = fyo.get_doc(doc.schema_name(), Some(&against))?;
+    invoice.set_and_sync(fyo, "isReturned", DocValue::Bool(is_returned))
+}
+
+/// `updateIsItemsFullyReturned`: marks a sales invoice fully returned once nothing is left
+/// to return. Books only ever sets it, so an invoice stays fully returned after its return
+/// is cancelled; here cancelling clears it.
+fn update_is_items_fully_returned(doc: &Doc, fyo: &mut Fyo) -> Result<(), Error> {
+    if !is_return(doc) || doc.schema_name() != "SalesInvoice" {
+        return Ok(());
+    }
+    let against = text(doc, "returnAgainst").unwrap_or_default().to_owned();
+    let left = get_return_qty_total(fyo, doc.schema_name(), &against, None)?;
+    let is_fully_returned = left.values().all(|left| *left <= 0.0);
+    let mut invoice = fyo.get_doc(doc.schema_name(), Some(&against))?;
+    if is_truthy(invoice.get("isFullyReturned")) == is_fully_returned {
+        return Ok(());
+    }
+    invoice.set_and_sync(fyo, "isFullyReturned", DocValue::Bool(is_fully_returned))
+}
+
+/// What a return can't do yet: take back loyalty points.
+fn validate_return_supported(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
+    let against = text(doc, "returnAgainst").unwrap_or_default();
+    let program = fyo.get_value(doc.schema_name(), Some(against), "loyaltyProgram");
+    let program = match &program {
+        Some(DocValue::Text(program)) => Some(program.as_str()),
+        _ => None,
+    };
+    if loyalty::loyalty_point_entry_exists(fyo, program, against)? {
+        return Err(not_ported("Returning an invoice with loyalty points"));
+    }
+    Ok(())
 }
 
 fn formulas() -> Vec<Formula> {
@@ -565,9 +872,10 @@ fn formulas() -> Vec<Formula> {
                 if !single_is_truthy(ctx.fyo, "AccountingSettings", "enablePricingRule") {
                     return some(DocValue::Bool(false));
                 }
-                // With no rules that apply, Books empties `pricingRuleDetail`, which is
-                // empty already.
-                let applied = get_pricing_rule(ctx.doc, ctx.fyo)?.is_some();
+                // `pricingRuleDetail` is set in the `change` hook.
+                let applied = !get_invoice_pricing_rules(ctx.doc, ctx.fyo)?
+                    .unwrap_or_default()
+                    .is_empty();
                 some(DocValue::Bool(applied))
             },
         },
@@ -635,7 +943,7 @@ fn validate_batch(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
 }
 
 /// `getPaymentIds`: the payments made against the invoice.
-fn get_payment_ids(doc: &Doc, fyo: &Fyo) -> Result<Vec<String>, Error> {
+pub fn get_payment_ids(doc: &Doc, fyo: &Fyo) -> Result<Vec<String>, Error> {
     let options = GetAllOptions {
         fields: Some(vec!["parent".to_owned()]),
         filters: QueryFilter::from([
@@ -738,46 +1046,158 @@ fn validate_has_linked_return_invoices(doc: &Doc, fyo: &Fyo) -> Result<(), Error
     )))
 }
 
-/// Whether `_createLoyaltyPointEntry` would make an entry: the invoice has a loyalty
-/// program that runs on its date.
-fn earns_loyalty_points(doc: &Doc, fyo: &Fyo) -> Result<bool, Error> {
-    let Some(program) = text(doc, "loyaltyProgram").filter(|p| !p.is_empty()) else {
-        return Ok(false);
-    };
-    let program = fyo.db.get_doc("LoyaltyProgram", program)?;
-    let date = |value: Option<&DocValue>| match value {
-        Some(DocValue::Date(date)) => Some(*date),
-        _ => None,
-    };
-    let (Some(expiry_date), Some(from_date), Some(to_date)) = (
-        date(doc.get("date")),
-        date(program.get("fromDate")),
-        date(program.get("toDate")),
-    ) else {
-        return Ok(false);
-    };
-    Ok(from_date <= expiry_date && to_date >= expiry_date)
-}
-
-/// Whether `removeLoyaltyPoint` would change an entry: one was made for the invoice.
-fn has_loyalty_point_entry(doc: &Doc, fyo: &Fyo) -> Result<bool, Error> {
-    let Some(program) = text(doc, "loyaltyProgram").filter(|p| !p.is_empty()) else {
-        return Ok(false);
-    };
+/// The shipment or receipt a return's invoice was shipped or received with: the newest
+/// one not cancelled. Books looks for a shipment of a sales invoice even for a purchase
+/// return, and fails where there's none.
+fn returned_stock_transfer(doc: &Doc, fyo: &Fyo) -> Result<Option<String>, Error> {
+    let against = text(doc, "returnAgainst").unwrap_or_default();
     let options = GetAllOptions {
+        fields: Some(vec!["name".to_owned()]),
         filters: QueryFilter::from([
-            ("loyaltyProgram".to_owned(), Filter::from(program)),
-            (
-                "invoice".to_owned(),
-                Filter::from(doc.name().unwrap_or_default()),
-            ),
+            ("backReference".to_owned(), Filter::from(against)),
+            ("cancelled".to_owned(), Filter::from(false)),
         ]),
+        order_by: Some(vec!["created".to_owned()]),
+        order: Some(latte_db::Order::Desc),
         ..GetAllOptions::default()
     };
-    Ok(!fyo
+    Ok(fyo
         .db
-        .get_all_docs("LoyaltyPointEntry", &options)?
-        .is_empty())
+        .get_all_docs(stock_transfer_schema_name(doc), &options)?
+        .first()
+        .and_then(|row| map_text(row, "name")))
+}
+
+/// `getStockTransfer`: a new shipment or receipt of what a submitted invoice has left to
+/// ship or receive, or `None`. One made on submit (`is_auto`) leaves out items with
+/// batches or serial numbers, and items without the stock.
+pub fn get_stock_transfer(doc: &Doc, fyo: &Fyo, is_auto: bool) -> Result<Option<Doc>, Error> {
+    if !doc.is_submitted() {
+        return Ok(None);
+    }
+
+    let return_against = if is_return(doc) {
+        returned_stock_transfer(doc, fyo)?
+    } else {
+        None
+    };
+
+    let item_visibility = get_item_visibility(fyo);
+    let inventory_items = item_visibility.as_deref() == Some("Inventory Items");
+    let not_transferred = number(doc, "stockNotTransferred").unwrap_or(0.0);
+    if (not_transferred == 0.0 || not_transferred.is_nan()) && inventory_items {
+        return Ok(None);
+    }
+
+    let (terms, number_series) = if is_sales(doc) {
+        ("shipmentTerms", "shipmentNumberSeries")
+    } else {
+        ("purchaseReceiptTerms", "purchaseReceiptNumberSeries")
+    };
+    let date = Timestamp::now();
+    let mut data = DocValueMap::from([
+        (
+            "party".to_owned(),
+            doc.get("party").cloned().unwrap_or(DocValue::Null),
+        ),
+        ("date".to_owned(), DocValue::Date(date)),
+        (
+            "terms".to_owned(),
+            DocValue::Text(single_text(fyo, "Defaults", terms).unwrap_or_default()),
+        ),
+        (
+            "backReference".to_owned(),
+            DocValue::Text(doc.name().unwrap_or_default().to_owned()),
+        ),
+        (
+            "returnAgainst".to_owned(),
+            return_against.map_or(DocValue::Null, DocValue::Text),
+        ),
+    ]);
+    if let Some(series) = single_text(fyo, "Defaults", number_series) {
+        data.insert("numberSeries".to_owned(), DocValue::Text(series));
+    }
+
+    let location = auto_stock_transfer_location(doc, fyo)
+        .or_else(|| single_text(fyo, "InventorySettings", "defaultLocation"));
+    if is_auto && location.is_none() {
+        return Ok(None);
+    }
+    let location_value = location.clone().map_or(DocValue::Null, DocValue::Text);
+
+    let mut transfer = fyo.get_new_doc(stock_transfer_schema_name(doc), data)?;
+    for row in doc.table("items") {
+        let Some(item) = text(row, "item").filter(|i| !i.is_empty()) else {
+            continue;
+        };
+        let item_doc = fyo.db.get_doc("Item", item)?;
+        if is_auto
+            && (is_truthy(item_doc.get("hasBatch")) || is_truthy(item_doc.get("hasSerialNumber")))
+        {
+            continue;
+        }
+
+        let batch = text(row, "batch")
+            .filter(|b| !b.is_empty())
+            .map_or(DocValue::Null, |b| DocValue::Text(b.to_owned()));
+        let mut values = DocValueMap::from([
+            ("item".to_owned(), DocValue::Text(item.to_owned())),
+            ("location".to_owned(), location_value.clone()),
+            ("batch".to_owned(), batch),
+            (
+                "description".to_owned(),
+                row.get("description").cloned().unwrap_or(DocValue::Null),
+            ),
+            (
+                "hsnCode".to_owned(),
+                row.get("hsnCode").cloned().unwrap_or(DocValue::Null),
+            ),
+        ]);
+
+        if is_truthy(row.get("isFreeItem")) {
+            values.insert(
+                "quantity".to_owned(),
+                row.get("quantity").cloned().unwrap_or(DocValue::Null),
+            );
+            values.insert("rate".to_owned(), DocValue::Money(fyo.pesa().zero()));
+            transfer.push_row(fyo, "items", values)?;
+            continue;
+        }
+
+        let quantity = if is_truthy(item_doc.get("trackItem")) {
+            number(row, "stockNotTransferred")
+        } else {
+            number(row, "quantity")
+        }
+        .unwrap_or(0.0);
+        let mut rate = money_or_zero(row, "rate", fyo);
+        let exchange_rate = exchange_rate(doc);
+        if exchange_rate > 1.0 {
+            rate = rate.mul(exchange_rate)?;
+        }
+
+        if (quantity == 0.0 || quantity.is_nan()) && inventory_items {
+            continue;
+        }
+
+        if is_auto {
+            let stock =
+                get_stock_quantity(fyo, item, location.as_deref(), None, Some(date), None, &[])?
+                    .unwrap_or(0.0);
+            if stock < quantity {
+                continue;
+            }
+        }
+
+        values.insert("quantity".to_owned(), DocValue::Number(quantity));
+        values.insert("rate".to_owned(), DocValue::Money(rate));
+        transfer.push_row(fyo, "items", values)?;
+    }
+
+    if transfer.table("items").is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(transfer))
 }
 
 /// `getPayment`: a new payment of what is outstanding on a submitted invoice, or `None`
@@ -806,11 +1226,9 @@ pub fn get_payment(doc: &Doc, fyo: &Fyo) -> Result<Option<Doc>, Error> {
         }
         "PurchaseInvoice"
     };
-    let payment_amount = if is_return(doc) {
-        outstanding_amount.clone()
-    } else {
-        outstanding_amount.abs()?
-    };
+    // Books keeps a return's outstanding amount as is: the positive amount the form
+    // works out, but the negative one it saves, which a payment refuses.
+    let payment_amount = outstanding_amount.abs()?;
     let row_amount = if is_return(doc) {
         doc.get("grandTotal").cloned().unwrap_or(DocValue::Null)
     } else {
@@ -867,11 +1285,40 @@ fn update_party_outstanding(doc: &Doc, fyo: &mut Fyo) -> Result<(), Error> {
 
 impl Transactional for Invoice {
     fn get_posting(&self, doc: &Doc, fyo: &mut Fyo) -> Result<Option<LedgerPosting>, Error> {
-        Ok(Some((self.get_posting)(doc, fyo)?))
+        match self.get_posting {
+            Some(get_posting) => Ok(Some(get_posting(doc, fyo)?)),
+            None => Ok(None),
+        }
     }
 }
 
 impl Model for Invoice {
+    fn link_filters(&self, fieldname: &str, ctx: &DocContext<'_>) -> Option<QueryFilter> {
+        let sales = is_sales(ctx.doc);
+        Some(match fieldname {
+            "party" => query([(
+                "role",
+                one_of(&[if sales { "Customer" } else { "Supplier" }, "Both"]),
+            )]),
+            "account" => query([
+                ("isGroup", Filter::from(false)),
+                (
+                    "accountType",
+                    Filter::from(if sales { "Receivable" } else { "Payable" }),
+                ),
+            ]),
+            "numberSeries" => query([("referenceType", Filter::from(ctx.doc.schema_name()))]),
+            "priceList" => query([
+                ("isEnabled", Filter::from(true)),
+                (
+                    if sales { "isSales" } else { "isPurchase" },
+                    Filter::from(true),
+                ),
+            ]),
+            _ => return None,
+        })
+    }
+
     fn default(&self, fieldname: &str, doc: &Doc, fyo: &Fyo) -> Option<DocValue> {
         match fieldname {
             "makeAutoPayment" => Some(DocValue::Bool(auto_payment_account(doc, fyo).is_some())),
@@ -959,12 +1406,20 @@ impl Model for Invoice {
         }
     }
 
-    /// `beforeSync`: free items go when no pricing rule applies.
+    /// `isPricingRuleApplied`'s `appendPricingRuleDetail`.
+    fn change(&self, doc: &mut Doc, fyo: &mut Fyo, changed: Option<&str>) -> Result<(), Error> {
+        if matches!(changed, Some("items" | "coupons")) && !doc.is_submitted() && !is_return(doc) {
+            update_pricing_rule_detail(doc, fyo)?;
+        }
+        Ok(())
+    }
+
+    /// `beforeSync`: free items for the product discounts that apply, and only the coupons
+    /// that still apply.
     fn before_sync(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
         if !doc.table("pricingRuleDetail").is_empty() {
-            return Err(not_ported("Pricing rules"));
-        }
-        if !doc.table("items").is_empty() && !is_return(doc) {
+            apply_product_discount(doc, fyo)?;
+        } else if !doc.table("items").is_empty() && !is_return(doc) {
             let items: Vec<Doc> = doc
                 .table("items")
                 .iter()
@@ -973,10 +1428,9 @@ impl Model for Invoice {
                 .collect();
             doc.set_table_rows("items", items);
         }
-        if !doc.table("coupons").is_empty() {
-            return Err(not_ported("Coupons"));
+        if !is_return(doc) {
+            coupon_code::remove_unused_coupons(doc, fyo)?;
         }
-        let _ = fyo;
         Ok(())
     }
 
@@ -995,10 +1449,7 @@ impl Model for Invoice {
 
         // `_validatePricingRule`.
         if single_is_truthy(fyo, "AccountingSettings", "enablePricingRule") {
-            get_pricing_rule(doc, fyo)?;
-        }
-        if is_truthy(doc.get("redeemLoyaltyPoints")) {
-            return Err(not_ported("Redeeming loyalty points"));
+            get_invoice_pricing_rules(doc, fyo)?;
         }
         Ok(())
     }
@@ -1018,22 +1469,25 @@ impl Model for Invoice {
         }
 
         if is_return(doc) {
-            return Err(not_ported("Submitting a return"));
-        }
-        if earns_loyalty_points(doc, fyo)? {
-            return Err(not_ported("Earning loyalty points"));
-        }
-        if is_truthy(doc.get("makeAutoStockTransfer"))
-            && auto_stock_transfer_location(doc, fyo).is_some()
-        {
-            return Err(not_ported("Making the shipment or receipt on submit"));
+            validate_return_supported(doc, fyo)?;
+            validate_return_quantities(doc, fyo)?;
         }
         Ok(())
     }
 
     fn after_submit(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
         transactional::after_submit(self, doc, fyo)?;
+        if is_return(doc) {
+            update_is_items_returned(doc, fyo)?;
+            coupon_code::change_used_count(doc, fyo, coupon_code::used_count_change(doc, true))?;
+            update_is_items_fully_returned(doc, fyo)?;
+        }
         if is_quote(doc) {
+            // SalesQuote's `afterSubmit`.
+            if text(doc, "referenceType") == Some("Lead") {
+                let mut lead = fyo.get_doc("Lead", text(doc, "party"))?;
+                lead.set_and_sync(fyo, "status", DocValue::Text("Quotation".to_owned()))?;
+            }
             return Ok(());
         }
 
@@ -1057,6 +1511,23 @@ impl Model for Invoice {
             }
             doc.load(fyo)?;
         }
+
+        if is_truthy(doc.get("makeAutoStockTransfer"))
+            && auto_stock_transfer_location(doc, fyo).is_some()
+        {
+            if let Some(mut transfer) = get_stock_transfer(doc, fyo, true)? {
+                transfer.sync(fyo)?;
+                transfer.submit(fyo)?;
+            }
+            doc.load(fyo)?;
+        }
+
+        if !is_return(doc) {
+            loyalty::create_loyalty_point_entry(doc, fyo)?;
+            if doc.schema_name() == "SalesInvoice" {
+                coupon_code::change_used_count(doc, fyo, 1.0)?;
+            }
+        }
         Ok(())
     }
 
@@ -1065,13 +1536,7 @@ impl Model for Invoice {
         validate_has_linked_return_invoices(doc, fyo)?;
 
         if is_return(doc) {
-            return Err(not_ported("Cancelling a return"));
-        }
-        if has_loyalty_point_entry(doc, fyo)? {
-            return Err(not_ported("Cancelling an invoice with loyalty points"));
-        }
-        if !doc.table("coupons").is_empty() {
-            return Err(not_ported("Cancelling an invoice with coupons"));
+            validate_return_supported(doc, fyo)?;
         }
         Ok(())
     }
@@ -1079,15 +1544,23 @@ impl Model for Invoice {
     fn after_cancel(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
         transactional::after_cancel(self, doc, fyo)?;
         cancel_payments(doc, fyo)?;
-        update_party_outstanding(doc, fyo)
+        update_party_outstanding(doc, fyo)?;
+        update_is_items_returned(doc, fyo)?;
+        if !is_return(doc) {
+            loyalty::remove_loyalty_points(doc, fyo)?;
+        }
+        coupon_code::change_used_count(doc, fyo, coupon_code::used_count_change(doc, false))?;
+        update_is_items_fully_returned(doc, fyo)
     }
 
     fn before_delete(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
         validate_stock_transfer_cancelled(doc, fyo)?;
-        if !get_linked_stock_transfer_names(doc, fyo, true)?.is_empty() {
-            return Err(not_ported(
-                "Deleting an invoice with cancelled shipments or receipts",
-            ));
+
+        // `_deleteCancelledStockTransfers`.
+        let schema_name = stock_transfer_schema_name(doc);
+        for name in get_linked_stock_transfer_names(doc, fyo, true)? {
+            let mut transfer = fyo.get_doc(schema_name, Some(&name))?;
+            transfer.delete(fyo)?;
         }
         Ok(())
     }

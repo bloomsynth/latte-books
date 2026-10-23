@@ -67,6 +67,38 @@ impl DatabaseCore {
         Ok(())
     }
 
+    /// The changes written after change `after` from another device, such as an AI
+    /// assistant working in the same file: the last change's id, and the documents
+    /// changed as `(schemaName, name)`. Not in Books.
+    pub fn changes_from_others(&self, after: i64) -> Result<(i64, Vec<(String, String)>), Error> {
+        let device = self.device.clone().unwrap_or_default();
+        let mut statement = self.conn.prepare_cached(
+            "select `id`, `schemaName`, `name` from `latte_changes` \n             where `id` > ? and `device` != ? order by `id`",
+        )?;
+        let mut last = after;
+        let mut changed = Vec::new();
+        let rows = statement.query_map(rusqlite::params![after, device], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        for row in rows {
+            let (id, schema_name, name): (i64, String, String) = row?;
+            last = id;
+            if !changed.contains(&(schema_name.clone(), name.clone())) {
+                changed.push((schema_name, name));
+            }
+        }
+        Ok((last, changed))
+    }
+
+    /// The id of the last change written, from any device.
+    pub fn last_change_id(&self) -> Result<i64, Error> {
+        Ok(self.conn.query_row(
+            "select coalesce(max(`id`), 0) from `latte_changes`",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Port of `#createTable`, as knex writes it for SQLite. Migrating a file isn't ported
     /// yet; this is for new files.
     pub fn create_table(&self, schema_name: &str) -> Result<(), Error> {
@@ -109,6 +141,54 @@ impl DatabaseCore {
             definitions.join(", ")
         );
         self.conn.execute(&sql, [])?;
+        Ok(())
+    }
+
+    /// The part of `migrate` that adds a column for each custom field that has none yet,
+    /// as `#alterTable` does. Books also adds and drops the columns of its own fields and
+    /// rebuilds a table for a new Link's foreign key; Latte only reads files Books has
+    /// already brought up to date, so it leaves those alone, and a custom Link field gets
+    /// no foreign key. A required custom field is only `not null` if it has a default, as
+    /// SQLite can't add a `not null` column without one.
+    pub fn add_custom_field_columns(&self) -> Result<(), Error> {
+        for schema in self.schema_map.values().filter(|s| !s.is_single) {
+            let custom: Vec<_> = schema
+                .fields
+                .iter()
+                .filter(|f| f.is_custom && !f.computed)
+                .collect();
+            if custom.is_empty() {
+                continue;
+            }
+            let mut statement = self
+                .conn
+                .prepare(&format!("pragma table_info({})", quote(&schema.name)))?;
+            let columns: Vec<String> = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<_, _>>()?;
+            if columns.is_empty() {
+                continue;
+            }
+            for field in custom {
+                let Some(column_type) = field.fieldtype.and_then(sqlite_type) else {
+                    continue;
+                };
+                if columns.contains(&field.fieldname) {
+                    continue;
+                }
+                let mut column = format!("{} {column_type}", quote(&field.fieldname));
+                if let Some(default) = &field.default {
+                    if field.required {
+                        column.push_str(" not null");
+                    }
+                    column.push_str(&format!(" default {}", format_default(default)));
+                }
+                self.conn.execute(
+                    &format!("alter table {} add column {column}", quote(&schema.name)),
+                    [],
+                )?;
+            }
+        }
         Ok(())
     }
 

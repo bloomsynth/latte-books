@@ -5,9 +5,10 @@
 // - The `unitConversionFactor` formula doesn't set `quantity` to the quantity in the
 //   transfer unit times the factor, as Books' formula does on the side. Formulas here
 //   can't change other fields. It only matters when unit conversions are on.
-// - With pricing rules on, the `setItemDiscountAmount` and `itemDiscountPercent` formulas
-//   give what Books gives where no rule applies, and nothing where one does, as applying
-//   them isn't ported. Invoices refuse to save then (see invoice.rs).
+// - A pricing rule's discount amount is set by an `itemDiscountAmount` formula. Books'
+//   `setItemDiscountAmount` formula sets it on the side, which formulas here can't. Where
+//   a rule stops applying, the invoice clears the discount it gave (invoice.rs), as Books
+//   does with the rule it keeps in memory (`prule`).
 //
 // Books bugs Latte fixes:
 // - `itemDiscountedTotal` with a discount percent is the amount less the discount, not the
@@ -35,8 +36,9 @@ use crate::Error;
 use crate::fyo::model::doc::Doc;
 use crate::fyo::model::helpers::{is_truthy, js_string};
 use crate::fyo::model::types::{DocContext, Formula, FormulaValue, Model};
+use crate::models::base_models::pricing_rule::{map_money, map_number, map_text, rule_for_row};
 use crate::models::base_models::tax_summary;
-use crate::models::helpers::{linked_value, money, number, single_is_truthy, text};
+use crate::models::helpers::{linked_value, money, number, query, single_is_truthy, text};
 
 pub struct InvoiceItem;
 
@@ -132,6 +134,22 @@ fn get_total_tax_rate(ctx: &DocContext<'_>) -> f64 {
 }
 
 impl Model for InvoiceItem {
+    /// Only `item` is ported; the batch and transfer unit filters come with inventory.
+    fn link_filters(&self, fieldname: &str, ctx: &DocContext<'_>) -> Option<QueryFilter> {
+        if fieldname != "item" {
+            return None;
+        }
+        let not_for = if ctx.doc.schema_name() == "SalesInvoiceItem" {
+            "Purchases"
+        } else {
+            "Sales"
+        };
+        Some(query([(
+            "for",
+            Filter::list("not in", vec![not_for.into()]),
+        )]))
+    }
+
     fn formulas(&self) -> Vec<Formula> {
         vec![
             Formula {
@@ -408,6 +426,25 @@ impl Model for InvoiceItem {
                 formula: stock_not_transferred_formula,
             },
             Formula {
+                fieldname: "itemDiscountAmount",
+                depends_on: Some(&["pricingRuleDetail", "quantity", "item"]),
+                formula: |ctx, _| {
+                    if !enable_pricing_rule(ctx) || is_return(ctx) {
+                        return Ok(None);
+                    }
+                    let Some(rule) = rule_for_row(ctx)? else {
+                        return Ok(None);
+                    };
+                    if map_text(&rule, "priceDiscountType") != Some("amount") {
+                        return Ok(None);
+                    }
+                    let amount = map_money(&rule, "discountAmount")
+                        .cloned()
+                        .unwrap_or_else(|| ctx.fyo.pesa().zero());
+                    some(DocValue::Money(amount))
+                },
+            },
+            Formula {
                 fieldname: "setItemDiscountAmount",
                 depends_on: Some(&["pricingRuleDetail", "quantity", "item"]),
                 formula: |ctx, _| {
@@ -418,17 +455,19 @@ impl Model for InvoiceItem {
                             .cloned()
                             .map(Into::into));
                     }
-                    if has_pricing_rule_detail(ctx) {
+                    if is_return(ctx) {
                         return Ok(None);
                     }
-                    let Some(DocValue::Money(discount)) = ctx.doc.get("itemDiscountAmount") else {
-                        return Ok(None);
-                    };
-                    if discount.is_zero() {
+                    let zero = money(ctx.doc, "itemDiscountAmount").is_none_or(|m| m.is_zero());
+                    if !has_pricing_rule_detail(ctx) && zero {
                         return some(DocValue::Bool(false));
                     }
-                    // No rule applies, as Latte refuses the invoice where one would.
-                    some(DocValue::Bool(true))
+                    match rule_for_row(ctx)? {
+                        Some(rule) => some(DocValue::Bool(
+                            map_text(&rule, "priceDiscountType") == Some("amount"),
+                        )),
+                        None => some(DocValue::Bool(!zero)),
+                    }
                 },
             },
             Formula {
@@ -438,10 +477,28 @@ impl Model for InvoiceItem {
                     if !enable_pricing_rule(ctx) {
                         return some(DocValue::Number(item_discount_percent_or_zero(ctx.doc)));
                     }
-                    if has_pricing_rule_detail(ctx) {
+                    if is_return(ctx) {
                         return Ok(None);
                     }
-                    Ok(ctx.doc.get("itemDiscountPercent").cloned().map(Into::into))
+                    let item = ctx.doc.get("item");
+                    let detail = ctx.parent.and_then(|parent| {
+                        parent
+                            .table("pricingRuleDetail")
+                            .iter()
+                            .find(|rule| rule.get("referenceItem") == item)
+                            .and_then(|rule| text(rule, "referenceName"))
+                            .map(str::to_owned)
+                    });
+                    let Some(rule_name) = detail else {
+                        return Ok(ctx.doc.get("itemDiscountPercent").cloned().map(Into::into));
+                    };
+                    let rule = ctx.fyo.db.get_doc("PricingRule", &rule_name)?;
+                    if map_text(&rule, "discountType") != Some("Product Discount")
+                        && map_text(&rule, "priceDiscountType") == Some("percentage")
+                    {
+                        return some(DocValue::Number(map_number(&rule, "discountPercentage")));
+                    }
+                    some(DocValue::Number(item_discount_percent_or_zero(ctx.doc)))
                 },
             },
         ]

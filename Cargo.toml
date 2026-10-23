@@ -14,6 +14,7 @@ latte-schema = { path = "crates/latte-schema" }
 latte-db = { path = "crates/latte-db" }
 latte-core = { path = "crates/latte-core" }
 latte-i18n = { path = "crates/latte-i18n" }
+latte-mcp = { path = "crates/latte-mcp" }
 latte-print = { path = "crates/latte-print" }
 latte-regional = { path = "crates/latte-regional" }
 latte-ui = { path = "crates/latte-ui" }
@@ -24,3 +25,10 @@ fastrand = "2"
 indexmap = "2"
 jiff = "0.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
+
+# GPUI, through gpui-kit. Pinned exactly: GPUI's API changes often (see docs/PLAN.md §9).
+gpui-kit = "=0.8.0"
+
+# No LTO for now: this machine runs out of memory linking GPUI with it (spikes/gpui-startup).
+[profile.release]
+strip = "debuginfo"

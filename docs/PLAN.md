@@ -243,8 +243,30 @@ CI runs the parity suite on every PR. Any difference fails the build.
   as intended: Books posted Cash ₹1,416, Debtors ₹1,416 credit and ₹4 debit, and Write
   Off ₹4 credit, leaving the customer owing ₹4 in the ledger while the invoice and party
   say ₹0; Latte posted Cash ₹1,176, Write Off ₹4 debit and Debtors ₹1,180 credit.*
+  *Returns 2026-10-23: Make Return on a sales or purchase invoice makes a return of what
+  is left to return; submitting it reverses the invoice's posting, takes it off what the
+  party owes and marks the invoice returned, and a return can't be cancelled while its
+  invoice can't be either. Make Payment on a return refunds it. Returns of invoices with
+  coupons or loyalty points are refused. Seven Books bugs are fixed (see BOOKS-BUGS.md),
+  among them a return posting the invoice again instead of reversing it. The
+  `return_test` example makes a return in a copy of a file to compare with Books.*
 - Reports: General Ledger, Trial Balance, P&L, Balance Sheet.
+  *Reports 2026-10-23: the four reports are ported in `latte-core::reports`, with their
+  filters, columns, rows and CSV export, and amounts and dates shown in the company's
+  locale and format (`latte-i18n::format`). Nine Books bugs are fixed (see
+  BOOKS-BUGS.md), among them the Trial Balance's closing columns and the To Date left out
+  of the General Ledger. The `report_test` example prints a report of a file, opened
+  read-only, to compare with Books.*
 - Setup: create a new company from `countryInfo.json` and the charts of accounts.
+  *Setup 2026-10-23: `latte_db::Database::create` makes a new file as Books does (every
+  table, the settings' defaults, and the effects and log of Books' patches), and
+  `latte_core::setup` sets the company up as the setup wizard does: settings, currencies,
+  the chart of accounts with the bank, discount and default accounts, India's GST taxes,
+  units, the Stores location and the number series. Checked against Books 2026-10-23: the
+  `setup_test` example set up an Indian company, and its tables match a file Books
+  v0.36.0 set up, row for row (accounts, taxes and rates, units, payment methods, patch
+  log, number series, settings), apart from what that file's owner changed since. Every
+  chart of accounts sets up without errors.*
 - **Exit:** parity suite passes for every core document and report.
 
 ### Phase 3 — MVP desktop app (6–8 weeks)
@@ -262,11 +284,41 @@ CI runs the parity suite on every PR. Any difference fails the build.
 
 - Inventory: stock movements, transfers, receipts, shipments, batches, serial numbers,
   FIFO stock queue, UOM conversions, Stock Ledger and Stock Balance.
+  *Inventory 2026-10-23: InventorySettings, StockMovement, Shipment, PurchaseReceipt and
+  their rows are ported in `latte_core::models::inventory`, with the stock queue, batches,
+  serial numbers and unit conversions. Submitting moves stock and posts to Stock In Hand,
+  Cost of Goods Sold and Stock Received But Not Billed; an invoice set to do so makes its
+  shipment or receipt on submit, and the form offers Shipment or Purchase Receipt on an
+  invoice, and Sales or Purchase Invoice and Return on a shipment or receipt. The Stock
+  Ledger and Stock Balance reports are in `latte_core::reports`. Eight Books bugs are
+  fixed (see BOOKS-BUGS.md). The barcode scanner and the inventory list filters aren't
+  ported yet. Not yet checked against Books by hand.*
 - India: GSTIN fields, GST types, state codes, GSTR-1 and GSTR-2 reports.
 - Switzerland regional fields.
 - Point of Sale: profiles, shifts, checkout, barcodes.
 - Pricing rules, price lists, coupons, loyalty programs, leads, quotes.
+  *Regional, pricing and sales 2026-10-23: India's Address and Party models, and the
+  GSTR-1 and GSTR-2 reports with their JSON export, are in `latte_core`; Switzerland's
+  fields come with the schemas. Pricing rules, price lists, coupons, loyalty programs,
+  leads and quotes are ported, with Make Customer and Make Sales Quote on a lead and
+  Make Sales Invoice on a quote. Eleven Books bugs are fixed (see BOOKS-BUGS.md). Loyalty
+  points on returns are still refused. Not yet checked against Books by hand.*
+  *Point of sale 2026-10-23: POSSettings and the shift models are ported, with
+  `latte_core::pos` for opening and closing shifts, the cart's checks, and making the
+  invoice, shipment and payment of a sale. The page has the Classic UI's item list,
+  cart, payment and shift panels, barcode and weighed-item search, and saved sales taken
+  up later. Seven Books bugs are fixed. The Modern UI, and returns, coupons and loyalty at
+  the till, come after 1.0. Not yet checked against Books by hand.*
 - Data import (CSV), custom fields and forms, the dashboard.
+  *Import, custom fields and dashboard 2026-10-23: `latte_core::importer` and the Import
+  Wizard page; CustomForm and CustomField, with a new field's column added when the file
+  is opened; `latte_core::dashboard` and the Dashboard page with plain bar charts. Four
+  Books bugs are fixed. Not yet checked against Books by hand.*
+- The Get Started page. *2026-10-23: `latte_core::views::get_started` and the page; the
+  desk opens on it until every card is done or it is hidden. One Books bug is fixed. Not
+  yet checked against Books by hand.*
+- GST: check one GSTR-1 JSON export, B2B rows included, with the GST portal's offline
+  tool before 1.0.
 - **Exit: 1.0.** Parity suite is green for everything Books v0.36.0 does, except the non-goals in §1.
 
 ### Phase 5 — Latte Cloud (after 1.0)
@@ -312,6 +364,20 @@ for Tally).
   checks as the app. An agent can't save what a person couldn't.
 - **You stay in control:** writes wait for your confirmation, and drafts come before
   submitting.
+- *Built 2026-10-23: the `latte-mcp` crate has the server (company info, document types
+  and fields, find, get, create, update, submit, cancel and delete documents, and the
+  reports) and the assistant setup for Claude Desktop, Claude Code, Codex and Cursor; the
+  app's "Set up AI assistants" page connects and disconnects them, and the app points
+  connected assistants at its own `latte-mcp` each time it starts. Writes are confirmed by
+  the assistant's own tool approval. An assistant's writes are logged under their own
+  device id, and the app shows the open page again when it sees them (see DEVIATIONS.md).
+  Not yet tried with a real assistant.*
+- Later: a "Changes by assistants" list in the app, and setup for VS Code (Copilot) and
+  Windsurf.
+- Next: an invoice in a foreign currency made by an assistant gets exchange rate 1 (Latte
+  doesn't fetch rates yet, see DEVIATIONS.md), so a ₹30 item becomes €30 with no warning.
+  `latte-mcp` should refuse or warn when no rate is given, and the app should be able to
+  fetch today's rate as Books does.
 - **Starts after Phase 3,** once the app can show what an agent did. Hosted features
   (reading receipts and invoices into entries, an assistant built into the app) are paid
   Latte Cloud services, on Bloomsynth's servers like those above.
@@ -321,6 +387,11 @@ for Tally).
 ## 6. Release and distribution
 
 - GitHub Releases on every tag, with `cargo-packager` artifacts for each OS.
+  *2026-10-23: the packager settings are in `crates/latte-app/Cargo.toml` (NSIS, DMG,
+  deb and AppImage, with `latte-mcp` beside the app), and `.github/workflows/release.yml`
+  builds them on a `v*` tag into a draft release. The app icon, a mug that is also a book,
+  is in `crates/latte-app/icons` and is built into the Windows `.exe`. Unsigned. Windows
+  installs for the current user. Not yet run.*
 - Windows: Azure Trusted Signing (or an OV certificate). macOS: Developer ID + notarization.
 - Flathub manifest and Homebrew cask, maintained in their own repos.
 - Website: `latte.bloomsynth.com` (subdomain, no new domain). Pages include "Coming from
@@ -372,9 +443,10 @@ So Phase 5 doesn't need a rework:
 
 ## 10. Next steps
 
-1. Create the public GitHub repo, so CI runs and users can file issues.
+1. ~~Create the public GitHub repo.~~ Done: github.com/bloomsynth/latte-books.
 2. Report the two text issues from spike 4 upstream: line wrapping to Zed, the cursor to
    gpui-kit.
 3. Phase 1 is done. In Phase 2 the `Doc` layer is ported, and journal entries and sales
-   and purchase invoices and payments post to the ledger, matching what Books posts.
-   Next: returns.
+   and purchase invoices, payments and returns post to the ledger, matching what Books
+   posts. The four accounting reports and company setup are ported, so Phase 2 is done.
+   Next: Phase 3, the app.

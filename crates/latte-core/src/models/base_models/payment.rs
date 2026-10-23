@@ -31,6 +31,9 @@
 // - With partial payments off, a payment with a write-off must still settle all that is
 //   outstanding. Books lets any payment with a write-off through.
 // - A write-off can't be less than zero or more than the amount. Books doesn't check.
+// - Changing the amount of a refund for a return takes it off the return's outstanding
+//   amount, which is negative. Books adds it instead, so the return and the party are
+//   left owing twice the refund.
 //
 // Not ported yet, as the UI needs them: `filters`, `getActions` and
 // `getListViewSettings`.
@@ -48,7 +51,8 @@ use crate::fyo::model::types::{DocContext, Formula, FormulaValue, Model};
 use crate::models::base_models::invoice::{TaxItem, get_tax_items};
 use crate::models::base_models::party;
 use crate::models::helpers::{
-    get_number_series, linked_value, money, money_or_zero, single_is_truthy, single_text, text,
+    get_number_series, linked_value, money, money_or_zero, one_of, query, single_is_truthy,
+    single_text, text,
 };
 use crate::models::transactional::ledger_posting::LedgerPosting;
 use crate::models::transactional::{self, Transactional};
@@ -191,7 +195,7 @@ fn get_account_from_for(doc: &Doc, fyo: &Fyo) -> Result<Option<String>, Error> {
 
 /// `getTaxSummary`: the taxes of the invoices paid that have a payment account, moved
 /// from the invoice's tax account to it, by payment account and then tax account.
-fn get_tax_summary(doc: &Doc, fyo: &Fyo) -> Result<Vec<DocValueMap>, Error> {
+pub fn get_tax_summary(doc: &Doc, fyo: &Fyo) -> Result<Vec<DocValueMap>, Error> {
     let mut taxes: IndexMap<String, IndexMap<String, (f64, Money)>> = IndexMap::new();
     for row in doc.table("for") {
         let reference_type = text(row, "referenceType").unwrap_or_default();
@@ -413,15 +417,27 @@ fn update_details_on_reference_update(doc: &mut Doc, fyo: &mut Fyo) -> Result<()
     Ok(())
 }
 
-/// `updateReferenceOnAmountUpdate`: the one invoice paid gets the payment's amount.
-fn update_reference_on_amount_update(doc: &mut Doc) {
+/// `updateReferenceOnAmountUpdate`: the one invoice paid gets the payment's amount, taken
+/// off a return's (negative) outstanding amount as a negative amount. Books gives a return
+/// the positive amount, which takes its refund off twice over.
+fn update_reference_on_amount_update(doc: &mut Doc, fyo: &Fyo) -> Result<(), Error> {
     if doc.table("for").len() != 1 {
-        return;
+        return Ok(());
     }
-    let amount = doc.get("amount").cloned().unwrap_or(DocValue::Null);
+    let mut amount = doc.get("amount").cloned().unwrap_or(DocValue::Null);
     let mut rows = doc.table("for").to_vec();
+    if let (DocValue::Money(money), Some((reference_type, reference_name))) =
+        (&amount, reference(&rows[0]))
+        && is_truthy(
+            fyo.get_value(reference_type, Some(reference_name), "returnAgainst")
+                .as_ref(),
+        )
+    {
+        amount = DocValue::Money(money.abs()?.neg()?);
+    }
     rows[0].set_value("amount", amount);
     doc.set_table_rows("for", rows);
+    Ok(())
 }
 
 /// `validateFor`: the invoices paid are the party's.
@@ -652,6 +668,46 @@ impl Transactional for Payment {
 }
 
 impl Model for Payment {
+    /// Deviation: Books compares `paymentMethod.name` with "Cash", but the field holds the
+    /// method's name, which has no `name`, so a Cash payment was offered bank accounts too.
+    /// Here the method named Cash offers only cash accounts.
+    fn link_filters(&self, fieldname: &str, ctx: &DocContext<'_>) -> Option<QueryFilter> {
+        let payment_type = text(ctx.doc, "paymentType");
+        let cash = text(ctx.doc, "paymentMethod") == Some("Cash");
+        let money_account = || {
+            if cash {
+                query([
+                    ("accountType", Filter::from("Cash")),
+                    ("isGroup", Filter::from(false)),
+                ])
+            } else {
+                query([
+                    ("accountType", one_of(&["Bank", "Cash"])),
+                    ("isGroup", Filter::from(false)),
+                ])
+            }
+        };
+        Some(match fieldname {
+            "party" => match payment_type {
+                Some("Pay") => query([("role", one_of(&["Supplier", "Both"]))]),
+                Some("Receive") => query([("role", one_of(&["Customer", "Both"]))]),
+                _ => QueryFilter::new(),
+            },
+            "numberSeries" => query([("referenceType", Filter::from("Payment"))]),
+            "account" if payment_type == Some("Receive") => query([
+                ("accountType", Filter::from("Receivable")),
+                ("isGroup", Filter::from(false)),
+            ]),
+            "account" => money_account(),
+            "paymentAccount" if payment_type == Some("Pay") => query([
+                ("accountType", Filter::from("Payable")),
+                ("isGroup", Filter::from(false)),
+            ]),
+            "paymentAccount" => money_account(),
+            _ => return None,
+        })
+    }
+
     fn default(&self, fieldname: &str, doc: &Doc, fyo: &Fyo) -> Option<DocValue> {
         match fieldname {
             "numberSeries" => get_number_series(doc.schema_name(), fyo).map(DocValue::Text),
@@ -722,10 +778,7 @@ impl Model for Payment {
                 update_amount_on_reference_update(doc, fyo)?;
                 update_details_on_reference_update(doc, fyo)
             }
-            Some("amount") => {
-                update_reference_on_amount_update(doc);
-                Ok(())
-            }
+            Some("amount") => update_reference_on_amount_update(doc, fyo),
             _ => Ok(()),
         }
     }

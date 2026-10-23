@@ -5,11 +5,12 @@
 //!
 //! [`Database::open_read_only`] opens a file without ever changing it; [`Database::open`]
 //! opens it for writing. Either way the file must have been opened by Frappe Books v0.36.0,
-//! as migrating isn't ported yet.
+//! as migrating isn't ported yet. [`Database::create`] makes a new file.
 
 mod changes;
 mod converter;
 mod core;
+mod create;
 pub mod pesa;
 mod write;
 
@@ -111,12 +112,16 @@ impl Database {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let mut db = Self::from_connection(Connection::open_with_flags(path, flags)?)?;
         db.core.enable_change_log(device)?;
+        db.core.add_custom_field_columns()?;
         Ok(db)
     }
 
     /// Port of `DatabaseManager._connect` and the version lookup in `#getAppVersion`.
     pub fn from_connection(conn: Connection) -> Result<Self, Error> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // better-sqlite3's default: wait up to 5 seconds for another writer, such as an AI
+        // assistant working in the same file, rather than failing at once.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let version = system_setting(&conn, "version")?.unwrap_or_else(|| "0.0.0".into());
         if version != BOOKS_VERSION {
             return Err(Error::Version { found: version });

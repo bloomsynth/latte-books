@@ -9,3 +9,10 @@ publish.workspace = true
 [dependencies]
 latte-core.workspace = true
 latte-i18n.workspace = true
+latte-mcp.workspace = true
+latte-print.workspace = true
+gpui-kit.workspace = true
+latte-db.workspace = true
+latte-schema.workspace = true
+jiff.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,44 @@
+# Builds the installers when a version tag is pushed, and attaches them to a draft release.
+# The installers aren't signed yet (docs/PLAN.md §6).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # GPUI's build needs these on Linux.
+      - name: Install Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
+            libfontconfig-dev libasound2-dev libssl-dev libzstd-dev
+
+      # rust-toolchain.toml picks the toolchain.
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      - name: Make installers
+        run: cargo packager --release -p latte-app
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            target/packages/*.exe
+            target/packages/*.dmg
+            target/packages/*.deb
+            target/packages/*.AppImage
