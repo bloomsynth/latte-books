@@ -17,6 +17,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      # GPUI's system libraries, as release.yml installs them.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
+            libfontconfig-dev libasound2-dev libssl-dev libzstd-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
