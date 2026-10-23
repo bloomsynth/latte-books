@@ -1,17 +1,22 @@
 //! Choosing a company file: `src/pages/DatabaseSelector.vue` @ v0.36.0.
 //!
 //! Differences from Books:
-//! - There is no "Create Demo" (Books fills a company with a year of made-up documents).
+//! - Create Demo shows its progress in the selector instead of a full-window loader.
 //! - "Remove" takes a file off the list and leaves it on the disk. Books deletes the file.
 //! - Changing the language rebuilds the screen; Books reloads the window.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::{self, t};
+use latte_core::dummy::setup_dummy_instance;
+
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::{self, RecentFile};
 use crate::widgets::error_message;
@@ -25,6 +30,8 @@ pub struct Selector {
     files: Vec<RecentFile>,
     error: Option<String>,
     language: Entity<LinkInput>,
+    /// `creatingDemo`, with `creationMessage` (untranslated) and `creationPercent`.
+    creating_demo: Option<(String, f64)>,
     _subscription: Subscription,
 }
 
@@ -55,6 +62,7 @@ impl Selector {
             files: session::recent_files(),
             error,
             language,
+            creating_demo: None,
             _subscription: subscription,
         }
     }
@@ -74,6 +82,95 @@ impl Selector {
                 return;
             };
             this.update(cx, |_, cx| cx.emit(Selected::Open(path))).ok();
+        })
+        .detach();
+    }
+
+    /// `createDemo` and `startDummyInstanceSetup`: asks where to save the demo company,
+    /// fills it with a year of documents (Books' `baseCount` of 100) and opens it.
+    fn create_demo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.creating_demo.is_some() {
+            return;
+        }
+        let dir = demo_dir();
+        let path = cx.prompt_for_new_path(&dir, Some("demo.books.db"));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = path.await else {
+                return;
+            };
+            if path.exists() {
+                this.update(cx, |this, cx| {
+                    this.error = Some(format!("{} is already there", path.display()));
+                    cx.notify();
+                })
+                .ok();
+                return;
+            }
+            let progress = Arc::new(Mutex::new(("Setting Up Instance".to_owned(), -1.0)));
+            let Ok(()) = this.update(cx, |this, cx| {
+                this.error = None;
+                this.creating_demo = Some(("Setting Up Instance".to_owned(), -1.0));
+                cx.notify();
+            }) else {
+                return;
+            };
+
+            let result = Arc::new(Mutex::new(None));
+            cx.background_executor()
+                .spawn({
+                    let path = path.clone();
+                    let progress = progress.clone();
+                    let result = result.clone();
+                    async move {
+                        let mut rng = fastrand::Rng::new();
+                        let device = latte_core::config::device_id();
+                        let mut notifier = |stage: &str, percent: f64| {
+                            if let Ok(mut progress) = progress.lock() {
+                                *progress = (stage.to_owned(), percent);
+                            }
+                        };
+                        let done =
+                            setup_dummy_instance(&path, 1, 100, &device, &mut rng, &mut notifier)
+                                .map(|_| ())
+                                .map_err(|e| e.to_string());
+                        if let Ok(mut result) = result.lock() {
+                            *result = Some(done);
+                        }
+                    }
+                })
+                .detach();
+
+            // Shows how far along it is until it's done, then opens it.
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(200))
+                    .await;
+                let current = progress.lock().map(|p| p.clone()).ok();
+                let done = result.lock().ok().and_then(|mut r| r.take());
+                let updated = this.update(cx, |this, cx| {
+                    match done {
+                        None => {
+                            if let (Some(creating), Some(current)) =
+                                (this.creating_demo.as_mut(), current)
+                            {
+                                *creating = current;
+                            }
+                        }
+                        Some(done) => {
+                            this.creating_demo = None;
+                            match done {
+                                Ok(()) => cx.emit(Selected::Open(path.clone())),
+                                Err(e) => this.error = Some(e),
+                            }
+                        }
+                    }
+                    cx.notify();
+                    this.creating_demo.is_some()
+                });
+                if !matches!(updated, Ok(true)) {
+                    break;
+                }
+            }
         })
         .detach();
     }
@@ -216,26 +313,86 @@ impl Render for Selector {
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.open_existing(window, cx)),
                             ),
-                        ),
+                        )
+                        .when(self.files.is_empty(), |d| {
+                            d.child(
+                                action(
+                                    "create-demo",
+                                    "Create Demo",
+                                    "Create a demo company to try out Latte Books",
+                                )
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.create_demo(window, cx)),
+                                ),
+                            )
+                        }),
                 )
-                .child(
-                    div()
+                .child(match &self.creating_demo {
+                    // `Loading`.
+                    Some((message, percent)) => div()
+                        .id("files")
+                        .v_flex()
+                        .p_4()
+                        .gap_2()
+                        .flex_1()
+                        .child(div().text_sm().child(t(message)))
+                        .child(
+                            div()
+                                .h(px(6.))
+                                .w_full()
+                                .rounded_full()
+                                .bg(theme.muted)
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_full()
+                                        .bg(theme.primary)
+                                        .w(relative(percent.clamp(0.0, 1.0) as f32)),
+                                ),
+                        ),
+                    None => div()
                         .id("files")
                         .v_flex()
                         .p_2()
                         .flex_1()
                         .overflow_y_scroll()
                         .children(rows),
-                )
+                })
                 .child(
                     div()
                         .h_flex()
-                        .justify_end()
+                        .justify_between()
                         .p_2()
                         .border_t_1()
                         .border_color(theme.border)
-                        .child(div().w(px(200.)).child(self.language.clone())),
+                        .child(div().w(px(200.)).child(self.language.clone()))
+                        .when(!self.files.is_empty(), |d| {
+                            let label = if self.creating_demo.is_some() {
+                                "Please Wait"
+                            } else {
+                                "Create Demo"
+                            };
+                            d.child(
+                                Button::new("create-demo")
+                                    .small()
+                                    .label(t(label))
+                                    .disabled(self.creating_demo.is_some())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.create_demo(window, cx)
+                                    })),
+                            )
+                        }),
                 ),
         )
     }
+}
+
+/// Where the demo company is offered to be saved: `Documents\Latte Books`.
+fn demo_dir() -> PathBuf {
+    let dir = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|home| PathBuf::from(home).join("Documents").join("Latte Books"))
+        .unwrap_or_default();
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }

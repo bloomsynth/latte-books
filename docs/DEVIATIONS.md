@@ -91,6 +91,10 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | POS not ported yet | The Modern UI, item groups, keyboard shortcuts, returns, coupons, loyalty points, price lists, and editing a row's rate or discount at the till | Not ported yet | The Modern UI, and returns, coupons and loyalty at the till, come after 1.0 |
 | Get Started cards | A picture on each card | The card's name and text, with a check once done | Latte has no pictures for them yet |
 | Get Started "Create Purchase Invoice" | Ticked once there is a sales invoice | Ticked once there is a purchase invoice | Books bug |
+| Create Demo progress | A full-window loader | A message and bar in the company list | Simpler in GPUI |
+| Create Demo fiscal year | 1 April to 1 April | 1 April to 31 March | Books bug |
+| Create Demo items | An invoice can list an item twice | Each item once | Books bug |
+| Create Demo write-offs | None (it sets a field Payment doesn't have) | One sale in twenty paid with 15% written off | Books bug |
 | Amounts in messages | "Total Debit: ₹ 1,250.00 …", in the locale's format with the currency symbol | "Total Debit: 1250.00 …" | Number formatting isn't ported yet |
 | Changes from another device | Shown when a page is opened again | Every two seconds the app looks for changes another device, such as an AI assistant, wrote, and shows the page again; a form shows them only when they are to its document and it has no changes of its own; the till, Settings and the import wizard aren't shown again | Dime (PLAN.md): an assistant works in the file while the app is open |
 | AI assistants | — | "Set up AI assistants" connects Claude Desktop, Claude Code, Codex or Cursor, which work in the books through `latte-mcp` with the same checks as the app | Dime (PLAN.md); Books doesn't touch the assistants' files |

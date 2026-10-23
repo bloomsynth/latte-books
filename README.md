@@ -1,121 +1,147 @@
-<img src="crates/latte-app/icons/icon.png" alt="Latte Books icon: a brown mug shaped like a book, with steam, on a caramel tile" width="96">
+<p align="center">
+  <img src="docs/images/banner.png" alt="Latte Books: a latte with leaf foam art beside an open ledger with a rising bar chart, coins and a pencil, next to the app's icon" width="100%">
+</p>
 
-# Latte Books
+<p align="center">
+  <strong>Free, open-source desktop accounting. A native Rust port of Frappe Books.</strong>
+</p>
 
-**A fast, native desktop accounting app for Frappe Books users.**
+<p align="center">
+  <a href="https://github.com/bloomsynth/latte-books/actions/workflows/ci.yml"><img src="https://github.com/bloomsynth/latte-books/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License: AGPL-3.0"></a>
+  <img src="https://img.shields.io/badge/built_with-Rust_%2B_GPUI-B7410E" alt="Built with Rust and GPUI">
+  <img src="https://img.shields.io/badge/platforms-Windows_%7C_macOS_%7C_Linux-555" alt="Windows, macOS and Linux">
+  <a href="docs/BOOKS-BUGS.md"><img src="https://img.shields.io/badge/Frappe_Books_bugs_fixed-64-D18738" alt="64 Frappe Books bugs fixed"></a>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#coming-from-frappe-books">Coming from Frappe Books</a> ·
+  <a href="#getting-started">Getting started</a> ·
+  <a href="#ai-assistants">AI assistants</a> ·
+  <a href="#status">Status</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+---
 
 Frappe has retired the Frappe Books desktop app
-([frappe/books#1566](https://github.com/frappe/books/issues/1566)) and replaced it with a new
-Frappe Books built on the Frappe Framework, used from a browser. Latte Books keeps the desktop
-app alive: it is a Rust port of Frappe Books v0.36.0 that works on your own computer, with
-your company in a single file.
+([frappe/books#1566](https://github.com/frappe/books/issues/1566)) in favour of a new
+Frappe Books on the Frappe Framework, used from a browser. **Latte Books keeps the desktop
+app alive.** It is a port of Frappe Books v0.36.0 to Rust that runs on your own computer,
+keeps your company in a single file, and opens the files Frappe Books already made.
 
-> **Status: early development. Not usable yet.** Latte can read and write Frappe Books files,
-> and the accounting engine is under way: journal entries, sales and purchase invoices and
-> payments against them post to the ledger, and what each party owes is kept up to date.
-> There is no
-> app to use yet. Follow along in [docs/PLAN.md](docs/PLAN.md).
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="The Latte Books dashboard for the demo company Flo's Clothes: a year of cashflow bars, paid sales and purchase invoices, monthly profit and loss, and top expenses" width="100%">
+</p>
 
-Latte Books is **not affiliated with Frappe Technologies**. It is built on their work; see
-[NOTICE](NOTICE).
+## Features
 
-## What it will do
-
-- **Open your existing Frappe Books file.** Point it at your `.books.db` and carry on. No
-  export, no import.
-- **Give the same numbers.** The same documents, fields, reports and rules as Frappe Books
-  v0.36.0. Every ledger entry and report is checked against Frappe Books itself.
+- **Your Frappe Books file, as it is.** Open your `.books.db` and carry on. No export, no
+  import, and Frappe Books can still open it afterwards.
+- **The same numbers.** The same documents, fields, rules and reports as Frappe Books
+  v0.36.0, with the ledger and reports checked against Frappe Books itself.
 - **Without Frappe Books' bugs.** Where Frappe Books gets something wrong, Latte fixes it
-  rather than copying it. So far that's 61 bugs, from write-offs posted the wrong way
-  round to payments that can't be cancelled; see [docs/BOOKS-BUGS.md](docs/BOOKS-BUGS.md).
-- **Speak your language.** All 18 of Frappe Books' community translations, kept as they are.
-- **Feel native and fast.** Written in Rust with [GPUI](https://www.gpui.rs/), the UI framework
-  behind the Zed editor. No Electron, no browser engine.
-- **Stay free and open source** under the AGPL-3.0, like Frappe Books.
+  instead of copying it: 64 so far, from write-offs posted the wrong way round to payments
+  that can't be cancelled. Each is listed in [docs/BOOKS-BUGS.md](docs/BOOKS-BUGS.md) with
+  the test that keeps it fixed.
+- **Everything Frappe Books does.** Sales and purchases, quotes, payments, journal entries,
+  returns, inventory with shipments and receipts, point of sale, pricing rules, coupons and
+  loyalty points, data import, custom fields, the dashboard, and reports from the General
+  Ledger to the Balance Sheet.
+- **India GST and Switzerland** country modules, with GSTR-1 and GSTR-2 reports.
+- **Printing to PDF** with Frappe Books' templates and colours, rendered by
+  [Typst](https://typst.app/).
+- **18 languages,** Frappe Books' community translations, kept as they are.
+- **Native and fast.** Written in Rust with [GPUI](https://www.gpui.rs/), the UI framework
+  behind the Zed editor. No Electron and no browser engine: the window is up in about half
+  a second.
+- **AI assistants, if you want them.** Claude, Codex or Cursor can look things up and
+  draft documents in your books, with the same checks as the app.
+- **Free and open source** under the AGPL-3.0, like Frappe Books.
 
-Changes from Frappe Books are kept to a minimum, and every one is listed in
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/invoice.png" alt="A sales invoice for four clothing items with GST, marked Paid"></td>
+    <td width="50%"><img src="docs/images/print.png" alt="The same invoice's print preview in the Business template, with the company logo and a pink grand total"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>A sales invoice</sub></td>
+    <td align="center"><sub>Its printout, ready to save as PDF</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/list.png" alt="The Sales Invoices list: invoice numbers, Paid status, customers, dates and totals"></td>
+    <td width="50%"><img src="docs/images/report.png" alt="The Trial Balance report, grouped by asset, liability, income and expense accounts"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Sales invoices</sub></td>
+    <td align="center"><sub>The Trial Balance</sub></td>
+  </tr>
+</table>
+
+<sub>Screenshots show **Create Demo**'s made-up company, Flo's Clothes, as in Frappe Books.</sub>
+
+## Coming from Frappe Books
+
+- **Your company files open as they are.** Latte reads and writes the same SQLite file, and
+  adds only a `latte_changes` table that Frappe Books ignores.
+- **Try it on a copy first.** Latte is in beta; keep a backup of your company file.
+- **Files from Frappe Books v0.36.0.** A file last opened by an older Frappe Books needs
+  opening once in v0.36.0 first, as Latte doesn't bring older files up to date yet.
+- **Not ported:** ERPNext sync, and right-to-left layout for Arabic and Persian (GPUI has no
+  right-to-left support yet).
+
+Every difference from Frappe Books, small or large, is listed in
 [docs/DEVIATIONS.md](docs/DEVIATIONS.md).
 
-## Where it stands
+## Getting started
 
-| Phase | What | Status |
-|---|---|---|
-| 0 | Foundations, and prototypes to test GPUI | **Done** |
-| 1 | Data layer: read and write `.books.db` files | **Done** |
-| 2 | Accounting engine and reports, checked against Frappe Books | **Done** |
-| 3 | Desktop app: invoices, payments, reports, printing. **Public beta.** | Built; being tested |
-| 4 | Everything else in Frappe Books v0.36.0: inventory, GST, POS and more. **1.0.** | Mostly built; being tested |
-
-What the Phase 0 prototypes showed:
-
-- **Startup:** the first window appears in about half a second
-  ([results](spikes/gpui-startup/RESULTS.md)).
-- **Invoice item grid:** typing, Tab between cells, item autocomplete and live totals. Every
-  edit reaches the screen within one frame, even with 2,000 rows
-  ([results](spikes/invoice-grid/RESULTS.md)).
-- **Hindi, Gujarati, Chinese and Korean:** text renders correctly and input methods work. There
-  are two known issues with Hindi and Gujarati, listed below
-  ([results](spikes/indic-cjk-text/RESULTS.md)).
-
-## Known issues
-
-- **Arabic and Persian** are shown left to right. GPUI doesn't support right-to-left layout yet.
-- **Hindi and Gujarati:** text that wraps onto several lines can break in the middle of a word,
-  and in text fields the arrow keys can stop inside a conjunct. Both come from GPUI and
-  gpui-kit, and will be reported there.
-- **A GPU is required.** Running in a virtual machine or over Remote Desktop is untested.
-
-## Building
-
-You need [Rust](https://rustup.rs/) (stable).
+There are no installers to download yet. To build Latte Books you need
+[rustup](https://rustup.rs/), which fetches the Rust version pinned in
+`rust-toolchain.toml`, and a GPU.
 
 ```sh
-cargo build
-cargo test
-```
-
-To run the app:
-
-```sh
+git clone https://github.com/bloomsynth/latte-books
+cd latte-books
 cargo run -p latte-app
 ```
 
-It isn't ready for real books yet: try it on a copy of your company file.
+Then choose **New Company**, open an existing `.books.db` with **Existing Company**, or
+choose **Create Demo** to look around a company with a year of made-up sales, purchases and
+payments.
 
-To see the data layer read a company file (it opens the file read-only):
+<details>
+<summary><strong>More to build and run</strong></summary>
+
+Run the tests:
+
+```sh
+cargo test --workspace
+```
+
+Read a company file from the command line (it is opened read-only):
 
 ```sh
 cargo run -p latte-db --example dump -- "path/to/company.books.db"
+cargo run -p latte-core --example report_test -- "path/to/company.books.db" trial-balance
 ```
 
-To print a report of a company file, also read-only, or to set up a new company as
-Frappe Books' setup wizard does:
+Set up a new company as the setup wizard does (the name must contain "test"):
 
 ```sh
-cargo run -p latte-core --example report_test -- "path/to/company.books.db" trial-balance
 cargo run -p latte-core --example setup_test -- "path/to/new test.books.db" India "Acme" "Acme Bank"
 ```
 
-To make installers (not signed yet) with
-[cargo-packager](https://github.com/crabnebula-dev/cargo-packager), on each OS:
+Make installers with [cargo-packager](https://github.com/crabnebula-dev/cargo-packager)
+(not signed yet). They land in `target/packages`, and pushing a `v*` tag builds them on
+GitHub for a draft release:
 
 ```sh
 cargo install cargo-packager --locked
 cargo packager --release -p latte-app
 ```
 
-They land in `target/packages`. Pushing a `v*` tag builds them on GitHub and attaches them to a
-draft release.
-
-### AI assistants
-
-**Set up AI assistants** in the app's sidebar connects Claude Desktop, Claude Code, Codex
-or Cursor to your books. The assistant runs `latte-mcp`, which is built beside the app and
-works in the company you opened last (or the one chosen on that screen). It can look up
-documents, run reports, and save, submit and cancel documents, with the same checks as the
-app. To try it from a build, `cargo build` first so `latte-mcp` is next to `latte-books`.
-
-To try the prototypes:
+Try the Phase 0 prototypes:
 
 ```sh
 cd spikes
@@ -123,7 +149,48 @@ cargo run --release -p invoice-grid
 cargo run --release -p indic-cjk-text
 ```
 
-### Layout
+</details>
+
+## AI assistants
+
+**Dime**, Latte's AI layer, lets an assistant work in your books: ask what a customer owes,
+run a report, or have it draft an invoice. **Set up AI assistants**, under Setup in the
+sidebar, connects Claude Desktop, Claude Code, Codex or Cursor in one click.
+
+- The assistant runs `latte-mcp`, an [MCP](https://modelcontextprotocol.io/) server built
+  beside the app, in the company you opened last or the one you choose on that page.
+- It goes through the same rules as the app: what you can't save in Latte, it can't
+  either.
+- New documents are saved as drafts. It shows you a draft and asks before submitting it.
+- What it changes shows up in the open app within a couple of seconds.
+
+To try it from a build, run `cargo build` first so `latte-mcp` sits next to `latte-books`.
+
+## Status
+
+**Beta.** The app is built and in use, but not every screen has been checked against Frappe
+Books by hand yet, and some of the interface still needs polish.
+
+| Phase | What | Status |
+|---|---|---|
+| 0 | Foundations, and prototypes to test GPUI | Done |
+| 1 | Data layer: read and write `.books.db` files | Done |
+| 2 | Accounting engine and reports, checked against Frappe Books | Done |
+| 3 | Desktop app: invoices, payments, reports, printing. **Public beta** | Built; in testing |
+| 4 | Everything else in Frappe Books v0.36.0: inventory, GST, POS and more. **1.0** | Built; in testing |
+
+The full plan, with what is next, is in [docs/PLAN.md](docs/PLAN.md).
+
+### Known issues
+
+- **Arabic and Persian** are shown left to right.
+- **Hindi and Gujarati:** wrapped text can break inside a word, and the arrow keys can stop
+  inside a conjunct in text fields. Both come from GPUI and gpui-kit.
+- **Exchange rates** aren't fetched: an invoice in another currency has a rate of 1 until
+  you set one.
+- **A GPU is required.** Virtual machines and Remote Desktop are untested.
+
+## Project layout
 
 | Path | What it holds |
 |---|---|
@@ -134,21 +201,24 @@ cargo run --release -p indic-cjk-text
 | `crates/latte-print` | PDF printing with Typst |
 | `crates/latte-regional` | Country modules (India GST, Switzerland) |
 | `crates/latte-ui` | GPUI screens |
-| `crates/latte-app` | The `latte-books` executable, and its installer settings |
-| `crates/latte-mcp` | Dime: the `latte-mcp` executable AI assistants run, and their setup |
+| `crates/latte-app` | The `latte-books` executable, its icon and installer settings |
+| `crates/latte-mcp` | Dime: the `latte-mcp` server AI assistants run, and their setup |
 | `vendor/books` | Files copied unchanged from Frappe Books v0.36.0 |
 | `spikes` | Phase 0 prototypes and their results |
-| `docs` | The plan and the list of deviations from Frappe Books |
+| `docs` | The plan, the deviations from Frappe Books and the Frappe Books bugs Latte fixes |
 
-## Feedback
+## Contributing
 
-Frappe Books users are especially welcome. If you rely on the desktop app, open an
-[issue](https://github.com/bloomsynth/latte-books/issues) and say what you use it for, which
-country and language, and what you'd miss most. That shapes what gets built first.
+Frappe Books users are especially welcome. If you rely on the desktop app,
+[open an issue](https://github.com/bloomsynth/latte-books/issues/new/choose) and say what you
+use it for, your country and language, and what you'd miss most: that decides what gets
+built and checked first. Bug reports, checks against Frappe Books and pull requests are all
+welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-AGPL-3.0, the same as Frappe Books. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+[AGPL-3.0](LICENSE), the same as Frappe Books. See [NOTICE](NOTICE).
 
 Latte Books is built on Frappe Books by Frappe Technologies and its contributors, including
-the volunteers who translated it into 18 languages.
+the volunteers who translated it into 18 languages. It is **not affiliated with Frappe
+Technologies**.

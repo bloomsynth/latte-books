@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Frappe Books bugs Latte fixes
+    url: https://github.com/bloomsynth/latte-books/blob/main/docs/BOOKS-BUGS.md
+    about: Check whether a Frappe Books bug you hit is already fixed in Latte.

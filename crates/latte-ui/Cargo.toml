@@ -14,5 +14,6 @@ latte-print.workspace = true
 gpui-kit.workspace = true
 latte-db.workspace = true
 latte-schema.workspace = true
+fastrand.workspace = true
 jiff.workspace = true
 serde_json.workspace = true

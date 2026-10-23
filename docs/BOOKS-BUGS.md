@@ -595,6 +595,36 @@ what Books already saved is left as it is.
 - **How we know:** from the code.
 - **Test:** `a_purchase_invoice_marks_its_card_done_and_a_sales_invoice_doesnt`.
 
+## Create Demo
+
+### The demo company's fiscal year ends on 1 April
+
+- **In Books:** Create Demo gives the fiscal year's end as `04-01`, the same as its start,
+  so the year runs from 1 April to 1 April the next year.
+- **What it does to your books:** the demo company's year is a day long, and reports for
+  the year take in the first day of the next one.
+- **In Latte:** the year ends on 31 March, as the setup wizard sets it for India.
+- **How we know:** from the code.
+- **Test:** `the_demo_company_has_a_year_of_balanced_books`.
+
+### A demo invoice can have the same item twice
+
+- **In Books:** Create Demo means to skip an item already on the invoice, but compares the
+  row's item name with the item itself, so it never finds one.
+- **What it does to your books:** some demo invoices list one item on two rows.
+- **In Latte:** an item already on the invoice is skipped.
+- **How we know:** from the code.
+- **Test:** `the_demo_company_has_a_year_of_balanced_books`.
+
+### Demo payments are never written off
+
+- **In Books:** one sale in twenty is meant to be paid with 15% written off, but Create
+  Demo sets `writeOff`, which isn't a Payment field (it's `writeoff`).
+- **What it does to your books:** the demo company has no write-offs to look at.
+- **In Latte:** those payments write off 15%.
+- **How we know:** from the code.
+- **Test:** `the_demo_company_has_a_year_of_balanced_books`.
+
 ## Printing
 
 ### A payment that isn't for a Sales Invoice doesn't print

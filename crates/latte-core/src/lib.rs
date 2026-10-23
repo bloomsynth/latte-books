@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod dashboard;
+pub mod dummy;
 pub mod fyo;
 pub mod importer;
 pub mod models;

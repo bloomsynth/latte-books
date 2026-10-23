@@ -1,0 +1,47 @@
+name: Bug report
+description: Something in Latte Books doesn't work, or gives a different result from Frappe Books.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Please don't attach your real company file**: it holds your customers, suppliers and accounts. If a file helps, reproduce the problem in a company made with Create Demo or New Company.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Sales Invoices
+        2. …
+  - type: dropdown
+    id: books
+    attributes:
+      label: Does Frappe Books v0.36.0 do the same?
+      options:
+        - I haven't checked
+        - "Yes, Frappe Books does the same"
+        - "No, Frappe Books gets it right"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11, macOS 15, Ubuntu 24.04…
+    validations:
+      required: true
+  - type: input
+    id: country
+    attributes:
+      label: Company country and app language
+      placeholder: India, English
+  - type: input
+    id: version
+    attributes:
+      label: Latte Books version or commit
+      description: Shown at the bottom of the sidebar.

@@ -4095,6 +4095,7 @@ dependencies = [
 name = "latte-core"
 version = "0.1.0"
 dependencies = [
+ "fastrand",
  "indexmap",
  "jiff",
  "latte-db",
@@ -4173,6 +4174,7 @@ dependencies = [
 name = "latte-ui"
 version = "0.1.0"
 dependencies = [
+ "fastrand",
  "gpui-kit",
  "jiff",
  "latte-core",

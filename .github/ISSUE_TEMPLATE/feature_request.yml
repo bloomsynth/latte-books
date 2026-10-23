@@ -1,0 +1,24 @@
+name: Feature request
+description: Something you'd like Latte Books to do, or something you miss from Frappe Books.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like?
+      description: What you're trying to do, and how it would help.
+    validations:
+      required: true
+  - type: dropdown
+    id: books
+    attributes:
+      label: Is it in Frappe Books?
+      options:
+        - "Yes, Frappe Books v0.36.0 does this"
+        - "No, it's new"
+        - I'm not sure
+  - type: input
+    id: country
+    attributes:
+      label: Your country and language
+      placeholder: India, English

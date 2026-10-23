@@ -317,6 +317,8 @@ CI runs the parity suite on every PR. Any difference fails the build.
 - The Get Started page. *2026-10-23: `latte_core::views::get_started` and the page; the
   desk opens on it until every card is done or it is hidden. One Books bug is fixed. Not
   yet checked against Books by hand.*
+- Create Demo. *2026-10-23: `latte_core::dummy` with Books' items, parties and logo, and
+  the button in the company list. Three Books bugs are fixed.*
 - GST: check one GSTR-1 JSON export, B2B rows included, with the GST portal's offline
   tool before 1.0.
 - **Exit: 1.0.** Parity suite is green for everything Books v0.36.0 does, except the non-goals in §1.
