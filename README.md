@@ -3,10 +3,6 @@
 </p>
 
 <p align="center">
-  <strong>Free, open-source desktop accounting. A native Rust port of Frappe Books.</strong>
-</p>
-
-<p align="center">
   <a href="https://github.com/bloomsynth/latte-books/actions/workflows/ci.yml"><img src="https://github.com/bloomsynth/latte-books/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License: AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/built_with-Rust_%2B_GPUI-B7410E" alt="Built with Rust and GPUI">
