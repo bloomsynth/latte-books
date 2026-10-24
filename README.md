@@ -186,6 +186,14 @@ The full plan, with what is next, is in [docs/PLAN.md](docs/PLAN.md).
   you set one.
 - **A GPU is required.** Virtual machines and Remote Desktop are untested.
 
+## Privacy
+
+Latte Books doesn't send your data anywhere. It has no accounts, telemetry, analytics or
+update checks, and your company stays in its file on your computer. It reaches the network
+only when you ask it to: opening a help link in your browser, or, if you set one up, an AI
+assistant you connected through Dime, which then works under that assistant's own privacy
+policy.
+
 ## Project layout
 
 | Path | What it holds |
