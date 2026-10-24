@@ -119,7 +119,18 @@ jobs:
           awk -v v="$version" '
             /^## / { if (found) exit; if (index($0, "[" v "]")) { found = 1; next } }
             found
-          ' CHANGELOG.md > notes.md
+          ' CHANGELOG.md > section.md
+          # GitHub shows each line break in release notes, so join the changelog's
+          # wrapped lines back into their paragraphs and list items.
+          awk '
+            /^$/ || /^#/ || /^[-*] / || /^[0-9]+\. / || /^```/ || /^\|/ {
+              if (line != "") print line; line = ""
+              if (/^$/ || /^#/ || /^```/ || /^\|/) { print; next }
+              line = $0; next
+            }
+            { sub(/^ +/, ""); line = (line == "") ? $0 : line " " $0 }
+            END { if (line != "") print line }
+          ' section.md > notes.md
           if [ ! -s notes.md ]; then
             echo "::error::CHANGELOG.md has no section for $version"
             exit 1
