@@ -209,7 +209,12 @@ Frappe Books users are especially welcome. If you rely on the desktop app,
 [open an issue](https://github.com/bloomsynth/latte-books/issues/new/choose) and say what you
 use it for, your country and language, and what you'd miss most: that decides what gets
 built and checked first. Bug reports, checks against Frappe Books and pull requests are all
-welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[code of conduct](CODE_OF_CONDUCT.md). Please report security problems privately, as
+[SECURITY.md](SECURITY.md) describes.
+
+If you'd like the Frappe Books desktop app to live on, **star the repository**: it helps
+other Frappe Books users find Latte.
 
 ## License
 

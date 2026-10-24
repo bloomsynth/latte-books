@@ -3,3 +3,6 @@ contact_links:
   - name: Frappe Books bugs Latte fixes
     url: https://github.com/bloomsynth/latte-books/blob/main/docs/BOOKS-BUGS.md
     about: Check whether a Frappe Books bug you hit is already fixed in Latte.
+  - name: Report a security problem
+    url: https://github.com/bloomsynth/latte-books/security/advisories/new
+    about: Please report security problems privately, not in a public issue.

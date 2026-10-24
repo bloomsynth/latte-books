@@ -11,6 +11,9 @@ Books and pull requests are all welcome.
 - your OS, and your company's country and language;
 - whether Frappe Books v0.36.0 does the same with the same file, if you can check.
 
+Security problems are the exception: report them privately, as [SECURITY.md](SECURITY.md)
+describes. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
+
 **Never attach your real company file.** It holds your customers, suppliers and accounts.
 If a file helps, make one with **Create Demo** or **New Company** and reproduce the problem
 there.
