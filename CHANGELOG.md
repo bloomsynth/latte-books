@@ -3,7 +3,7 @@
 What changes in each release of Latte Books. A release's notes on GitHub are its section
 here.
 
-## [0.1.0-beta.1] - Unreleased
+## [0.1.0-beta.1] - 2026-10-24
 
 The first beta: Frappe Books v0.36.0, ported to Rust as a native desktop app.
 
