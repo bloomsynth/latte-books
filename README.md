@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="#download">Download</a> ·
   <a href="#features">Features</a> ·
   <a href="#coming-from-frappe-books">Coming from Frappe Books</a> ·
   <a href="#getting-started">Getting started</a> ·
@@ -30,6 +31,24 @@ keeps your company in a single file, and opens the files Frappe Books already ma
 <p align="center">
   <img src="docs/images/dashboard.png" alt="The Latte Books dashboard for the demo company Flo's Clothes: a year of cashflow bars, paid sales and purchase invoices, monthly profit and loss, and top expenses" width="100%">
 </p>
+
+## Download
+
+<p align="center">
+  <a href="https://github.com/bloomsynth/latte-books/releases/latest/download/Latte-Books-Windows-x64-Setup.exe"><img src="https://img.shields.io/badge/Download_for-Windows-0078D4?style=for-the-badge&logo=windows11&logoColor=white" alt="Download for Windows" height="40"></a>
+  <a href="https://github.com/bloomsynth/latte-books/releases/latest/download/Latte-Books-macOS-arm64.dmg"><img src="https://img.shields.io/badge/Download_for-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" height="40"></a>
+  <a href="https://github.com/bloomsynth/latte-books/releases/latest/download/Latte-Books-Linux-x86_64.AppImage"><img src="https://img.shields.io/badge/Download_for-Linux-E95420?style=for-the-badge&logo=linux&logoColor=white" alt="Download for Linux" height="40"></a>
+</p>
+
+<p align="center">
+  <sub>Windows 10 or 11 (x64) · macOS on Apple silicon · Linux x86_64 as an AppImage or a
+  <a href="https://github.com/bloomsynth/latte-books/releases/latest/download/Latte-Books-Linux-amd64.deb">.deb</a>.
+  Every version is on the <a href="https://github.com/bloomsynth/latte-books/releases">releases page</a>.</sub>
+</p>
+
+The installers aren't signed yet, so Windows and macOS warn you the first time; the
+[release notes](https://github.com/bloomsynth/latte-books/releases/latest) say how to get
+past it.
 
 ## Features
 
@@ -92,13 +111,7 @@ Every difference from Frappe Books, small or large, is listed in
 
 ## Getting started
 
-Download the installer for your system from the
-[latest release](https://github.com/bloomsynth/latte-books/releases): `.exe` for Windows,
-`.dmg` for Macs with Apple silicon, and `.deb` or `.AppImage` for Linux. The installers
-aren't signed yet, so Windows and macOS warn you the first time; the release notes say how
-to get past it.
-
-To build it yourself instead you need [rustup](https://rustup.rs/), which fetches the Rust
+Install Latte Books from [Download](#download). To build it yourself instead you need [rustup](https://rustup.rs/), which fetches the Rust
 version pinned in `rust-toolchain.toml`, and a GPU.
 
 ```sh
@@ -177,7 +190,7 @@ Books by hand yet, and some of the interface still needs polish.
 | 0 | Foundations, and prototypes to test GPUI | Done |
 | 1 | Data layer: read and write `.books.db` files | Done |
 | 2 | Accounting engine and reports, checked against Frappe Books | Done |
-| 3 | Desktop app: invoices, payments, reports, printing. **Public beta** | Built; in testing |
+| 3 | Desktop app: invoices, payments, reports, printing. **Public beta** | Released as 0.1.0-beta.1; in testing |
 | 4 | Everything else in Frappe Books v0.36.0: inventory, GST, POS and more. **1.0** | Built; in testing |
 
 The full plan, with what is next, is in [docs/PLAN.md](docs/PLAN.md).

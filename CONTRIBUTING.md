@@ -78,7 +78,8 @@ For maintainers. `.github/workflows/release.yml` does the building.
 4. Commit, then tag and push: `git tag v0.1.0-beta.2 && git push origin v0.1.0-beta.2`. The
    tag must match `Cargo.toml`, or the workflow stops.
 5. The workflow makes a **draft** release with the installers, `SHA256SUMS.txt` and build
-   attestations. A version with a `-` in it is marked as a pre-release. Download an
+   attestations. It's never marked as a pre-release, even for a beta, since the README's
+   download buttons link to the latest release, which skips pre-releases. Download an
    installer, try it, then publish the draft.
 
 By contributing you agree that your work is licensed under the

@@ -140,6 +140,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Never a pre-release, even for a beta: releases/latest, which the README's
+          # download buttons link to, skips pre-releases.
+          prerelease: false
+          make_latest: true
           body_path: notes.md
           files: dist/*

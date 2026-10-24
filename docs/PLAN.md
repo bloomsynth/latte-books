@@ -396,11 +396,13 @@ for Tally).
   installs for the current user. Not yet run.*
   *2026-10-24: ready for the first beta, `0.1.0-beta.1`. The workflow checks the tag
   against `Cargo.toml`, takes the notes from `CHANGELOG.md`, adds `SHA256SUMS.txt` and
-  build attestations, and marks a version with a `-` as a pre-release; run by hand, it
-  builds without releasing. Both `.exe` files carry a version resource (product name
-  "Latte Books"), which SignPath requires. The macOS build is Apple silicon only.
-  Windows signing: apply to SignPath Foundation once the beta is out, since it only signs
-  projects that are already released.*
+  build attestations, and names the installers the same in every release for the
+  README's download buttons. It never marks a release as a pre-release, since
+  `releases/latest` skips those. Run by hand, it builds without releasing. Both `.exe`
+  files carry a version resource (product name "Latte Books"), which SignPath requires.
+  The macOS build is Apple silicon only.*
+  *2026-10-24: `0.1.0-beta.1` released. Next, Windows signing: apply to SignPath
+  Foundation, which only signs projects that are already released.*
 - Windows: Azure Trusted Signing (or an OV certificate). macOS: Developer ID + notarization.
 - Flathub manifest and Homebrew cask, maintained in their own repos.
 - Website: `latte.bloomsynth.com` (subdomain, no new domain). Pages include "Coming from
