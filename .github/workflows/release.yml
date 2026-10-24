@@ -1,23 +1,44 @@
-# Builds the installers when a version tag is pushed, and attaches them to a draft release.
-# The installers aren't signed yet (docs/PLAN.md §6).
+# Builds the installers when a version tag is pushed, and attaches them to a draft release
+# with checksums and the tag's notes from CHANGELOG.md. Run it by hand (Actions → Release →
+# Run workflow) to build the installers without releasing; they're kept as the run's
+# artifacts. The installers aren't signed yet (docs/PLAN.md §6).
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
-permissions:
-  contents: write
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   package:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-22.04]
+        include:
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos
+          # The oldest Ubuntu runner, so the .deb and AppImage run on older glibc too.
+          - os: ubuntu-22.04
+            name: linux
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      # A tag must match the version in Cargo.toml, which the app shows in its sidebar.
+      - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match Cargo.toml's version $version"
+            exit 1
+          fi
 
       # GPUI's build needs these on Linux.
       - name: Install Linux libraries
@@ -28,17 +49,81 @@ jobs:
             libfontconfig-dev libasound2-dev libssl-dev libzstd-dev
 
       # rust-toolchain.toml picks the toolchain.
+      - uses: Swatinem/rust-cache@v2
+
       - name: Install cargo-packager
         run: cargo install cargo-packager --locked
 
       - name: Make installers
+        # The AppImage tools need FUSE, which runners don't have.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
         run: cargo packager --release -p latte-app
 
-      - uses: softprops/action-gh-release@v2
+      # Windows signing through SignPath goes here once the project is approved.
+
+      - uses: actions/upload-artifact@v4
         with:
-          draft: true
-          files: |
+          name: ${{ matrix.name }}
+          if-no-files-found: error
+          path: |
             target/packages/*.exe
             target/packages/*.dmg
             target/packages/*.deb
             target/packages/*.AppImage
+
+  release:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The same names in every release, so the README's download buttons can link to
+      # releases/latest/download/<name>. The version is in the release's title.
+      - name: Name the installers and write checksums
+        working-directory: dist
+        run: |
+          ls -l
+          mv *.exe Latte-Books-Windows-x64-Setup.exe
+          mv *.dmg Latte-Books-macOS-arm64.dmg
+          mv *.deb Latte-Books-Linux-amd64.deb
+          mv *.AppImage Latte-Books-Linux-x86_64.AppImage
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Lets anyone check an installer was built here from this commit:
+      # gh attestation verify <file> --repo bloomsynth/latte-books
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+
+      # The notes are this version's section of CHANGELOG.md.
+      - name: Write the release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            /^## / { if (found) exit; if (index($0, "[" v "]")) { found = 1; next } }
+            found
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body_path: notes.md
+          files: dist/*

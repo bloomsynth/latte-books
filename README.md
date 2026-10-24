@@ -92,9 +92,14 @@ Every difference from Frappe Books, small or large, is listed in
 
 ## Getting started
 
-There are no installers to download yet. To build Latte Books you need
-[rustup](https://rustup.rs/), which fetches the Rust version pinned in
-`rust-toolchain.toml`, and a GPU.
+Download the installer for your system from the
+[latest release](https://github.com/bloomsynth/latte-books/releases): `.exe` for Windows,
+`.dmg` for Macs with Apple silicon, and `.deb` or `.AppImage` for Linux. The installers
+aren't signed yet, so Windows and macOS warn you the first time; the release notes say how
+to get past it.
+
+To build it yourself instead you need [rustup](https://rustup.rs/), which fetches the Rust
+version pinned in `rust-toolchain.toml`, and a GPU.
 
 ```sh
 git clone https://github.com/bloomsynth/latte-books
@@ -129,8 +134,8 @@ cargo run -p latte-core --example setup_test -- "path/to/new test.books.db" Indi
 ```
 
 Make installers with [cargo-packager](https://github.com/crabnebula-dev/cargo-packager)
-(not signed yet). They land in `target/packages`, and pushing a `v*` tag builds them on
-GitHub for a draft release:
+(not signed yet). They land in `target/packages`; how a release is made on GitHub is in
+[CONTRIBUTING.md](CONTRIBUTING.md#making-a-release):
 
 ```sh
 cargo install cargo-packager --locked

@@ -55,8 +55,31 @@ mistake; keep that rule in any you add.
 
 - Keep one change per pull request, with a message that says what it does for someone using
   the app.
+- Write commit messages, and pull request titles, as
+  [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`,
+  for example `fix(payments): let a payment with a write-off be cancelled`. The types are
+  `feat`, `fix`, `docs`, `perf`, `refactor`, `test`, `build`, `ci` and `chore`; the scope
+  is optional, and is usually a crate or an area of the app. A change that breaks
+  existing company files or behaviour gets a `!` after the type, `feat!: …`, and says
+  how in the body.
 - Include tests for new rules and fixed bugs.
 - Files use LF line endings.
+
+## Making a release
+
+For maintainers. `.github/workflows/release.yml` does the building.
+
+1. Set the version in the root `Cargo.toml`, for example `0.1.0-beta.2`. The app shows it
+   in the sidebar, and the installers and `.exe` files carry it.
+2. Give it a section in [CHANGELOG.md](CHANGELOG.md), `## [0.1.0-beta.2] - 2026-11-01`,
+   saying what changed for someone using the app. That section becomes the release notes.
+3. To try the build first, run **Actions → Release → Run workflow**. It makes the
+   installers for each system and keeps them as the run's artifacts, without releasing.
+4. Commit, then tag and push: `git tag v0.1.0-beta.2 && git push origin v0.1.0-beta.2`. The
+   tag must match `Cargo.toml`, or the workflow stops.
+5. The workflow makes a **draft** release with the installers, `SHA256SUMS.txt` and build
+   attestations. A version with a `-` in it is marked as a pre-release. Download an
+   installer, try it, then publish the draft.
 
 By contributing you agree that your work is licensed under the
 [AGPL-3.0](LICENSE), like the rest of Latte Books.

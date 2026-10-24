@@ -4,6 +4,7 @@
 
 ## Checklist
 
+- [ ] The title is a [Conventional Commit](https://www.conventionalcommits.org/), like `fix(payments): …`
 - [ ] `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` pass
 - [ ] New rules and fixed bugs have tests
 - [ ] A difference from Frappe Books v0.36.0 is listed in `docs/DEVIATIONS.md`
