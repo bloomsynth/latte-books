@@ -67,10 +67,6 @@ impl QuickHost for ChartOfAccounts {
         &mut self.quick_panels
     }
 
-    fn quick_toast(&mut self, message: String) {
-        self.info = Some(message);
-    }
-
     /// A deleted or changed account shows in the tree at once (`afterDelete`).
     fn quick_changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         let parents: Vec<Option<String>> = self.children.keys().cloned().collect();
@@ -665,7 +661,7 @@ impl Render for ChartOfAccounts {
                     DialogKind::Warning,
                     vec![
                         DialogButton::new(t("Yes"), true, yes),
-                        DialogButton::new(t("No"), false, no),
+                        DialogButton::new(t("No"), false, no).escape(),
                     ],
                     window,
                 )

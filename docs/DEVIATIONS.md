@@ -59,7 +59,6 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | Search's recent documents | Kept by their schema's label; picking one opens `/list/<label>`, which is no list. A recent item picked again keeps only its label and opens nothing | A recent document opens the document; a recent item picked again keeps what it opens | Books bug |
 | Date controls | The browser's date input, typed in the computer's date format, with the browser's calendar | Typed as YYYY-MM-DD (and HH:MM), with a calendar drawn like Chromium's | No browser engine in a native app |
 | Color control's custom colour | An `<input type="color">` that opens the system's colour picker | A "Custom Hex" box for `#RRGGBB` under the swatches | GPUI has no colour dialog |
-| After Delete | The page gone back to says "X deleted" in a toast | No toast | A form's toasts close with it |
 | Short stock before submitting | An item with exactly enough stock is listed as short, "(0)" | Only items with less stock than their quantity | Books bug |
 | Scanning a barcode into a Stock Movement | Says the item was added, but adds no row (`StockMovement.addItem` only reads the item) | Adds a row, or one more of it | Books bug |
 | Print View | Print opens the system dialog; the "…" menu also has New Template, the template and Duplicate Template | Save as PDF only; the menu has Print Settings | No template editor; print the saved PDF |

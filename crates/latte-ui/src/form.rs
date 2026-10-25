@@ -26,7 +26,6 @@
 //!   (`date_picker.rs`) in place of the browser's date input.
 //! - A Color control's custom colour is typed as `#RRGGBB`; Books opens the system's
 //!   colour picker.
-//! - After Delete the page gone back to shows no "deleted" toast.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -34,8 +33,8 @@ use std::sync::Arc;
 
 use crate::books::{self, Text as _, black, gray, white};
 use crate::widgets::{
-    Button, DialogButton, Kind as DialogKind, check_box, control_frame, dialog, dropdown_item,
-    field_label, mandatory_mark, pill, popover_panel, toast,
+    Button, DialogButton, Kind as DialogKind, Toast, check_box, control_frame, dialog,
+    dropdown_item, field_label, mandatory_mark, pill, popover_panel, show_toast,
 };
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::*;
@@ -182,8 +181,6 @@ pub trait QuickHost: EventEmitter<Navigate> + Sized + 'static {
     fn quick_panels(&mut self) -> &mut QuickPanels;
     /// A panel opened, or saved, closed or deleted its document: show what changed.
     fn quick_changed(&mut self, window: &mut Window, cx: &mut Context<Self>);
-    /// A panel that closed on saving said what it did: the host's toast says it now.
-    fn quick_toast(&mut self, _message: String) {}
 }
 
 /// `openQuickEdit`: shows `request` in a quick edit panel on top of the host's.
@@ -219,9 +216,6 @@ pub fn open_quick<H: QuickHost>(
             QuickEvent::Saved => {
                 if let Some(after) = host.quick_panels().after_save(form) {
                     host.quick_panels().remove(form);
-                    if let Some(message) = form.read(cx).info.clone() {
-                        host.quick_toast(message);
-                    }
                     // Once the host is no longer being updated: `after` may update it.
                     let form = form.clone();
                     window.defer(cx, move |window, cx| after(form, window, cx));
@@ -277,9 +271,6 @@ pub struct FormPage {
     error_title: &'static str,
     /// A value a control couldn't set, shown under it.
     field_errors: HashMap<Key, String>,
-    /// A toast: what worked, or a warning.
-    info: Option<String>,
-    info_kind: DialogKind,
     pending: Option<Pending>,
     /// The action group whose menu is open.
     menu: Option<&'static str>,
@@ -331,10 +322,6 @@ impl QuickHost for FormPage {
         }
         self.refresh(window, cx);
     }
-
-    fn quick_toast(&mut self, message: String) {
-        self.toast(message, DialogKind::Success);
-    }
 }
 
 impl FormPage {
@@ -383,8 +370,6 @@ impl FormPage {
             error: None,
             error_title: "Error",
             field_errors: HashMap::new(),
-            info: None,
-            info_kind: DialogKind::Success,
             pending: None,
             menu: None,
             full_width: false,
@@ -948,18 +933,68 @@ impl FormPage {
                     form_view::add_item(&mut s.fyo, &mut self.doc, &name)
                 };
                 match result {
-                    Ok(()) => self.toast(format!("{name} quantity 1 added."), DialogKind::Success),
-                    Err(e) => self.toast(e.to_string(), DialogKind::Error),
+                    Ok(()) => self.toast(
+                        Toast::new(format!("{name} quantity 1 added."), DialogKind::Success),
+                        window,
+                        cx,
+                    ),
+                    Err(e) => self.toast(Toast::new(e.to_string(), DialogKind::Error), window, cx),
                 }
             }
-            Err(message) => self.toast(message, DialogKind::Error),
+            Err(message) => self.toast(Toast::new(message, DialogKind::Error), window, cx),
         }
         self.refresh(window, cx);
     }
 
-    fn toast(&mut self, message: String, kind: DialogKind) {
-        self.info = Some(message);
-        self.info_kind = kind;
+    /// `showToast`: the window's toast, which stays when the form or its panel closes.
+    fn toast(&self, toast: Toast, window: &Window, cx: &mut App) {
+        show_toast(toast, window, cx);
+    }
+
+    /// `showActionToast` and `showSubmitToast`: "X saved" (short), or "X submitted" with
+    /// a link to its ledger (`getSubmitSuccessToastAction`).
+    fn action_toast(&self, done: &str, window: &Window, cx: &mut App) {
+        let message = format!("{} {done}", self.reference_label());
+        if done != "submitted" {
+            self.toast(Toast::new(message, DialogKind::Success).short(), window, cx);
+            return;
+        }
+        let schema = self.doc.schema_name().to_owned();
+        let stock = matches!(
+            schema.as_str(),
+            "Shipment" | "PurchaseReceipt" | "StockMovement"
+        );
+        let transactional = stock
+            || matches!(
+                schema.as_str(),
+                "SalesInvoice" | "PurchaseInvoice" | "Payment" | "JournalEntry"
+            );
+        let mut toast = Toast::new(message, DialogKind::Success);
+        if transactional {
+            let (label, report) = if stock {
+                ("View Stock Entries", "stock-ledger")
+            } else {
+                ("View Accounting Entries", "general-ledger")
+            };
+            let filters = vec![
+                ("referenceType".to_owned(), schema),
+                (
+                    "referenceName".to_owned(),
+                    self.doc.name().unwrap_or_default().to_owned(),
+                ),
+            ];
+            toast = toast.action(t(label), move |window, cx| {
+                crate::desk::navigate(
+                    Route::FilteredReport {
+                        name: report.to_owned(),
+                        filters: filters.clone(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+        }
+        self.toast(toast, window, cx);
     }
 
     /// A control's value as shown (`fyo.format(value, field, doc)`), an amount in the
@@ -1991,12 +2026,7 @@ impl FormPage {
                 self.error = None;
                 // Settings says it once for all its tabs.
                 if !self.embedded {
-                    self.toast(
-                        format!("{} {done}", self.reference_label()),
-                        DialogKind::Success,
-                    );
-                } else {
-                    self.info = None;
+                    self.action_toast(done, window, cx);
                 }
                 self.controls.clear();
                 self.refresh(window, cx);
@@ -2008,7 +2038,6 @@ impl FormPage {
             Err(e) => {
                 self.error_title = error_label(&e);
                 self.error = Some(e.to_string());
-                self.info = None;
                 cx.notify();
                 false
             }
@@ -2061,20 +2090,22 @@ impl FormPage {
         } else if doc.can_submit() {
             self.ask_submit(window, cx);
         } else {
-            self.toast(form_view::cannot_save_message(doc), DialogKind::Warning);
+            let toast = Toast::new(form_view::cannot_save_message(doc), DialogKind::Warning);
+            self.toast(toast.short(), window, cx);
         }
         cx.notify();
     }
 
     /// Ctrl+Backspace (`cancelOrDeleteCallback`).
-    fn cancel_or_delete_shortcut(&mut self, cx: &mut Context<Self>) {
+    fn cancel_or_delete_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let doc = &self.doc;
         if doc.can_cancel() {
             self.pending = Some(Pending::Cancel);
         } else if doc.inserted() && doc.can_delete() && !doc.schema().is_single {
             self.pending = Some(Pending::Delete);
         } else {
-            self.toast(form_view::cannot_cancel_message(doc), DialogKind::Warning);
+            let toast = Toast::new(form_view::cannot_cancel_message(doc), DialogKind::Warning);
+            self.toast(toast.short(), window, cx);
         }
         cx.notify();
     }
@@ -2134,6 +2165,8 @@ impl FormPage {
             cx.notify();
             return;
         }
+        // `showActionToast(doc, 'delete')`.
+        self.action_toast("deleted", window, cx);
         if self.quick.is_some() {
             cx.emit(QuickEvent::Close);
             return;
@@ -2870,7 +2903,7 @@ impl FormPage {
                 kind,
                 vec![
                     DialogButton::new(t("Yes"), true, yes),
-                    DialogButton::new(t("No"), false, no),
+                    DialogButton::new(t("No"), false, no).escape(),
                 ],
                 window,
             )
@@ -4010,7 +4043,6 @@ impl FormPage {
             .children(title_row)
             .children(rows)
             .children(self.render_dialog(window, cx))
-            .children(self.render_toast(window, cx))
             .into_any_element()
     }
 
@@ -4022,22 +4054,6 @@ impl FormPage {
         }
         let _ = window;
         cx.emit(QuickEvent::Close);
-    }
-
-    fn render_toast(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let message = self.info.clone()?;
-        Some(
-            toast(
-                message,
-                self.info_kind,
-                cx.listener(|this, _, _, cx| {
-                    this.info = None;
-                    cx.notify();
-                }),
-                window,
-            )
-            .into_any_element(),
-        )
     }
 
     /// Books' shortcuts (`useDocShortcuts`, `CommonForm.vue`, `LinkedEntries.vue`,
@@ -4058,7 +4074,7 @@ impl FormPage {
             "backspace" if pmod && !self.embedded => {
                 if self.pending.is_none() && self.error.is_none() {
                     self.commit_typed(window, cx);
-                    self.cancel_or_delete_shortcut(cx);
+                    self.cancel_or_delete_shortcut(window, cx);
                 }
                 true
             }
@@ -4239,7 +4255,6 @@ impl Render for FormPage {
             .map(|panel| panel.clone().into_any_element())
             .or_else(|| self.render_links(cx))
             .or_else(|| self.render_row_edit(window, cx));
-        let toast = self.render_toast(window, cx);
 
         div()
             .h_flex()
@@ -4270,7 +4285,6 @@ impl Render for FormPage {
             )
             .children(side)
             .children(self.render_dialog(window, cx))
-            .children(toast)
             .into_any_element()
     }
 }
