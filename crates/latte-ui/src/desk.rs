@@ -328,6 +328,12 @@ impl Desk {
                     }
                     route => self.highlight = route.clone(),
                 }
+                // POS.vue hides the sidebar while the till is open, and shows it on leaving.
+                if route == Route::Pos {
+                    self.sidebar_hidden = true;
+                } else if self.route == Route::Pos {
+                    self.sidebar_hidden = false;
+                }
                 self.route = route;
             }
             Err(e) => self.error = Some(e),

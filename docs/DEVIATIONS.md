@@ -89,10 +89,20 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | POS shift takings | A payment's whole amount once per POS invoice it pays; drafts and cancelled payments count | What each submitted payment put against its POS invoices, once | Books bug |
 | POS negative closing amount | Allowed (the check swallows its error) | Refused | Books bug |
 | POS cash over the total | The payment is for all the cash and is refused | The payment is for the total; the rest shown as change | Books bug |
-| POS shift and payment amounts | Opening and closing amounts other than Cash are read-only; Payment starts at 0 until a method is picked | Amounts other than Cash can be typed; Payment starts at Cash for the grand total | Not ported yet |
-| POS item search | A Link dropdown; items show their images; a row's details can be edited | Filters the items shown and adds one on Enter; items show initials; row details are read-only | Items carry no image yet |
+| POS item search | A Link dropdown matched fuzzily | A Link dropdown matched by what is typed anywhere in the name, as Latte's other Link fields | Simpler; the same items are found |
 | POS paying a submitted sale | Submits it again, shows the error, then pays | Pays it | Books bug |
-| POS not ported yet | The Modern UI, item groups, keyboard shortcuts, returns, coupons, loyalty points, price lists, and editing a row's rate or discount at the till | Not ported yet | The Modern UI, and returns, coupons and loyalty at the till, come after 1.0 |
+| POS cash refund for a return | Pays it to the counter cash account from the counter cash account, which the payment refuses | Pays it from the counter cash account | Books bug |
+| POS quantity refused at the till | The row and the keypad keep the refused quantity | Put back as it was, as Books' quick quantity does | Books bug |
+| POS quantity checked | Against the first row of the item, which for a batched item can be another batch's | Against the row changed | Books bug |
+| POS keypad quantity | Takes zero or less on a sale | Refused, as the row and the quick quantity refuse it | Books bug |
+| POS row quantity and discounts | Changing a row's quantity clears the discount a pricing rule gives for it when the row had no discount of its own | The discount is kept as it was, and a pricing rule's is left alone | Books bug |
+| POS loyalty points Cancel | Leaves the points typed redeemed | Takes them back | Books bug |
+| POS Return modal Cancel | Opens the Saved Invoice modal and leaves the Return modal open | Closes it | Books bug |
+| POS Save and Continue | Leaves for the Sales Invoice List whether or not the sale saved; the error is lost | Leaves once the sale is saved | Books bug |
+| POS Shift+L | Needs price lists on | Needs the loyalty program on, as its quick action does | Books bug |
+| POS applied coupons badge | Blank once a coupon is taken off | The number of coupons on the sale; none at 0 | Books bug |
+| POS quick action names | A label above the icon on hover | A tooltip | Simpler in GPUI |
+| POS messages | Toasts stack | One message at a time, the latest | Simpler; the same messages |
 | Get Started "Create Purchase Invoice" | Ticked once there is a sales invoice | Ticked once there is a purchase invoice | Books bug |
 | Create Demo progress | A full-window loader | A message and bar in the company list | Simpler in GPUI |
 | Create Demo fiscal year | 1 April to 1 April | 1 April to 31 March | Books bug |
