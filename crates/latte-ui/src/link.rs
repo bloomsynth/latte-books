@@ -5,6 +5,9 @@
 //! `Select.vue` @ v0.36.0: the list opens on focus, on click and while typing, ↑/↓ move the
 //! highlight, Enter picks, Tab, Esc and a click elsewhere close it.
 //!
+//! With a value, a Link field shows Books' chevron to open the linked document; otherwise
+//! the up-and-down selector.
+//!
 //! Differences from Books: matching is a case-insensitive substring match, not fuzzy, and
 //! there is no "Create" entry (Books opens a quick-entry form for a new linked document).
 
@@ -13,8 +16,14 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::books::{self, Text as _, gray};
+use crate::widgets::{control_frame, popover_panel, selector_icon};
+
 /// An option was picked: its value.
 pub struct LinkPicked(pub SharedString);
+
+/// The chevron of a Link field was clicked: open the linked document, by its name.
+pub struct LinkOpened(pub SharedString);
 
 /// An option: its value and what is shown for it.
 #[derive(Clone)]
@@ -30,10 +39,17 @@ pub struct LinkInput {
     highlighted: usize,
     open: bool,
     value: Option<SharedString>,
+    /// Drawn in Books' bordered frame (a form field), or bare (a table cell).
+    bordered: bool,
+    /// A Link field, whose value can be opened.
+    linkable: bool,
+    /// Required and empty: the selector is red (`showMandatory`).
+    mandatory: bool,
     _subscription: Subscription,
 }
 
 impl EventEmitter<LinkPicked> for LinkInput {}
+impl EventEmitter<LinkOpened> for LinkInput {}
 
 impl LinkInput {
     pub fn new(
@@ -51,8 +67,27 @@ impl LinkInput {
             highlighted: 0,
             open: false,
             value: None,
+            bordered: true,
+            linkable: false,
+            mandatory: false,
             _subscription: subscription,
         }
+    }
+
+    /// As a table cell: no frame.
+    pub fn bare(mut self) -> Self {
+        self.bordered = false;
+        self
+    }
+
+    /// A Link field, which shows a chevron to open its value.
+    pub fn linkable(mut self, linkable: bool) -> Self {
+        self.linkable = linkable;
+        self
+    }
+
+    pub fn set_mandatory(&mut self, mandatory: bool) {
+        self.mandatory = mandatory;
     }
 
     pub fn value(&self) -> Option<&SharedString> {
@@ -207,18 +242,26 @@ impl LinkInput {
 }
 
 impl Render for LinkInput {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focused = self.is_focused(window, cx);
+        // `Dropdown.vue`: items `p-2 rounded-md`, the highlighted one gray-100.
         let dropdown = (self.open && !self.entries.is_empty()).then(|| {
             let rows = self.entries.iter().enumerate().map(|(i, option)| {
                 let label = self.options[*option].label.clone();
                 div()
                     .id(i)
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .when(i == self.highlighted, |row| row.bg(theme.list_active))
-                    .hover(|row| row.bg(theme.list_hover))
+                    .p_2()
+                    .when(i > 0, |d| d.mt_1())
+                    .rounded(books::RADIUS_MD)
+                    .truncate()
+                    .cursor_pointer()
+                    .when(i == self.highlighted, |row| row.bg(gray(100)))
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if this.highlighted != i {
+                            this.highlighted = i;
+                            cx.notify();
+                        }
+                    }))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {
@@ -230,25 +273,53 @@ impl Render for LinkInput {
             });
             deferred(
                 anchored().snap_to_window().child(
-                    div()
+                    popover_panel()
                         .id("link-dropdown")
                         .occlude()
-                        .mt_1()
-                        .min_w(px(220.))
-                        .max_h(px(260.))
+                        .mt_2()
+                        .min_w(px(160.))
+                        .max_h(px(256.))
                         .overflow_y_scroll()
                         .p_1()
-                        .bg(theme.popover)
-                        .text_color(theme.popover_foreground)
-                        .border_1()
-                        .border_color(theme.border)
-                        .rounded_md()
-                        .shadow_md()
+                        .text_12()
                         .children(rows),
                 ),
             )
             .with_priority(1)
         });
+
+        let link = self
+            .linkable
+            .then(|| self.value.clone())
+            .flatten()
+            .map(|value| {
+                div()
+                    .id("open-link")
+                    .p(px(2.))
+                    .rounded(books::RADIUS)
+                    .cursor_pointer()
+                    .child(books::icon("chevron-right", px(16.), gray(600)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(LinkOpened(value.clone()))))
+            });
+        let has_link = link.is_some();
+
+        let input = Input::new(&self.input)
+            .appearance(false)
+            .h(px(32.))
+            .text_13()
+            .map(|i| if self.bordered { i.px_3() } else { i.px_2() });
+        let frame = if self.bordered {
+            control_frame(false, focused)
+        } else {
+            div()
+                .h_flex()
+                .w_full()
+                .rounded(books::RADIUS)
+                .text_13()
+                .text_color(gray(900))
+                .when(focused, |d| d.bg(gray(100)))
+        };
 
         div()
             .v_flex()
@@ -267,7 +338,13 @@ impl Render for LinkInput {
                     cx.notify();
                 }
             }))
-            .child(Input::new(&self.input).small())
+            .child(
+                frame
+                    .pr_2()
+                    .child(div().flex_1().min_w_0().child(input))
+                    .children(link)
+                    .when(!has_link, |d| d.child(selector_icon(self.mandatory))),
+            )
             .children(dropdown)
     }
 }

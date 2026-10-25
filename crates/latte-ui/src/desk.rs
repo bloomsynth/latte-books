@@ -2,12 +2,12 @@
 //! `src/components/Sidebar.vue` @ v0.36.0).
 //!
 //! Each page asks to go somewhere with a [`Navigate`] event; the desk makes the new page
-//! and keeps a history for Back.
+//! and keeps a history for Back and Forward.
 //!
 //! Not in Books: every two seconds the desk looks for changes another device, such as an AI
 //! assistant, wrote to the file, and shows the page again when it may show them.
 
-use gpui_kit::component::button::*;
+use crate::books::{self, Text as _, black, gray, white};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -44,6 +44,8 @@ pub struct Desk {
     /// The sidebar entry shown as current: the page, or for a form the list it came from.
     highlight: Route,
     history: Vec<Route>,
+    forward: Vec<Route>,
+    sidebar_hidden: bool,
     page: AnyView,
     error: Option<String>,
     /// The last change in the file's change log that the page shows.
@@ -73,6 +75,8 @@ impl Desk {
             route: route.clone(),
             highlight: route.clone(),
             history: Vec::new(),
+            forward: Vec::new(),
+            sidebar_hidden: false,
             page: cx.new(|_| Placeholder::new("", "")).into(),
             error: None,
             last_change,
@@ -282,6 +286,7 @@ impl Desk {
             Ok(()) => {
                 if remember && self.route != route {
                     self.history.push(self.route.clone());
+                    self.forward.clear();
                 }
                 match &route {
                     Route::Form { .. } | Route::Print { .. } => {}
@@ -297,6 +302,7 @@ impl Desk {
 
     fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(route) = self.history.pop() {
+            self.forward.push(self.route.clone());
             self.open(Nav::Route(route), false, window, cx);
         }
     }
@@ -311,24 +317,43 @@ impl Desk {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
         let company = self.session.borrow().company_name();
         let mut children: Vec<AnyElement> = Vec::new();
         for (g, group) in self.groups.iter().enumerate() {
             let open = self.group_is_open(group);
-            let active = self.is_active(&group.route) && (group.items.is_empty() || !open);
+            // `isGroupActive(group) && !group.items`: the row itself is the page.
+            let marked = open && group.items.is_empty();
             let route = group.route.clone();
+            let state = if open { "active" } else { "inactive" };
             children.push(
                 div()
                     .id(("group", g))
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
+                    .h_flex()
+                    .h_10()
+                    .px_4()
                     .cursor_pointer()
-                    .font_weight(FontWeight::MEDIUM)
-                    .when(active, |d| d.bg(theme.list_active))
-                    .hover(|d| d.bg(theme.list_hover))
-                    .child(t(&group.label))
+                    .hover(|d| d.bg(gray(100)))
+                    .when(marked, |d| {
+                        d.bg(gray(100))
+                            .border_l_4()
+                            .border_color(gray(800))
+                            .pl(px(12.))
+                    })
+                    .child(
+                        img(SharedString::from(format!(
+                            "books/sidebar/{}-{state}.svg",
+                            group.icon
+                        )))
+                        .size_5()
+                        .flex_none(),
+                    )
+                    .child(
+                        div()
+                            .ml_2()
+                            .text_14()
+                            .text_color(if marked { gray(900) } else { gray(700) })
+                            .child(t(&group.label)),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open(Nav::Route(route.clone()), true, window, cx)
                     }))
@@ -343,14 +368,20 @@ impl Desk {
                 children.push(
                     div()
                         .id(("item", g * 100 + i))
-                        .pl_6()
-                        .pr_3()
-                        .py_1()
-                        .rounded_md()
+                        .h_flex()
+                        .h_10()
+                        .pl_10()
+                        .text_13()
                         .cursor_pointer()
-                        .when(active, |d| d.bg(theme.list_active))
-                        .when(!active, |d| d.text_color(theme.muted_foreground))
-                        .hover(|d| d.bg(theme.list_hover))
+                        .hover(|d| d.bg(gray(100)))
+                        .when(active, |d| {
+                            d.bg(gray(100))
+                                .text_color(gray(900))
+                                .border_l_4()
+                                .border_color(gray(800))
+                                .pl(px(36.))
+                        })
+                        .when(!active, |d| d.text_color(gray(700)))
                         .child(t(&item.label))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open(Nav::Route(route.clone()), true, window, cx)
@@ -359,86 +390,165 @@ impl Desk {
                 );
             }
         }
+        let link = |id: &'static str, icon: &'static str, label: &str| {
+            div()
+                .id(id)
+                .h_flex()
+                .gap_1()
+                .text_12()
+                .text_color(gray(600))
+                .cursor_pointer()
+                .hover(|d| d.text_color(gray(800)))
+                .group(id)
+                .child(
+                    books::icon(icon, px(16.), gray(600))
+                        .group_hover(id, |s| s.text_color(gray(800))),
+                )
+                .child(t(label))
+        };
         div()
             .v_flex()
-            .w(px(220.))
+            .relative()
+            .w(books::W_SIDEBAR)
             .h_full()
             .flex_none()
-            .bg(theme.sidebar)
+            .py_2()
+            .justify_between()
+            .bg(gray(25))
             .border_r_1()
-            .border_color(theme.border)
+            .border_color(gray(200))
             .child(
                 div()
-                    .h(px(52.))
-                    .px_4()
-                    .h_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .truncate()
-                            .child(company),
-                    )
-                    .children((!self.history.is_empty()).then(|| {
-                        Button::new("back")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::ArrowLeft)
-                            .tooltip("Back")
-                            .on_click(cx.listener(|this, _, window, cx| this.back(window, cx)))
-                    })),
-            )
-            .child(
-                div()
-                    .id("sidebar-items")
                     .v_flex()
                     .flex_1()
-                    .px_2()
-                    .gap_0p5()
-                    .overflow_y_scroll()
-                    .children(children),
+                    .min_h_0()
+                    .child(
+                        div()
+                            .px_4()
+                            .mt_2()
+                            .mb_4()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(black())
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(company),
+                    )
+                    .child(
+                        div()
+                            .id("sidebar-items")
+                            .v_flex()
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .children(children),
+                    ),
             )
             .child(
                 div()
                     .v_flex()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(theme.border)
+                    .gap_2()
+                    .py_2()
+                    .px_4()
+                    .child(link("help", "help-circle", "Help").on_click(|_, _, cx| {
+                        cx.open_url("https://github.com/bloomsynth/latte-books#readme")
+                    }))
                     .child(
-                        Button::new("change-file")
-                            .ghost()
-                            .small()
-                            .label(t("Change DB"))
+                        link("change-db", "database", "Change DB")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(ChangeFile))),
                     )
                     .child(
-                        div()
-                            .px_3()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("Latte Books v{}", env!("CARGO_PKG_VERSION"))),
+                        link("report-issue", "flag", "Report Issue").on_click(|_, _, cx| {
+                            cx.open_url("https://github.com/bloomsynth/latte-books/issues/new")
+                        }),
                     ),
             )
+            .child(
+                div()
+                    .id("hide-sidebar")
+                    .absolute()
+                    .bottom_0()
+                    .right_0()
+                    .m_4()
+                    .p_1()
+                    .rounded(books::RADIUS)
+                    .text_color(gray(600))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(gray(100)))
+                    .child(books::icon("chevrons-left", px(16.), gray(600)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.sidebar_hidden = true;
+                        cx.notify();
+                    })),
+            )
+    }
+}
+
+/// What the page headers' back and forward buttons need from the desk
+/// (`PageHeaderNavGroup.vue`).
+pub struct NavState {
+    pub desk: WeakEntity<Desk>,
+    pub can_back: bool,
+    pub can_forward: bool,
+}
+
+impl Global for NavState {}
+
+impl Desk {
+    pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.back(window, cx);
+    }
+
+    pub fn go_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(route) = self.forward.pop() {
+            self.history.push(self.route.clone());
+            self.open(Nav::Route(route), false, window, cx);
+        }
     }
 }
 
 impl Render for Desk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Settings turn sidebar items on and off.
         self.groups = sidebar::sidebar(&self.session.borrow().fyo);
+        cx.set_global(NavState {
+            desk: cx.entity().downgrade(),
+            can_back: !self.history.is_empty(),
+            can_forward: !self.forward.is_empty(),
+        });
         div()
             .size_full()
             .h_flex()
-            .child(self.render_sidebar(cx))
+            .relative()
+            .when(!self.sidebar_hidden, |d| d.child(self.render_sidebar(cx)))
             .child(
                 div()
                     .v_flex()
                     .flex_1()
                     .h_full()
                     .overflow_hidden()
+                    .bg(white())
                     .children(self.error.clone().map(|e| error_message(e, cx)))
                     .child(self.page.clone()),
             )
+            .when(self.sidebar_hidden, |d| {
+                // Desk.vue's Show Sidebar button: unseen until hovered.
+                d.child(
+                    div()
+                        .id("show-sidebar")
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .m_4()
+                        .p_1()
+                        .rounded(books::RADIUS)
+                        .text_color(gray(600))
+                        .opacity(0.)
+                        .cursor_pointer()
+                        .hover(|d| d.opacity(1.).bg(gray(100)).shadow_md())
+                        .child(books::icon("chevrons-right", px(16.), gray(600)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sidebar_hidden = false;
+                            cx.notify();
+                        })),
+                )
+            })
     }
 }

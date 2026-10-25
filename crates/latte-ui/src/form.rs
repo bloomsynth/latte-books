@@ -5,15 +5,26 @@
 //! Every change goes through `Doc::set`, so formulas, validations and the model's `change`
 //! hook run as in Books, and the form then shows what the document holds.
 //!
+//! As in Books, the page header holds the actions (Print, the width toggle, the Create and
+//! View groups, the "…" menu, then Save or Submit), and the form is a 600px card below it,
+//! or the full width. Submit, Cancel and Delete ask first in a dialog; what worked is said
+//! in a toast; a value that can't be set is shown under its field.
+//!
 //! Differences from Books:
 //! - A child row is edited only in its table's columns; Books also opens a row form with
 //!   the row's other fields.
 //! - Attachments and images are shown but can't be changed yet.
+//! - No "View linked entries" panel, and the View actions aren't there yet.
 
 use std::collections::HashMap;
 
-use gpui_kit::component::button::*;
-use gpui_kit::component::checkbox::Checkbox;
+use std::rc::Rc;
+
+use crate::books::{self, Text as _, black, gray, white};
+use crate::widgets::{
+    Button, DialogButton, Kind as DialogKind, check_box, control_frame, dialog, dropdown_item,
+    field_label, mandatory_mark, pill, popover_panel, toast,
+};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -30,9 +41,9 @@ use latte_core::views::sidebar::Route;
 use latte_db::DocValue;
 use latte_schema::{Field, FieldType};
 
-use crate::link::{LinkInput, LinkOption, LinkPicked};
+use crate::link::{LinkInput, LinkOpened, LinkOption, LinkPicked};
 use crate::session::Shared;
-use crate::widgets::{badge, error_message, field_label, info_message, page_header};
+use crate::widgets::page_header_with;
 use crate::{Nav, Navigate};
 
 /// Where a control's value lives: a field of the document or a cell of a table row.
@@ -49,7 +60,7 @@ enum Control {
     },
     Link {
         state: Entity<LinkInput>,
-        _subscription: Subscription,
+        _subscriptions: [Subscription; 2],
     },
     Check,
     Display,
@@ -63,8 +74,9 @@ enum Pending {
     Delete,
 }
 
-/// A control a tab needs: its key, field, value, whether read-only, and its options.
-type Wanted = (Key, Field, Option<DocValue>, bool, Vec<LinkOption>);
+/// A control a tab needs: its key, field, value, whether read-only, its options, and
+/// whether required.
+type Wanted = (Key, Field, Option<DocValue>, bool, Vec<LinkOption>, bool);
 
 pub struct FormPage {
     session: Shared,
@@ -72,9 +84,18 @@ pub struct FormPage {
     tabs: Vec<Tab>,
     tab: usize,
     controls: HashMap<Key, Control>,
+    /// An action's error, shown in a dialog titled by its kind (`handleErrorWithDialog`).
     error: Option<String>,
+    error_title: &'static str,
+    /// A value a control couldn't set, shown under it.
+    field_errors: HashMap<Key, String>,
+    /// What worked, shown in a toast.
     info: Option<String>,
     pending: Option<Pending>,
+    /// The action group whose menu is open.
+    menu: Option<&'static str>,
+    /// "Toggle between form and full width".
+    full_width: bool,
     /// Shown inside another page (Settings), without its own header.
     embedded: bool,
     scroll: ScrollHandle,
@@ -91,8 +112,12 @@ impl FormPage {
             tab: 0,
             controls: HashMap::new(),
             error: None,
+            error_title: "Error",
+            field_errors: HashMap::new(),
             info: None,
             pending: None,
+            menu: None,
+            full_width: false,
             embedded: false,
             scroll: ScrollHandle::new(),
         };
@@ -150,7 +175,7 @@ impl FormPage {
             return Ok(());
         }
         let label = self.doc.schema().label.clone();
-        if self.run("Saved", |doc, fyo| doc.sync(fyo), window, cx) {
+        if self.run("saved", |doc, fyo| doc.sync(fyo), window, cx) {
             Ok(())
         } else {
             Err(format!(
@@ -162,16 +187,6 @@ impl FormPage {
 
     pub fn doc(&self) -> &Doc {
         &self.doc
-    }
-
-    fn title(&self) -> String {
-        if self.doc.schema().is_single {
-            return self.doc.schema().label.clone();
-        }
-        match self.doc.name() {
-            Some(name) if self.doc.inserted() => name.to_owned(),
-            _ => format!("New {}", self.doc.schema().label),
-        }
     }
 
     /// Lays the form out again and shows what the document holds now. Inputs being typed
@@ -241,6 +256,7 @@ impl FormPage {
                                 row.get(&column.fieldname).cloned(),
                                 read_only,
                                 opts,
+                                field::is_required(&column, &row_ctx),
                             ));
                         }
                     }
@@ -258,6 +274,7 @@ impl FormPage {
                     self.doc.get(&f.fieldname).cloned(),
                     read_only,
                     opts,
+                    field::is_required(f, &ctx),
                 ));
             }
         }
@@ -265,7 +282,7 @@ impl FormPage {
 
         let keys: Vec<Key> = wanted.iter().map(|(key, ..)| key.clone()).collect();
         self.controls.retain(|key, _| keys.contains(key));
-        for (key, f, value, read_only, opts) in wanted {
+        for (key, f, value, read_only, opts, mandatory) in wanted {
             let kind = control_kind(&f, read_only);
             let matches = matches!(
                 (self.controls.get(&key), kind),
@@ -292,7 +309,9 @@ impl FormPage {
                         Some(DocValue::Text(text)) if !text.is_empty() => Some(text.into()),
                         _ => None,
                     };
+                    let mandatory = value.is_none() && mandatory;
                     state.update(cx, |link, cx| {
+                        link.set_mandatory(mandatory);
                         link.set_options(opts, cx);
                         if !link.is_focused(window, cx) {
                             link.set_value(value, window, cx);
@@ -340,9 +359,14 @@ impl FormPage {
                 }
             }
             Kind::Link => {
-                let state = cx.new(|cx| LinkInput::new(options, placeholder, window, cx));
-                let key = key.clone();
-                let subscription = cx.subscribe_in(
+                let in_table = matches!(key, Key::Cell(..));
+                let linkable = f.fieldtype == Some(FieldType::Link);
+                let state = cx.new(|cx| {
+                    let link = LinkInput::new(options, placeholder, window, cx).linkable(linkable);
+                    if in_table { link.bare() } else { link }
+                });
+                let picked_key = key.clone();
+                let picked = cx.subscribe_in(
                     &state,
                     window,
                     move |this, _, event: &LinkPicked, window, cx| {
@@ -351,12 +375,16 @@ impl FormPage {
                         } else {
                             DocValue::Text(event.0.to_string())
                         };
-                        this.set_value(&key, value, window, cx);
+                        this.set_value(&picked_key, value, window, cx);
                     },
                 );
+                let field = f.clone();
+                let opened = cx.subscribe(&state, move |this, _, event: &LinkOpened, cx| {
+                    this.open_link(&field, &event.0, cx);
+                });
                 Control::Link {
                     state,
-                    _subscription: subscription,
+                    _subscriptions: [picked, opened],
                 }
             }
             Kind::Check => Control::Check,
@@ -389,7 +417,7 @@ impl FormPage {
         match parsed {
             Ok(value) => self.set_value(key, value, window, cx),
             Err(e) => {
-                self.error = Some(e.to_string());
+                self.field_errors.insert(key.clone(), e.to_string());
                 cx.notify();
             }
         }
@@ -411,9 +439,31 @@ impl FormPage {
                 }
             }
         };
-        self.error = result.err().map(|e| e.to_string());
+        match result {
+            Ok(_) => {
+                self.field_errors.remove(key);
+            }
+            Err(e) => {
+                self.field_errors.insert(key.clone(), e.to_string());
+            }
+        }
         self.info = None;
         self.refresh(window, cx);
+    }
+
+    /// The chevron of a Link field: opens the linked document (`routeToLinkedDoc`).
+    fn open_link(&mut self, f: &Field, name: &str, cx: &mut Context<Self>) {
+        let target = {
+            let s = self.session.borrow();
+            let ctx = field::context(&s.fyo, &self.doc, None);
+            field::link_target(f, &ctx)
+        };
+        if let Some(schema) = target {
+            cx.emit(Navigate(Nav::Route(Route::Form {
+                schema,
+                name: Some(name.to_owned()),
+            })));
+        }
     }
 
     fn add_row(&mut self, table: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -476,7 +526,8 @@ impl FormPage {
         }
     }
 
-    /// Runs a document action; on success shows `done` and lays the form out again.
+    /// Runs a document action; on success says "<name> `done`" in a toast (`showActionToast`)
+    /// and lays the form out again.
     fn run(
         &mut self,
         done: &str,
@@ -499,12 +550,13 @@ impl FormPage {
             Ok(()) => {
                 self.error = None;
                 // Settings says it once for all its tabs.
-                self.info = (!self.embedded).then(|| done.to_owned());
+                self.info = (!self.embedded).then(|| format!("{} {done}", self.reference_label()));
                 self.controls.clear();
                 self.refresh(window, cx);
                 true
             }
             Err(e) => {
+                self.error_title = error_label(&e);
                 self.error = Some(e.to_string());
                 self.info = None;
                 cx.notify();
@@ -513,8 +565,17 @@ impl FormPage {
         }
     }
 
+    /// `getDocReferenceLabel`: the document's name, or its schema's label.
+    fn reference_label(&self) -> String {
+        let schema = self.doc.schema();
+        match self.doc.name() {
+            Some(name) if schema.naming != Some(latte_schema::Naming::Random) => name.to_owned(),
+            _ => schema.label.clone(),
+        }
+    }
+
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.run("Saved", |doc, fyo| doc.sync(fyo), window, cx)
+        if self.run("saved", |doc, fyo| doc.sync(fyo), window, cx)
             && self.doc.schema_name() == "CustomForm"
         {
             let name = self.doc.name().map(str::to_owned);
@@ -528,15 +589,15 @@ impl FormPage {
     fn confirm(&mut self, pending: Pending, window: &mut Window, cx: &mut Context<Self>) {
         match pending {
             Pending::Submit => {
-                self.run("Submitted", |doc, fyo| doc.submit(fyo), window, cx);
+                self.run("submitted", |doc, fyo| doc.submit(fyo), window, cx);
             }
             Pending::Cancel => {
-                self.run("Cancelled", |doc, fyo| doc.cancel(fyo), window, cx);
+                self.run("cancelled", |doc, fyo| doc.cancel(fyo), window, cx);
             }
             Pending::Delete => {
                 let schema = self.doc.schema_name().to_owned();
                 let label = self.doc.schema().label.clone();
-                if self.run("Deleted", |doc, fyo| doc.delete(fyo), window, cx) {
+                if self.run("deleted", |doc, fyo| doc.delete(fyo), window, cx) {
                     let list = Route::list(&schema, &label, None);
                     cx.emit(Navigate(if schema == "CustomForm" {
                         Nav::Reopen(list)
@@ -588,15 +649,16 @@ impl FormPage {
         }
     }
 
-    fn status_badge(&self, cx: &App) -> Option<Div> {
+    /// `StatusPill.vue`: the status beside the title, with what is owed when unpaid.
+    fn status_pill(&self) -> Option<Div> {
         let doc = &self.doc;
-        if doc.schema().is_single {
+        if doc.schema().is_single || doc.schema_name() == "SalesQuote" && doc.is_submitted() {
             return None;
         }
-        let status = if doc.not_inserted() {
-            "Draft"
+        let key = if doc.not_inserted() {
+            "Draft".to_owned()
         } else if doc.dirty() {
-            "NotSaved"
+            "NotSaved".to_owned()
         } else {
             let mut values = latte_db::DocValueMap::new();
             for f in &doc.schema().fields {
@@ -604,40 +666,64 @@ impl FormPage {
                     values.insert(f.fieldname.clone(), value.clone());
                 }
             }
-            list::doc_status(doc.schema(), &values)
+            list::doc_status(doc.schema(), &values).to_owned()
         };
-        let status = list::status(status);
-        (!status.label.is_empty()).then(|| badge(status.label, status.color, cx))
+        let status = list::status(&key);
+        if status.label.is_empty() {
+            return None;
+        }
+        let money = |fieldname: &str| match doc.get(fieldname) {
+            Some(DocValue::Money(m)) => Some(m.clone()),
+            _ => None,
+        };
+        let s = self.session.borrow();
+        let label = match (key.as_str(), money("outstandingAmount")) {
+            ("Unpaid" | "Outstanding", Some(outstanding)) => {
+                format!("{} {}", t("Unpaid"), s.formatter.currency(&outstanding))
+            }
+            ("PartlyPaid", Some(outstanding)) => match money("grandTotal") {
+                Some(total) => format!(
+                    "{} {}",
+                    t("Partly Paid"),
+                    s.formatter
+                        .currency(&total.sub(&outstanding).unwrap_or(total.clone()))
+                ),
+                None => status.label.to_string(),
+            },
+            _ => status.label.to_string(),
+        };
+        Some(pill(label, status.color))
     }
 
-    fn buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// `getActionsForDoc`: the model's actions, then Duplicate, New Entry, Delete and
+    /// Cancel, each where its condition holds.
+    fn actions(&self) -> Vec<Action> {
         let doc = &self.doc;
-        let mut buttons: Vec<AnyElement> = Vec::new();
+        let mut actions: Vec<Action> = Vec::new();
         let schema = doc.schema_name().to_owned();
         let is_invoice = matches!(schema.as_str(), "SalesInvoice" | "PurchaseInvoice");
         let is_transfer = matches!(schema.as_str(), "Shipment" | "PurchaseReceipt");
-        let open = doc.is_submitted() && !doc.is_cancelled();
+        let submitted = doc.is_submitted() && !doc.is_cancelled();
         let filled = |fieldname: &str| matches!(doc.get(fieldname), Some(DocValue::Text(t)) if !t.is_empty());
+        let is_return =
+            filled("returnAgainst") || matches!(doc.get("isReturn"), Some(DocValue::Bool(true)));
         // `getMakeReturnDocAction`: returns are turned on in the settings.
         let returns_on = {
             let s = self.session.borrow();
             single_is_truthy(&s.fyo, "AccountingSettings", "enableInvoiceReturns")
                 || single_is_truthy(&s.fyo, "InventorySettings", "enableStockReturns")
         };
+        let create = |label: &str, run: ActionFn| Action::new(CREATE, label, run);
 
-        if open && is_invoice {
+        if is_invoice && submitted {
+            // `getMakePaymentAction`.
             let outstanding =
                 matches!(doc.get("outstandingAmount"), Some(DocValue::Money(m)) if !m.is_zero());
             if outstanding {
-                buttons.push(
-                    Button::new("make-payment")
-                        .small()
-                        .label(t("Make Payment"))
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.open_made(invoice::get_payment, cx)),
-                        )
-                        .into_any_element(),
-                );
+                actions.push(create(
+                    "Payment",
+                    Rc::new(|this, _, cx| this.open_made(invoice::get_payment, cx)),
+                ));
             }
             // `getMakeStockTransferAction`.
             let not_transferred =
@@ -648,34 +734,21 @@ impl FormPage {
                 } else {
                     "Purchase Receipt"
                 };
-                buttons.push(
-                    Button::new("make-stock-transfer")
-                        .small()
-                        .label(t(label))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_made(
-                                |doc, fyo| invoice::get_stock_transfer(doc, fyo, false),
-                                cx,
-                            )
-                        }))
-                        .into_any_element(),
-                );
+                actions.push(create(
+                    label,
+                    Rc::new(|this, _, cx| {
+                        this.open_made(|doc, fyo| invoice::get_stock_transfer(doc, fyo, false), cx)
+                    }),
+                ));
             }
-            if returns_on && !filled("returnAgainst") {
-                buttons.push(
-                    Button::new("make-return")
-                        .small()
-                        .label(t("Return"))
-                        .on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.open_made(invoice::get_return_doc, cx)
-                            }),
-                        )
-                        .into_any_element(),
-                );
+            if returns_on && !is_return {
+                actions.push(create(
+                    "Return",
+                    Rc::new(|this, _, cx| this.open_made(invoice::get_return_doc, cx)),
+                ));
             }
         }
-        if open && is_transfer {
+        if is_transfer && submitted {
             // `getMakeInvoiceAction`.
             if !filled("backReference") {
                 let label = if schema == "Shipment" {
@@ -683,67 +756,189 @@ impl FormPage {
                 } else {
                     "Purchase Invoice"
                 };
-                buttons.push(
-                    Button::new("make-invoice")
-                        .small()
-                        .label(t(label))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_made(stock_transfer::get_invoice, cx)
-                        }))
-                        .into_any_element(),
-                );
+                actions.push(create(
+                    label,
+                    Rc::new(|this, _, cx| this.open_made(stock_transfer::get_invoice, cx)),
+                ));
             }
-            if returns_on && !filled("returnAgainst") {
-                buttons.push(
-                    Button::new("make-return")
-                        .small()
-                        .label(t("Return"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_made(stock_transfer::get_return_doc, cx)
-                        }))
-                        .into_any_element(),
-                );
+            if returns_on && !is_return {
+                actions.push(create(
+                    "Return",
+                    Rc::new(|this, _, cx| this.open_made(stock_transfer::get_return_doc, cx)),
+                ));
             }
         }
         // `getLeadActions`.
         if schema == "Lead" && !doc.not_inserted() {
-            buttons.push(
-                Button::new("make-customer")
-                    .small()
-                    .label(t("Customer"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_made(|doc, fyo| lead::create_customer(doc, fyo).map(Some), cx)
-                    }))
-                    .into_any_element(),
-            );
-            buttons.push(
-                Button::new("make-sales-quote")
-                    .small()
-                    .label(t("Sales Quote"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_made(|doc, fyo| lead::create_sales_quote(doc, fyo).map(Some), cx)
-                    }))
-                    .into_any_element(),
-            );
+            actions.push(create(
+                "Customer",
+                Rc::new(|this, _, cx| {
+                    this.open_made(|doc, fyo| lead::create_customer(doc, fyo).map(Some), cx)
+                }),
+            ));
+            actions.push(create(
+                "Sales Quote",
+                Rc::new(|this, _, cx| {
+                    this.open_made(|doc, fyo| lead::create_sales_quote(doc, fyo).map(Some), cx)
+                }),
+            ));
         }
         // `getQuoteActions`.
-        if open && schema == "SalesQuote" {
-            buttons.push(
-                Button::new("make-invoice")
-                    .small()
-                    .label(t("Sales Invoice"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_made_mut(sales_quote::get_invoice, cx)
-                    }))
-                    .into_any_element(),
-            );
+        if schema == "SalesQuote" && submitted {
+            actions.push(create(
+                "Sales Invoice",
+                Rc::new(|this, _, cx| this.open_made_mut(sales_quote::get_invoice, cx)),
+            ));
         }
-        if open && crate::print::can_print(&schema) {
+        // `Party.getActions`: a new invoice for the party.
+        if schema == "Party" && !doc.not_inserted() {
+            let role = match doc.get("role") {
+                Some(DocValue::Text(role)) => role.clone(),
+                _ => String::new(),
+            };
+            if role != "Customer" {
+                actions.push(Action::new(
+                    "",
+                    "Create Purchase",
+                    Rc::new(|this, _, cx| this.open_party_invoice("PurchaseInvoice", cx)),
+                ));
+            }
+            if role != "Supplier" {
+                actions.push(Action::new(
+                    "",
+                    "Create Sale",
+                    Rc::new(|this, _, cx| this.open_party_invoice("SalesInvoice", cx)),
+                ));
+            }
+        }
+        // `Item.getActions`: a new invoice with the item.
+        if schema == "Item" && !doc.not_inserted() {
+            let r#for = match doc.get("for") {
+                Some(DocValue::Text(f)) => f.clone(),
+                _ => String::new(),
+            };
+            if r#for != "Purchases" {
+                actions.push(create(
+                    "Sales Invoice",
+                    Rc::new(|this, _, cx| this.open_item_invoice("SalesInvoice", cx)),
+                ));
+            }
+            if r#for != "Sales" {
+                actions.push(create(
+                    "Purchase Invoice",
+                    Rc::new(|this, _, cx| this.open_item_invoice("PurchaseInvoice", cx)),
+                ));
+            }
+        }
+        // `getDuplicateAction`.
+        let submittable = doc.schema().is_submittable;
+        if !doc.schema().is_single && (!submittable || doc.is_submitted()) && !doc.not_inserted() {
+            actions.push(create(
+                "Duplicate",
+                Rc::new(|this, _, cx| this.open_made(|doc, fyo| doc.duplicate(fyo).map(Some), cx)),
+            ));
+        }
+        // `getNewAction`.
+        if !doc.schema().is_single {
+            actions.push(create(
+                "New Entry",
+                Rc::new(|this, _, cx| {
+                    let schema = this.doc.schema_name().to_owned();
+                    this.open_made(
+                        move |_, fyo| fyo.get_new_doc(&schema, Default::default()).map(Some),
+                        cx,
+                    )
+                }),
+            ));
+        }
+        // `getDeleteAction`, in red.
+        if doc.inserted() && doc.can_delete() && !doc.schema().is_single {
+            let mut delete = Action::new(
+                "",
+                "Delete",
+                Rc::new(|this, _, cx| {
+                    this.pending = Some(Pending::Delete);
+                    cx.notify();
+                }),
+            );
+            delete.danger = true;
+            actions.push(delete);
+        }
+        // `getCancelAction`.
+        if doc.can_cancel() {
+            actions.push(Action::new(
+                "",
+                "Cancel",
+                Rc::new(|this, _, cx| {
+                    this.pending = Some(Pending::Cancel);
+                    cx.notify();
+                }),
+            ));
+        }
+        actions
+    }
+
+    /// `Party.getActions` "Create Sale" and "Create Purchase".
+    fn open_party_invoice(&mut self, schema: &'static str, cx: &mut Context<Self>) {
+        self.open_made(
+            move |party, fyo| {
+                let mut values = latte_db::DocValueMap::new();
+                if let Some(name) = party.name() {
+                    values.insert("party".into(), DocValue::Text(name.to_owned()));
+                }
+                if let Some(DocValue::Text(account)) = party.get("defaultAccount") {
+                    values.insert("account".into(), DocValue::Text(account.clone()));
+                }
+                fyo.get_new_doc(schema, values).map(Some)
+            },
+            cx,
+        );
+    }
+
+    /// `Item.getActions`: a new invoice with a row for the item, at its rate and tax.
+    fn open_item_invoice(&mut self, schema: &'static str, cx: &mut Context<Self>) {
+        self.open_made_mut(
+            move |item, fyo| {
+                let mut invoice = fyo.get_new_doc(schema, Default::default())?;
+                let mut row = latte_db::DocValueMap::new();
+                for (to, from) in [("item", "name"), ("rate", "rate"), ("tax", "tax")] {
+                    if let Some(value) = item.get(from) {
+                        row.insert(to.into(), value.clone());
+                    }
+                }
+                invoice.append(fyo, "items", row)?;
+                Ok(Some(invoice))
+            },
+            cx,
+        );
+    }
+
+    /// `getGroupedActionsForDoc`: the named groups in order, then the ungrouped ("…").
+    fn grouped_actions(&self) -> Vec<(&'static str, Vec<Action>)> {
+        let mut groups: Vec<(&'static str, Vec<Action>)> = Vec::new();
+        for action in self.actions() {
+            match groups.iter_mut().find(|(g, _)| *g == action.group) {
+                Some((_, list)) => list.push(action),
+                None => groups.push((action.group, vec![action])),
+            }
+        }
+        groups.sort_by_key(|(g, _)| (g.is_empty(), *g));
+        groups
+    }
+
+    /// The header's buttons (`CommonForm.vue`'s `#header`).
+    fn header_buttons(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let doc = &self.doc;
+        let mut buttons: Vec<AnyElement> = Vec::new();
+        let schema = doc.schema_name().to_owned();
+        // `canPrint`.
+        if doc.inserted() && !doc.is_cancelled() && !doc.dirty() && crate::print::can_print(&schema)
+        {
             let name = doc.name().unwrap_or_default().to_owned();
             buttons.push(
                 Button::new("print")
-                    .small()
-                    .label(t("Print"))
+                    .icon("printer")
+                    .tooltip(t("Open Print View"))
                     .on_click(cx.listener(move |_, _, _, cx| {
                         cx.emit(Navigate(Nav::Route(Route::Print {
                             schema: schema.clone(),
@@ -753,49 +948,29 @@ impl FormPage {
                     .into_any_element(),
             );
         }
-        if doc.inserted() && !doc.schema().is_single && !doc.schema().is_submittable
-            || doc.inserted() && doc.schema().is_submittable
-        {
+        buttons.push(
+            Button::new("toggle-width")
+                .icon(if self.full_width {
+                    "minimize"
+                } else {
+                    "maximize"
+                })
+                .tooltip(t("Toggle between form and full width"))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.full_width = !this.full_width;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        );
+        for (group, actions) in self.grouped_actions() {
             buttons.push(
-                Button::new("duplicate")
-                    .small()
-                    .ghost()
-                    .label(t("Duplicate"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_made(|doc, fyo| doc.duplicate(fyo).map(Some), cx)
-                    }))
-                    .into_any_element(),
-            );
-        }
-        if doc.inserted() && doc.can_delete() && !doc.schema().is_single {
-            buttons.push(
-                Button::new("delete")
-                    .small()
-                    .ghost()
-                    .label(t("Delete"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.pending = Some(Pending::Delete);
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            );
-        }
-        if doc.can_cancel() {
-            buttons.push(
-                Button::new("cancel")
-                    .small()
-                    .label(t("Cancel"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.pending = Some(Pending::Cancel);
-                        cx.notify();
-                    }))
+                self.render_menu(group, actions, window, cx)
                     .into_any_element(),
             );
         }
         if doc.can_save() || doc.not_inserted() || doc.schema().is_single && doc.dirty() {
             buttons.push(
                 Button::new("save")
-                    .small()
                     .primary()
                     .label(t("Save"))
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
@@ -804,7 +979,6 @@ impl FormPage {
         } else if doc.can_submit() {
             buttons.push(
                 Button::new("submit")
-                    .small()
                     .primary()
                     .label(t("Submit"))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -817,45 +991,297 @@ impl FormPage {
         buttons
     }
 
-    fn render_control(&self, key: &Key, f: &Field, cx: &mut Context<Self>) -> AnyElement {
+    /// `DropdownWithActions.vue`: a group's button, and its menu below it when open.
+    fn render_menu(
+        &self,
+        group: &'static str,
+        actions: Vec<Action>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let open = self.menu == Some(group);
+        let id = SharedString::from(format!("menu-{group}"));
+        let button = Button::new(id.clone())
+            .map(|b| {
+                if group.is_empty() {
+                    b.icon("more-horizontal")
+                } else {
+                    b.label(t(group))
+                }
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.menu = if this.menu == Some(group) {
+                    None
+                } else {
+                    Some(group)
+                };
+                cx.notify();
+            }));
+        let menu = open.then(|| {
+            deferred(
+                anchored().anchor(Anchor::TopRight).snap_to_window().child(
+                    popover_panel()
+                        .id(SharedString::from(format!("{id}-panel")))
+                        .occlude()
+                        .mt_2()
+                        .min_w(px(160.))
+                        .p_1()
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.menu = None;
+                            cx.notify();
+                        }))
+                        .children(actions.into_iter().enumerate().map(|(i, action)| {
+                            let run = action.run.clone();
+                            let label = div()
+                                .when(action.danger, |d| d.text_color(books::color("red", 700)))
+                                .child(t(&action.label));
+                            dropdown_item(("action", i), label)
+                                .when(i > 0, |d| d.mt_1())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.menu = None;
+                                    run(this, window, cx);
+                                    cx.notify();
+                                }))
+                        })),
+                ),
+            )
+            .with_priority(1)
+        });
+        div().relative().child(button).children(menu)
+    }
+
+    /// The dialog Submit, Cancel and Delete ask in (`showSubmitOrSyncDialog`,
+    /// `cancelDocWithPrompt`, `deleteDocWithPrompt`), or an action's error.
+    fn render_dialog(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if let Some(error) = &self.error {
+            let close = cx.listener(|this, _, _, cx| {
+                this.error = None;
+                cx.notify();
+            });
+            return Some(
+                dialog(
+                    t(self.error_title),
+                    Some(error.clone().into()),
+                    DialogKind::Error,
+                    vec![DialogButton::new(t("Okay"), false, close)],
+                    window,
+                )
+                .into_any_element(),
+            );
+        }
+        let pending = self.pending?;
+        let label = self.reference_label();
+        let (title, detail) = match pending {
+            Pending::Submit => (
+                format!("Submit {label}?"),
+                format!("Mark {} as submitted?", self.doc.schema().label),
+            ),
+            Pending::Cancel => (
+                format!("Cancel {label}?"),
+                "This action is permanent".to_owned(),
+            ),
+            Pending::Delete => (
+                format!("Delete {label}?"),
+                if self.doc.is_submitted() && self.doc.schema().is_submittable {
+                    "This action is permanent and will delete associated ledger entries."
+                } else {
+                    "This action is permanent."
+                }
+                .to_owned(),
+            ),
+        };
+        let kind = if pending == Pending::Submit {
+            DialogKind::Info
+        } else {
+            DialogKind::Warning
+        };
+        let yes = cx.listener(move |this, _, window, cx| this.confirm(pending, window, cx));
+        let no = cx.listener(|this, _, _, cx| {
+            this.pending = None;
+            cx.notify();
+        });
+        Some(
+            dialog(
+                title,
+                Some(detail.into()),
+                kind,
+                vec![
+                    DialogButton::new(t("Yes"), true, yes),
+                    DialogButton::new(t("No"), false, no),
+                ],
+                window,
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// A control in Books' look (`Base.vue` and the controls that extend it): bordered in
+    /// the form, bare in a table.
+    fn render_control(
+        &self,
+        key: &Key,
+        f: &Field,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let in_table = matches!(key, Key::Cell(..));
+        let numeric = is_numeric(f);
         let s = self.session.borrow();
         match self.controls.get(key) {
-            Some(Control::Input { state, .. }) => Input::new(state).small().into_any_element(),
+            Some(Control::Input { state, .. }) => {
+                let focused = state.focus_handle(cx).is_focused(window);
+                let value = self.current_value(key);
+                // Currency, numbers and dates show their formatted value until clicked
+                // (`Currency.vue`, `Date.vue`).
+                let formatted = (!focused && shows_formatted(f))
+                    .then(|| field::display(&s.formatter, f, value));
+                let is_date = matches!(f.fieldtype, Some(FieldType::Date | FieldType::Datetime));
+                let input = Input::new(state)
+                    .appearance(false)
+                    .h(px(32.))
+                    .text_13()
+                    .map(|i| if in_table { i.px_2() } else { i.px_3() })
+                    .when(numeric, |i| i.text_right())
+                    .when(formatted.is_some(), |i| i.text_color(hsla(0., 0., 0., 0.)));
+                let frame = if in_table {
+                    div()
+                        .h_flex()
+                        .w_full()
+                        .rounded(books::RADIUS)
+                        .text_13()
+                        .text_color(gray(900))
+                        .when(focused, |d| d.bg(gray(100)))
+                } else {
+                    control_frame(false, focused)
+                };
+                let overlay = formatted.map(|text| {
+                    let state = state.clone();
+                    let empty = text.is_empty();
+                    let placeholder = f
+                        .placeholder
+                        .clone()
+                        .or_else(|| f.label.clone())
+                        .unwrap_or_default();
+                    div()
+                        .id(SharedString::from(format!("{key:?}-shown")))
+                        .absolute()
+                        .inset_0()
+                        .h_flex()
+                        .gap_1()
+                        .map(|d| if in_table { d.px_2() } else { d.px_3() })
+                        .rounded(books::RADIUS)
+                        .when(numeric, |d| d.justify_end())
+                        .cursor_text()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .when(numeric, |d| d.h_flex().justify_end())
+                                .when(empty, |d| d.text_color(gray(500)))
+                                .child(if empty && !numeric { placeholder } else { text }),
+                        )
+                        .when(is_date, |d| {
+                            d.child(books::icon("calendar", px(16.), gray(600)))
+                        })
+                        .on_click(move |_, window, cx| state.focus_handle(cx).focus(window, cx))
+                });
+                frame
+                    .relative()
+                    .child(div().flex_1().min_w_0().child(input))
+                    .children(overlay)
+                    .into_any_element()
+            }
             Some(Control::Link { state, .. }) => state.clone().into_any_element(),
             Some(Control::Check) => {
                 let checked = latte_core::fyo::model::helpers::is_truthy(self.current_value(key));
-                let key = key.clone();
+                let key2 = key.clone();
                 let id: SharedString = format!("{key:?}").into();
                 let label = match key {
-                    Key::Field(_) => f.label.clone().unwrap_or_else(|| f.fieldname.clone()),
-                    Key::Cell(..) => String::new(),
+                    Key::Field(_) => f.label.clone(),
+                    Key::Cell(..) => None,
                 };
-                Checkbox::new(ElementId::Name(id))
-                    .checked(checked)
-                    .label(label)
-                    .on_click(cx.listener(move |this, checked: &bool, window, cx| {
-                        this.set_value(&key, DocValue::Bool(*checked), window, cx);
-                    }))
+                let read_only = {
+                    let ctx = match key {
+                        Key::Field(_) => field::context(&s.fyo, &self.doc, None),
+                        Key::Cell(table, i, _) => match self.doc.table(table).get(*i) {
+                            Some(row) => field::context(&s.fyo, row, Some(&self.doc)),
+                            None => field::context(&s.fyo, &self.doc, None),
+                        },
+                    };
+                    field::is_read_only(f, &ctx)
+                };
+                // `Check.vue`: the box, then the label, in a bordered frame in the form.
+                div()
+                    .id(ElementId::Name(id))
+                    .h_flex()
+                    .w_full()
+                    .when(!in_table, |d| {
+                        d.min_h(px(34.))
+                            .px_3()
+                            .rounded(books::RADIUS)
+                            .border_1()
+                            .border_color(gray(200))
+                            .bg(if read_only { gray(50) } else { gray(25) })
+                    })
+                    .when(in_table, |d| d.px_2().h(px(32.)))
+                    .when(!read_only, |d| d.cursor_pointer())
+                    .child(check_box(checked))
+                    .children(label.map(|l| div().ml_3().text_13().text_color(gray(600)).child(l)))
+                    .when(!read_only, |d| {
+                        d.on_click(cx.listener(move |this, _, window, cx| {
+                            this.set_value(&key2, DocValue::Bool(!checked), window, cx);
+                        }))
+                    })
                     .into_any_element()
             }
             Some(Control::Display) | None => {
                 let text = field::display(&s.formatter, f, self.current_value(key));
-                div()
-                    .h(px(28.))
-                    .px_2()
-                    .h_flex()
-                    .when(is_numeric(f), |d| d.justify_end())
-                    .rounded_md()
-                    .bg(cx.theme().muted)
-                    .truncate()
-                    .child(text)
+                let link = (f.fieldtype == Some(FieldType::Link) && !text.is_empty()).then(|| {
+                    let field = f.clone();
+                    let name = match self.current_value(key) {
+                        Some(DocValue::Text(name)) => name.clone(),
+                        _ => text.clone(),
+                    };
+                    div()
+                        .id(SharedString::from(format!("{key:?}-open")))
+                        .p(px(2.))
+                        .cursor_pointer()
+                        .child(books::icon("chevron-right", px(16.), gray(600)))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_link(&field, &name, cx)),
+                        )
+                });
+                let frame = if in_table {
+                    div()
+                        .h_flex()
+                        .w_full()
+                        .h(px(32.))
+                        .px_2()
+                        .text_13()
+                        .text_color(gray(800))
+                } else {
+                    control_frame(true, false).px_3()
+                };
+                frame
+                    .when(link.is_some(), |d| d.pr_2())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .when(numeric, |d| d.h_flex().justify_end())
+                            .child(text),
+                    )
+                    .children(link)
                     .into_any_element()
             }
         }
     }
 
-    fn render_table(&self, f: &Field, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
+    /// `Table.vue` and `TableRow.vue`: the label, then a bordered table whose rows hold
+    /// bare controls, the index turning into × on hover, and Add Row at the end.
+    fn render_table(&self, f: &Field, window: &Window, cx: &mut Context<Self>) -> Div {
         let columns = {
             let s = self.session.borrow();
             field::table_columns(&s.fyo, f)
@@ -865,78 +1291,282 @@ impl FormPage {
         let header = div()
             .h_flex()
             .w_full()
-            .py_1()
+            .h_12()
+            .px_2()
+            .gap_0()
             .border_b_1()
-            .border_color(theme.border)
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(div().w(px(36.)).child("#"))
-            .children(
-                columns
-                    .iter()
-                    .map(|c| cell(c).child(c.label.clone().unwrap_or_else(|| c.fieldname.clone()))),
-            )
-            .child(div().w(px(28.)));
-        let rows = self
-            .doc
-            .table(&f.fieldname)
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
+            .border_color(gray(200))
+            .text_color(gray(600))
+            .child(index_cell().pl_2().child("#"))
+            .children(columns.iter().map(|c| {
+                cell(c)
+                    .px_2()
+                    .when(is_numeric(c), |d| d.justify_end())
+                    .child(
+                        div()
+                            .truncate()
+                            .child(c.label.clone().unwrap_or_else(|| c.fieldname.clone())),
+                    )
+            }));
+        let count = self.doc.table(&f.fieldname).len();
+        let rows = (0..count)
+            .map(|i| {
                 let table = table.clone();
+                let group = SharedString::from(format!("{table}-row-{i}"));
+                let error = columns.iter().find_map(|c| {
+                    self.field_errors
+                        .get(&Key::Cell(f.fieldname.clone(), i, c.fieldname.clone()))
+                });
                 div()
-                    .h_flex()
+                    .id(SharedString::from(format!("{table}-row-{i}")))
+                    .group(group.clone())
+                    .v_flex()
                     .w_full()
-                    .py_1()
-                    .gap_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(div().w(px(36.)).child(format!("{}", i + 1)))
-                    .children(columns.iter().map(|c| {
-                        let key = Key::Cell(f.fieldname.clone(), i, c.fieldname.clone());
-                        cell(c).child(self.render_control(&key, c, cx))
+                    .px_2()
+                    .when(i + 1 < count, |d| d.border_b_1().border_color(gray(200)))
+                    .when(editable, |d| d.hover(|d| d.bg(gray(25))))
+                    .child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .h_12()
+                            .child(
+                                index_cell()
+                                    .pl_2()
+                                    .text_color(gray(600))
+                                    .when(editable, |d| {
+                                        d.child(
+                                            div()
+                                                .id(("remove-row", i))
+                                                .relative()
+                                                .size_4()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .cursor_pointer()
+                                                .child(
+                                                    div()
+                                                        .group_hover(group.clone(), |d| {
+                                                            d.invisible()
+                                                        })
+                                                        .child(format!("{}", i + 1)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .absolute()
+                                                        .inset_0()
+                                                        .invisible()
+                                                        .group_hover(group.clone(), |d| d.visible())
+                                                        .child(books::icon(
+                                                            "x",
+                                                            px(16.),
+                                                            gray(600),
+                                                        )),
+                                                )
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.remove_row(&table, i, window, cx)
+                                                    },
+                                                )),
+                                        )
+                                    })
+                                    .when(!editable, |d| d.child(format!("{}", i + 1))),
+                            )
+                            .children(columns.iter().map(|c| {
+                                let key = Key::Cell(f.fieldname.clone(), i, c.fieldname.clone());
+                                cell(c).child(self.render_control(&key, c, window, cx))
+                            })),
+                    )
+                    .children(error.map(|e| {
+                        div()
+                            .pl_2()
+                            .pb_1()
+                            .text_11()
+                            .text_color(books::color("red", 600))
+                            .child(e.clone())
                     }))
-                    .child(div().w(px(28.)).children(editable.then(|| {
-                        Button::new(("remove-row", i))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.remove_row(&table, i, window, cx)
-                            }))
-                    })))
             })
             .collect::<Vec<_>>();
         let add_table = f.fieldname.clone();
         div()
             .v_flex()
             .w_full()
-            .gap_1()
+            .text_13()
             .child(field_label(f.label.clone().unwrap_or_default(), false, cx))
             .child(
                 div()
                     .v_flex()
                     .w_full()
                     .border_1()
-                    .border_color(theme.border)
-                    .rounded_md()
-                    .px_2()
+                    .border_color(gray(200))
+                    .rounded(books::RADIUS_MD)
                     .child(header)
                     .children(rows)
-                    .children(editable.then(|| {
-                        div().py_1().child(
-                            Button::new(SharedString::from(format!("add-{add_table}")))
-                                .ghost()
-                                .small()
-                                .icon(IconName::Plus)
-                                .label(t("Add Row"))
+                    .when(editable, |d| {
+                        d.child(
+                            div()
+                                .id(SharedString::from(format!("add-{add_table}")))
+                                .h_flex()
+                                .w_full()
+                                .h_12()
+                                .px_2()
+                                .when(count > 0, |d| d.border_t_1().border_color(gray(200)))
+                                .text_color(gray(500))
+                                .cursor_pointer()
+                                .child(index_cell().pl_1().child(books::icon(
+                                    "plus",
+                                    px(16.),
+                                    gray(500),
+                                )))
+                                .child(
+                                    div()
+                                        .flex_grow(columns.len() as f32)
+                                        .flex_basis(px(0.))
+                                        .px_2()
+                                        .child(t("Add Row")),
+                                )
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.add_row(&add_table, window, cx)
                                 })),
                         )
-                    })),
+                    }),
             )
     }
+
+    /// `CommonFormSection.vue`: a section's title, then its fields two to a row, 16px
+    /// apart and 32px between the columns.
+    fn render_section(
+        &self,
+        section: &field::Section,
+        show_title: bool,
+        first: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if section.fields.is_empty() {
+            return None;
+        }
+        let (required, read_only): (Vec<bool>, Vec<bool>) = {
+            let s = self.session.borrow();
+            let ctx = field::context(&s.fyo, &self.doc, None);
+            section
+                .fields
+                .iter()
+                .map(|f| (field::is_required(f, &ctx), field::is_read_only(f, &ctx)))
+                .unzip()
+        };
+        let items = section.fields.iter().enumerate().map(|(i, f)| {
+            let key = Key::Field(f.fieldname.clone());
+            let wide = f.fieldtype == Some(FieldType::Table) || f.fieldname == "termsAndConditions";
+            let body = if f.fieldtype == Some(FieldType::Table) {
+                self.render_table(f, window, cx).into_any_element()
+            } else if f.fieldtype == Some(FieldType::Check) {
+                self.render_control(&key, f, window, cx)
+            } else {
+                let empty = self.current_value(&key).is_none_or(|v| {
+                    matches!(v, DocValue::Null) || matches!(v, DocValue::Text(t) if t.is_empty())
+                });
+                div()
+                    .v_flex()
+                    .child(field_label(
+                        f.label.clone().unwrap_or_else(|| f.fieldname.clone()),
+                        required[i],
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .relative()
+                            .child(self.render_control(&key, f, window, cx))
+                            .when(
+                                required[i] && empty && !read_only[i] && !is_choice(f),
+                                |d| d.child(mandatory_mark()),
+                            ),
+                    )
+                    .into_any_element()
+            };
+            div()
+                .when(wide, |d| d.col_span_full())
+                .when(f.fieldtype == Some(FieldType::Check), |d| d.mt_auto())
+                .when(f.fieldtype != Some(FieldType::Check), |d| d.mb_auto())
+                .child(body)
+                .children(self.field_errors.get(&key).map(|e| {
+                    div()
+                        .mt_1()
+                        .text_12()
+                        .text_color(books::color("red", 600))
+                        .child(e.clone())
+                }))
+        });
+        Some(
+            div()
+                .v_flex()
+                .p_4()
+                .when(!first, |d| d.border_t_1().border_color(gray(200)))
+                .when(show_title, |d| {
+                    d.child(
+                        div()
+                            .mb_4()
+                            .text_13()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(gray(900))
+                            .child(section.name.clone()),
+                    )
+                })
+                .child(
+                    div()
+                        .grid()
+                        .grid_cols(2)
+                        .gap_4()
+                        .gap_x_8()
+                        .w_full()
+                        .children(items),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+/// A form action: its group ("Create", "View" or none), label and what it does.
+type ActionFn = Rc<dyn Fn(&mut FormPage, &mut Window, &mut Context<FormPage>)>;
+
+const CREATE: &str = "Create";
+
+struct Action {
+    group: &'static str,
+    label: String,
+    danger: bool,
+    run: ActionFn,
+}
+
+impl Action {
+    fn new(group: &'static str, label: &str, run: ActionFn) -> Self {
+        Self {
+            group,
+            label: label.to_owned(),
+            danger: false,
+            run,
+        }
+    }
+}
+
+/// `getErrorLabel`: a dialog's title for an error.
+fn error_label(error: &latte_core::Error) -> &'static str {
+    match error {
+        latte_core::Error::Validation(_) => "Validation Error",
+        latte_core::Error::Mandatory(_) => "Mandatory Error",
+        latte_core::Error::NotFound(_) => "Not Found",
+        latte_core::Error::Value(_) => "Value Error",
+        latte_core::Error::Db(_) => "Database Error",
+        _ => "Error",
+    }
+}
+
+/// Fields shown formatted until clicked into.
+fn shows_formatted(f: &Field) -> bool {
+    matches!(
+        f.fieldtype,
+        Some(FieldType::Currency | FieldType::Float | FieldType::Date | FieldType::Datetime)
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -973,95 +1603,80 @@ fn control_kind(f: &Field, read_only: bool) -> Kind {
     }
 }
 
-/// A table cell, sized as Books' `Row` sizes columns: amounts narrower than names.
+/// A column of `Table.vue`'s `Row`: each `1fr`, numbers to the right.
 fn cell(f: &Field) -> Div {
-    let grow = match f.fieldtype {
-        Some(FieldType::Link | FieldType::Data | FieldType::Text) => 2.,
-        _ => 1.,
-    };
     div()
-        .flex_grow(grow)
+        .flex_1()
         .flex_basis(px(0.))
-        .min_w(px(60.))
-        .when(is_numeric(f), |d| d.h_flex().justify_end())
+        .min_w_0()
+        .h_flex()
+        .when(is_numeric(f), |d| d.justify_end())
+}
+
+/// The index column: `0.3fr`.
+fn index_cell() -> Div {
+    div()
+        .flex_grow(0.3)
+        .flex_shrink(1.)
+        .flex_basis(px(0.))
+        .min_w_0()
+        .h_flex()
 }
 
 impl Render for FormPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let title = self.title();
-        let status = self.status_badge(cx);
-        let buttons = self.buttons(cx);
-        let header =
-            page_header(title, cx).child(div().h_flex().gap_2().children(status).children(buttons));
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tabs = self.tabs.clone();
+        let sections = tabs
+            .get(self.tab)
+            .map(|t| t.sections.clone())
+            .unwrap_or_default();
+        let many = sections.iter().filter(|s| !s.fields.is_empty()).count() > 1;
+        let mut first = true;
+        let sections: Vec<AnyElement> = sections
+            .iter()
+            .filter_map(|section| {
+                let show_title = many && section.name != "Default";
+                let element = self.render_section(section, show_title, first, window, cx)?;
+                first = false;
+                Some(element)
+            })
+            .collect();
 
-        let confirm = self.pending.map(|pending| {
-            let (question, ok) = match pending {
-                Pending::Submit => (
-                    format!(
-                        "Submit {}? It can't be edited after submitting.",
-                        self.doc.schema().label
-                    ),
-                    "Submit",
-                ),
-                Pending::Cancel => (format!("Cancel {}?", self.title()), "Yes, cancel it"),
-                Pending::Delete => (
-                    format!("Delete {}? This can't be undone.", self.title()),
-                    "Delete",
-                ),
-            };
+        if self.embedded {
+            return div()
+                .v_flex()
+                .w_full()
+                .children(sections)
+                .children(self.render_dialog(window, cx))
+                .into_any_element();
+        }
+
+        // `CommonForm.vue`'s tab bar, at the foot of the form.
+        let tab_bar = (tabs.len() > 1).then(|| {
             div()
                 .h_flex()
-                .mx_4()
-                .mt_2()
-                .px_3()
-                .py_2()
-                .gap_2()
-                .rounded_md()
-                .border_l_2()
-                .border_color(theme.yellow)
-                .bg(theme.yellow.opacity(0.12))
-                .child(div().flex_1().child(question))
-                .child(
-                    Button::new("confirm-no")
-                        .small()
-                        .ghost()
-                        .label(t("No"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.pending = None;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("confirm-yes")
-                        .small()
-                        .primary()
-                        .label(ok)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.confirm(pending, window, cx)
-                        })),
-                )
-        });
-
-        let tab_bar = (self.tabs.len() > 1).then(|| {
-            div()
-                .h_flex()
+                .flex_none()
+                .mt_auto()
                 .px_4()
-                .gap_4()
-                .border_b_1()
-                .border_color(theme.border)
-                .children(self.tabs.iter().enumerate().map(|(i, tab)| {
+                .pb_4()
+                .gap_8()
+                .border_t_1()
+                .border_color(gray(200))
+                .bg(white())
+                .children(tabs.iter().enumerate().map(|(i, tab)| {
                     let active = i == self.tab;
                     div()
                         .id(("tab", i))
-                        .py_2()
+                        .text_12()
                         .cursor_pointer()
                         .when(active, |d| {
-                            d.border_b_2()
-                                .border_color(theme.primary)
+                            d.pt(px(14.))
+                                .border_t_2()
+                                .border_color(gray(800))
                                 .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(gray(900))
                         })
-                        .when(!active, |d| d.text_color(theme.muted_foreground))
+                        .when(!active, |d| d.pt_4().text_color(gray(700)))
                         .child(tab.name.clone())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.tab = i;
@@ -1070,78 +1685,100 @@ impl Render for FormPage {
                 }))
         });
 
-        let sections: Vec<AnyElement> = self
-            .tabs
-            .get(self.tab)
-            .map(|tab| tab.sections.clone())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|section| {
-                let (tables, fields): (Vec<Field>, Vec<Field>) = section
-                    .fields
-                    .into_iter()
-                    .partition(|f| f.fieldtype == Some(FieldType::Table));
-                let required = {
-                    let s = self.session.borrow();
-                    let ctx = field::context(&s.fyo, &self.doc, None);
-                    fields
-                        .iter()
-                        .map(|f| field::is_required(f, &ctx))
-                        .collect::<Vec<_>>()
-                };
-                let grid = div()
-                    .grid()
-                    .grid_cols(2)
-                    .gap_x_6()
-                    .gap_y_3()
-                    .w_full()
-                    .children(fields.iter().zip(required).map(|(f, required)| {
-                        let key = Key::Field(f.fieldname.clone());
-                        if f.fieldtype == Some(FieldType::Check) {
-                            return div().pt_5().child(self.render_control(&key, f, cx));
-                        }
-                        div()
-                            .v_flex()
-                            .gap_1()
-                            .child(field_label(
-                                f.label.clone().unwrap_or_else(|| f.fieldname.clone()),
-                                required,
-                                cx,
-                            ))
-                            .child(self.render_control(&key, f, cx))
-                    }));
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .children((section.name != "Default").then(|| {
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(section.name.clone())
-                    }))
-                    .when(!fields.is_empty(), |d| d.child(grid))
-                    .children(tables.iter().map(|f| self.render_table(f, cx)))
-                    .into_any_element()
-            })
-            .collect();
+        // `FormHeader.vue`: the title and status, 56px high.
+        let title = if self.doc.schema().is_single {
+            self.doc.schema().label.clone()
+        } else if self.doc.schema().is_submittable && self.doc.not_inserted() {
+            t("New Entry")
+        } else {
+            match self.doc.name() {
+                Some(name) if !name.is_empty() => name.to_owned(),
+                _ => t("New Entry"),
+            }
+        };
+        let form_header = div()
+            .h_flex()
+            .flex_none()
+            .h(px(56.))
+            .px_4()
+            .justify_between()
+            .border_b_1()
+            .border_color(gray(200))
+            .text_18()
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(div().truncate().text_color(black()).child(title))
+            .children(self.status_pill());
 
-        div()
+        let body = div()
             .v_flex()
-            .size_full()
-            .when(!self.embedded, |d| d.child(header))
-            .children(confirm)
-            .children(self.error.clone().map(|e| error_message(e, cx)))
-            .children(self.info.clone().map(|m| info_message(m, cx)))
-            .children(tab_bar)
+            .h_full()
+            .bg(white())
+            .overflow_hidden()
+            .map(|d| {
+                if self.full_width {
+                    d.w_full().border_t_1().border_color(gray(200))
+                } else {
+                    d.w(books::W_FORM)
+                        .mx_4()
+                        .mb_4()
+                        .border_1()
+                        .border_color(gray(200))
+                        .rounded(books::RADIUS_LG)
+                        .shadow(books::shadow_lg())
+                }
+            })
+            .child(form_header)
             .child(
                 div()
                     .id("form-scroll")
                     .flex_1()
+                    .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .child(div().v_flex().w_full().max_w(px(1000.)).children(sections)),
+                    .child(div().v_flex().w_full().children(sections)),
             )
+            .children(tab_bar);
+
+        let buttons = self.header_buttons(window, cx);
+        // `CommonForm.vue`'s `#header-left`: the schema's label beside Back and Forward.
+        let label = div()
+            .text_18()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(gray(600))
+            .whitespace_nowrap()
+            .child(t(&self.doc.schema().label));
+        let header = page_header_with("", label, cx)
+            .border_b_0()
+            .child(div().h_flex().gap_2().children(buttons));
+
+        let toast = self.info.clone().map(|message| {
+            toast(
+                message,
+                DialogKind::Success,
+                cx.listener(|this, _, _, cx| {
+                    this.info = None;
+                    cx.notify();
+                }),
+                window,
+            )
+        });
+
+        div()
+            .v_flex()
+            .size_full()
+            .bg(gray(25))
+            .text_13()
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .h_flex()
+                    .justify_center()
+                    .child(body),
+            )
+            .children(self.render_dialog(window, cx))
+            .children(toast)
+            .into_any_element()
     }
 }

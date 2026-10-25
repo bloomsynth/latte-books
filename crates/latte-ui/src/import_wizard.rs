@@ -10,7 +10,7 @@
 //! - Whether to submit what is imported is a checkbox; Books asks once the import starts.
 //! - The columns to pick are listed on the page; Books shows them in a dialog.
 
-use gpui_kit::component::button::*;
+use crate::widgets::Button;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
@@ -494,7 +494,7 @@ impl ImportWizard {
                             Button::new(("remove-row", r))
                                 .xsmall()
                                 .ghost()
-                                .icon(IconName::Close)
+                                .icon("x")
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.remove_row(r, cx)),
                                 ),

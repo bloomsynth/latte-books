@@ -5,6 +5,7 @@
 
 mod app;
 mod assistants_page;
+mod books;
 mod coa;
 mod dashboard;
 mod desk;
@@ -51,10 +52,11 @@ pub fn run() {
         latte_mcp::assistants::update_entries(&server);
     }
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(books::Assets)
         .run(|cx: &mut App| {
             i18n::load();
             gpui_kit::init(cx);
+            books::init(cx);
             let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

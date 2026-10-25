@@ -6,7 +6,7 @@
 //! - The period is picked in the header for the whole page; Books also has a picker on
 //!   each chart.
 
-use gpui_kit::component::button::*;
+use crate::widgets::Button;
 use gpui_kit::component::chart::{AreaChart, BarChart, PieChart};
 use gpui_kit::component::*;
 use gpui_kit::*;

@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use gpui_kit::component::button::*;
+use crate::widgets::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -1240,7 +1240,7 @@ impl PosPage {
                         Button::new(("less", idx))
                             .xsmall()
                             .ghost()
-                            .icon(IconName::Minus)
+                            .icon("minus")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.change_quantity(idx, -1.0, cx)
                             })),
@@ -1252,7 +1252,7 @@ impl PosPage {
                         Button::new(("more", idx))
                             .xsmall()
                             .ghost()
-                            .icon(IconName::Plus)
+                            .icon("plus")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.change_quantity(idx, 1.0, cx)
                             })),

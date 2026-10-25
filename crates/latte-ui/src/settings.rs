@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use gpui_kit::component::button::*;
+use crate::widgets::Button;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;

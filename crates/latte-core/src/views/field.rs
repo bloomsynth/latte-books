@@ -249,14 +249,7 @@ pub fn display(formatter: &Formatter, field: &Field, value: Option<&DocValue>) -
         (Some(FieldType::Int), DocValue::Number(n)) => format!("{}", n.trunc() as i64),
         (Some(FieldType::Float), DocValue::Number(n)) => formatter.float(*n),
         (_, DocValue::Number(n)) => crate::fyo::model::helpers::js_number_string(*n),
-        (Some(FieldType::Datetime), DocValue::Date(ts)) => {
-            let zoned = ts.to_zoned(TimeZone::system());
-            format!(
-                "{} {}",
-                formatter.date(zoned.date()),
-                zoned.time().strftime("%H:%M")
-            )
-        }
+        (Some(FieldType::Datetime), DocValue::Date(ts)) => formatter.datetime(*ts),
         (_, DocValue::Date(ts)) => formatter.date(local_date(*ts)),
         (_, DocValue::Bool(b)) => if *b { "Yes" } else { "No" }.to_owned(),
         (_, DocValue::Text(text)) => text.clone(),

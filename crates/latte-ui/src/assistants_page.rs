@@ -1,7 +1,7 @@
 //! Set up AI assistants (Dime): connects the assistants on this computer to Latte Books,
 //! as DaVinci Resolve 21.1's File > Setup AI Assistants does. Not in Books.
 
-use gpui_kit::component::button::*;
+use crate::widgets::Button;
 use gpui_kit::component::*;
 use gpui_kit::*;
 

@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use gpui_kit::component::button::*;
+use crate::widgets::Button;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
