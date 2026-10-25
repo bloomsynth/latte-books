@@ -120,6 +120,10 @@ pub trait Text: Styled + Sized {
     fn text_18(self) -> Self {
         self.text_size(px(18.))
     }
+    /// `text-2xl`: 20px.
+    fn text_20(self) -> Self {
+        self.text_size(px(20.))
+    }
 }
 
 impl<T: Styled> Text for T {}
@@ -264,7 +268,9 @@ macro_rules! feather {
 }
 
 /// Books' two-tone sidebar icons (`src/components/Icons/18`, `24/general.vue`), drawn in
-/// the colours `Icons/base.vue` gives them, and the controls' own icons.
+/// the colours `Icons/base.vue` gives them, Get Started's cards', the chart of accounts'
+/// (`getIconComponent`),
+/// and the controls' own icons.
 static OWN: &[(&str, &[u8])] = &[
     (
         "books/check-on.svg",
@@ -277,6 +283,78 @@ static OWN: &[(&str, &[u8])] = &[
     (
         "books/selector.svg",
         include_bytes!("../icons/selector.svg"),
+    ),
+    (
+        "books/coa/assets.svg",
+        include_bytes!("../icons/coa/assets.svg"),
+    ),
+    (
+        "books/coa/expenses.svg",
+        include_bytes!("../icons/coa/expenses.svg"),
+    ),
+    (
+        "books/coa/income.svg",
+        include_bytes!("../icons/coa/income.svg"),
+    ),
+    (
+        "books/coa/liabilities.svg",
+        include_bytes!("../icons/coa/liabilities.svg"),
+    ),
+    (
+        "books/coa/leaf.svg",
+        include_bytes!("../icons/coa/leaf.svg"),
+    ),
+    (
+        "books/coa/folder.svg",
+        include_bytes!("../icons/coa/folder.svg"),
+    ),
+    (
+        "books/get-started/customer.svg",
+        include_bytes!("../icons/get-started/customer.svg"),
+    ),
+    (
+        "books/get-started/general.svg",
+        include_bytes!("../icons/get-started/general.svg"),
+    ),
+    (
+        "books/get-started/green-check.svg",
+        include_bytes!("../icons/get-started/green-check.svg"),
+    ),
+    (
+        "books/get-started/invoice.svg",
+        include_bytes!("../icons/get-started/invoice.svg"),
+    ),
+    (
+        "books/get-started/item.svg",
+        include_bytes!("../icons/get-started/item.svg"),
+    ),
+    (
+        "books/get-started/opening-ac.svg",
+        include_bytes!("../icons/get-started/opening-ac.svg"),
+    ),
+    (
+        "books/get-started/percentage.svg",
+        include_bytes!("../icons/get-started/percentage.svg"),
+    ),
+    (
+        "books/get-started/purchase-invoice.svg",
+        include_bytes!("../icons/get-started/purchase-invoice.svg"),
+    ),
+    (
+        "books/get-started/review-ac.svg",
+        include_bytes!("../icons/get-started/review-ac.svg"),
+    ),
+    (
+        "books/get-started/sales-invoice.svg",
+        include_bytes!("../icons/get-started/sales-invoice.svg"),
+    ),
+    (
+        "books/get-started/supplier.svg",
+        include_bytes!("../icons/get-started/supplier.svg"),
+    ),
+    (
+        "books/get-started/system.svg",
+        include_bytes!("../icons/get-started/system.svg"),
     ),
     sidebar!("common-entries", "active"),
     sidebar!("common-entries", "inactive"),

@@ -13,9 +13,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::widgets::Button;
+use crate::books::{self, Text as _, black, gray, white};
+use crate::widgets::{Button, control_frame, mandatory_mark};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::t;
@@ -76,6 +78,16 @@ impl SetupWizard {
         let mut texts = HashMap::new();
         for (fieldname, _, placeholder) in TEXT_FIELDS {
             let state = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+            // Submit is offered once every value is filled (`areAllValuesFilled`).
+            subscriptions.push(cx.subscribe_in(
+                &state,
+                window,
+                |_, _, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            ));
             texts.insert(fieldname, state);
         }
 
@@ -98,16 +110,22 @@ impl SetupWizard {
         subscriptions.push(cx.subscribe_in(
             &currency,
             window,
-            |this, _, event: &LinkPicked, _, _| this.options.currency = event.0.to_string(),
+            |this, _, event: &LinkPicked, _, cx| {
+                this.options.currency = event.0.to_string();
+                cx.notify();
+            },
         ));
 
         let charts = COA_LIST.iter().map(|(name, _)| (*name).to_owned());
         let chart = cx.new(|cx| LinkInput::new(options(charts), "Select CoA", window, cx));
-        subscriptions.push(
-            cx.subscribe_in(&chart, window, |this, _, event: &LinkPicked, _, _| {
-                this.options.chart_of_accounts = event.0.to_string()
-            }),
-        );
+        subscriptions.push(cx.subscribe_in(
+            &chart,
+            window,
+            |this, _, event: &LinkPicked, _, cx| {
+                this.options.chart_of_accounts = event.0.to_string();
+                cx.notify();
+            },
+        ));
 
         let start = cx.new(|cx| InputState::new(window, cx).placeholder("Fiscal Year Start Date"));
         let end = cx.new(|cx| InputState::new(window, cx).placeholder("Fiscal Year End Date"));
@@ -115,10 +133,12 @@ impl SetupWizard {
             subscriptions.push(cx.subscribe_in(
                 state,
                 window,
-                |this, _, event: &InputEvent, _, cx| {
-                    if matches!(event, InputEvent::Blur) {
+                |this, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Blur => {
                         let _ = this.read_dates(cx);
                     }
+                    InputEvent::Change => cx.notify(),
+                    _ => {}
                 },
             ));
         }
@@ -278,107 +298,168 @@ fn new_file_path(company_name: &str) -> Result<PathBuf, String> {
 }
 
 impl Render for SetupWizard {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let labelled = |label: &str, control: AnyElement, cx: &App| {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A required field: its label, then its control with Books' red mark while empty.
+        let labelled = |label: &str, control: AnyElement, empty: bool, cx: &App| {
             div()
                 .v_flex()
-                .gap_1()
+                .mb_auto()
                 .child(field_label(label.to_owned(), true, cx))
-                .child(control)
+                .child(
+                    div()
+                        .relative()
+                        .child(control)
+                        .when(empty, |d| d.child(mandatory_mark())),
+                )
+                .into_any_element()
         };
-        let mut fields: Vec<AnyElement> = Vec::new();
-        for (fieldname, label, _) in TEXT_FIELDS {
-            let input = Input::new(&self.texts[fieldname])
-                .small()
-                .into_any_element();
-            fields.push(labelled(label, input, cx).into_any_element());
+        let text = |state: &Entity<InputState>, window: &Window, cx: &App| {
+            let focused = state.focus_handle(cx).is_focused(window);
+            control_frame(false, focused)
+                .child(
+                    Input::new(state)
+                        .appearance(false)
+                        .h(px(32.))
+                        .px_3()
+                        .text_13(),
+                )
+                .into_any_element()
+        };
+        let empty = |state: &Entity<InputState>, cx: &App| state.read(cx).value().trim().is_empty();
+        let picked = |link: &Entity<LinkInput>, cx: &App| link.read(cx).value().is_some();
+        for link in [&self.country, &self.currency, &self.chart] {
+            let mandatory = !picked(link, cx);
+            link.update(cx, |link, _| link.set_mandatory(mandatory));
         }
-        fields.insert(
-            3,
-            labelled("Country", self.country.clone().into_any_element(), cx).into_any_element(),
-        );
-        fields.insert(
-            4,
-            labelled("Currency", self.currency.clone().into_any_element(), cx).into_any_element(),
-        );
-        fields.push(
+        let filled = TEXT_FIELDS.iter().all(|(f, ..)| !empty(&self.texts[f], cx))
+            && [&self.country, &self.currency, &self.chart]
+                .into_iter()
+                .all(|l| picked(l, cx))
+            && !empty(&self.start, cx)
+            && !empty(&self.end, cx);
+
+        let field = |name: &str, window: &Window, cx: &App| {
+            let state = &self.texts[name];
+            let label = TEXT_FIELDS
+                .iter()
+                .find(|(f, ..)| *f == name)
+                .map_or("", |(_, l, _)| l);
+            labelled(label, text(state, window, cx), empty(state, cx), cx)
+        };
+        // `CommonFormSection.vue` for the schema's sections: Default, Locale, Accounting.
+        let section = |title: Option<&str>, fields: Vec<AnyElement>, first: bool| {
+            div()
+                .v_flex()
+                .p_4()
+                .when(!first, |d| d.border_t_1().border_color(gray(200)))
+                .children(title.map(|title| {
+                    div()
+                        .mb_4()
+                        .text_13()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(t(title))
+                }))
+                .child(div().grid().grid_cols(2).gap_4().gap_x_8().children(fields))
+        };
+        let default = vec![
+            field("companyName", window, cx),
+            field("fullname", window, cx),
+            field("email", window, cx),
+        ];
+        let locale = vec![
+            labelled(
+                "Country",
+                self.country.clone().into_any_element(),
+                false,
+                cx,
+            ),
+            labelled(
+                "Currency",
+                self.currency.clone().into_any_element(),
+                false,
+                cx,
+            ),
+        ];
+        let accounting = vec![
+            field("bankName", window, cx),
             labelled(
                 "Chart of Accounts",
                 self.chart.clone().into_any_element(),
+                false,
                 cx,
-            )
-            .into_any_element(),
-        );
-        fields.push(
+            ),
             labelled(
                 "Fiscal Year Start Date",
-                Input::new(&self.start).small().into_any_element(),
+                text(&self.start, window, cx),
+                empty(&self.start, cx),
                 cx,
-            )
-            .into_any_element(),
-        );
-        fields.push(
+            ),
             labelled(
                 "Fiscal Year End Date",
-                Input::new(&self.end).small().into_any_element(),
+                text(&self.end, window, cx),
+                empty(&self.end, cx),
                 cx,
-            )
-            .into_any_element(),
-        );
+            ),
+        ];
 
-        div().size_full().h_flex().justify_center().child(
-            div()
-                .v_flex()
-                .w(px(640.))
-                .border_1()
-                .border_color(theme.border)
-                .rounded_lg()
-                .child(
-                    div()
-                        .v_flex()
-                        .p_4()
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .child(
-                            div()
-                                .text_xl()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("Set up your organization"),
-                        ),
-                )
-                .children(self.error.clone().map(|e| error_message(e, cx)))
-                .child(
-                    div()
-                        .grid()
-                        .grid_cols(2)
-                        .gap_x_6()
-                        .gap_y_3()
-                        .p_4()
-                        .children(fields),
-                )
-                .child(
-                    div()
-                        .h_flex()
-                        .justify_between()
-                        .p_4()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .child(
-                            Button::new("back")
-                                .small()
-                                .ghost()
-                                .label(t("Cancel"))
-                                .on_click(cx.listener(|_, _, _, cx| cx.emit(SetUp::Back))),
-                        )
-                        .child(
-                            Button::new("submit")
-                                .small()
-                                .primary()
-                                .label(t("Submit"))
-                                .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
-                        ),
-                ),
-        )
+        div()
+            .size_full()
+            .h_flex()
+            .justify_center()
+            .bg(gray(25))
+            .child(
+                div()
+                    .v_flex()
+                    .w(books::W_FORM)
+                    .mx_4()
+                    .mb_4()
+                    .bg(white())
+                    .border_1()
+                    .border_color(gray(200))
+                    .rounded(books::RADIUS_LG)
+                    .shadow(books::shadow_lg())
+                    .text_13()
+                    .text_color(gray(900))
+                    .child(
+                        div()
+                            .h_flex()
+                            .h(px(56.))
+                            .px_4()
+                            .border_b_1()
+                            .border_color(gray(200))
+                            .text_18()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(black())
+                            .child(t("Set up your organization")),
+                    )
+                    .children(self.error.clone().map(|e| error_message(e, cx)))
+                    .child(section(None, default, true))
+                    .child(section(Some("Locale"), locale, false))
+                    .child(section(Some("Accounting"), accounting, false))
+                    .child(
+                        div()
+                            .h_flex()
+                            .justify_between()
+                            .p_4()
+                            .border_t_1()
+                            .border_color(gray(200))
+                            .child(
+                                Button::new("back")
+                                    .label(t("Cancel"))
+                                    .w_24()
+                                    .border_1()
+                                    .border_color(gray(200))
+                                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SetUp::Back))),
+                            )
+                            .child(
+                                Button::new("submit")
+                                    .primary()
+                                    .label(t("Submit"))
+                                    .w_24()
+                                    .disabled(!filled)
+                                    .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
+                            ),
+                    ),
+            )
     }
 }

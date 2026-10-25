@@ -3,13 +3,16 @@
 //! A group opens on click; an account opens its form. Each account shows its balance, a
 //! group can take a new account or group, and Expand/Collapse open or close every group.
 //!
+//! Hovering a row offers Add Account, Add Group and Delete, as in Books.
+//!
 //! Differences from Books:
 //! - An account opens in the full form, not the quick-edit panel.
 //! - Balances are summed as money, not as floating-point numbers.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::widgets::Button;
+use crate::books::{Text as _, gray};
+use crate::widgets::{Button, DialogButton, Kind as DialogKind, dialog, toast};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -42,12 +45,19 @@ struct Adding {
 
 pub struct ChartOfAccounts {
     session: Shared,
-    root_label: String,
     children: HashMap<Option<String>, Vec<Account>>,
     expanded: HashSet<String>,
     totals: HashMap<String, (Money, Money)>,
     adding: Option<Adding>,
     error: Option<String>,
+    /// An account waiting for Delete to be confirmed (`deleteDocWithPrompt`).
+    deleting: Option<Account>,
+    /// A dialog's title and text, as `showDialog` shows an error.
+    dialog: Option<(String, String)>,
+    /// What worked, in a toast.
+    info: Option<String>,
+    /// `isAllExpanded`, `isAllCollapsed`: which of Expand and Collapse are offered.
+    all_expanded: bool,
 }
 
 impl EventEmitter<Navigate> for ChartOfAccounts {}
@@ -66,15 +76,17 @@ fn is_credit(root_type: &str) -> bool {
 
 impl ChartOfAccounts {
     pub fn new(session: Shared, _: &mut Window, cx: &mut Context<Self>) -> Self {
-        let root_label = session.borrow().company_name();
         let mut page = Self {
             session,
-            root_label,
             children: HashMap::new(),
             expanded: HashSet::new(),
             totals: HashMap::new(),
             adding: None,
             error: None,
+            deleting: None,
+            dialog: None,
+            info: None,
+            all_expanded: false,
         };
         page.load_totals();
         page.fetch_children(None, cx);
@@ -170,6 +182,7 @@ impl ChartOfAccounts {
             return;
         }
         if self.expanded.remove(&account.name) {
+            self.all_expanded = false;
             cx.notify();
             return;
         }
@@ -192,6 +205,7 @@ impl ChartOfAccounts {
     }
 
     fn toggle_all(&mut self, expand: bool, cx: &mut Context<Self>) {
+        self.all_expanded = expand;
         if !expand {
             self.expanded.clear();
             cx.notify();
@@ -319,6 +333,51 @@ impl ChartOfAccounts {
         }
     }
 
+    /// `canDeleteAccount`: a group with accounts under it can't go.
+    fn ask_delete(&mut self, account: &Account, cx: &mut Context<Self>) {
+        let key = Some(account.name.clone());
+        let has_children = match self.children.get(&key) {
+            Some(children) => !children.is_empty(),
+            None => self.fetch_children(Some(&account.name), cx),
+        };
+        if has_children {
+            self.dialog = Some((
+                t("Cannot Delete Account"),
+                format!("{} has linked child accounts.", account.name),
+            ));
+        } else {
+            self.deleting = Some(account.clone());
+        }
+        cx.notify();
+    }
+
+    fn delete(&mut self, cx: &mut Context<Self>) {
+        let Some(account) = self.deleting.take() else {
+            return;
+        };
+        let result = {
+            let mut s = self.session.borrow_mut();
+            let fyo = &mut s.fyo;
+            fyo.get_doc("Account", Some(&account.name))
+                .and_then(|mut doc| doc.delete(fyo))
+        };
+        match result {
+            Ok(()) => {
+                self.info = Some(format!("{} deleted", account.name));
+                let parent = self
+                    .children
+                    .iter()
+                    .find(|(_, list)| list.iter().any(|a| a.name == account.name))
+                    .map(|(parent, _)| parent.clone());
+                if let Some(parent) = parent {
+                    self.fetch_children(parent.as_deref(), cx);
+                }
+            }
+            Err(e) => self.dialog = Some((t("Error"), e.to_string())),
+        }
+        cx.notify();
+    }
+
     fn rows(&self, parent: Option<&String>, level: usize, out: &mut Vec<(Account, usize)>) {
         for account in self.children.get(&parent.cloned()).into_iter().flatten() {
             out.push((account.clone(), level));
@@ -329,96 +388,136 @@ impl ChartOfAccounts {
     }
 }
 
+/// `getIconComponent`: the root accounts' own icons, else a folder or a circle.
+fn account_icon(account: &Account) -> Img {
+    let (path, size) = match account.name.as_str() {
+        "Application of Funds (Assets)" => ("books/coa/assets.svg", 16.),
+        "Expenses" => ("books/coa/expenses.svg", 16.),
+        "Income" => ("books/coa/income.svg", 16.),
+        "Source of Funds (Liabilities)" => ("books/coa/liabilities.svg", 16.),
+        _ if account.is_group => ("books/coa/folder.svg", 12.),
+        _ => ("books/coa/leaf.svg", 8.),
+    };
+    img(path).size(px(size)).flex_none()
+}
+
+/// The small text buttons a row shows on hover.
+fn row_button(id: impl Into<ElementId>, label: String) -> Stateful<Div> {
+    div()
+        .id(id)
+        .text_11()
+        .text_color(gray(800))
+        .cursor_pointer()
+        .hover(|d| d.text_color(gray(900)))
+        .child(label)
+}
+
 impl Render for ChartOfAccounts {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header = page_header(t("Chart of Accounts"), cx).child(
             div()
                 .h_flex()
                 .gap_2()
-                .child(
-                    Button::new("expand")
-                        .small()
-                        .ghost()
-                        .label(t("Expand"))
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_all(true, cx))),
-                )
-                .child(
-                    Button::new("collapse")
-                        .small()
-                        .ghost()
-                        .label(t("Collapse"))
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_all(false, cx))),
-                ),
+                .when(!self.all_expanded, |d| {
+                    d.child(
+                        Button::new("expand")
+                            .label(t("Expand"))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_all(true, cx))),
+                    )
+                })
+                .when(!self.expanded.is_empty(), |d| {
+                    d.child(
+                        Button::new("collapse")
+                            .label(t("Collapse"))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_all(false, cx))),
+                    )
+                }),
         );
         let mut rows = Vec::new();
-        self.rows(None, 1, &mut rows);
-        let mut children: Vec<AnyElement> = vec![
-            div()
-                .h_flex()
-                .h(px(36.))
-                .px_4()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(self.root_label.clone())
-                .into_any_element(),
-        ];
+        self.rows(None, 0, &mut rows);
+        let mut children: Vec<AnyElement> = Vec::new();
         for (i, (account, level)) in rows.into_iter().enumerate() {
-            let indent = px(16. + 24. * level as f32);
-            let expanded = self.expanded.contains(&account.name);
-            let marker = match (account.is_group, expanded) {
-                (true, true) => "▾ ",
-                (true, false) => "▸ ",
-                _ => "",
-            };
+            // `getItemStyle`: `calc(1rem + 2rem * level)`, one row high plus its border.
+            let indent = px(16. + 32. * level as f32);
             let click = account.clone();
             let add_account = account.clone();
             let add_group = account.clone();
+            let delete = account.clone();
+            let group = SharedString::from(format!("account-row-{i}"));
             children.push(
                 div()
                     .id(("account", i))
-                    .group("account-row")
+                    .group(group.clone())
                     .h_flex()
-                    .h(px(34.))
+                    .flex_none()
+                    .h(px(49.))
                     .pl(indent)
                     .pr_4()
-                    .gap_2()
+                    .border_b_1()
+                    .border_color(gray(200))
                     .cursor_pointer()
-                    .hover(|d| d.bg(theme.list_hover))
+                    .hover(|d| d.bg(gray(50)))
+                    .map(|d| if level == 0 { d.text_14() } else { d.text_13() })
                     .on_click(cx.listener(move |this, _, _, cx| this.on_click(&click, cx)))
-                    .child(div().flex_1().child(format!("{marker}{}", account.name)))
-                    .when(account.is_group, |d| {
-                        d.child(
-                            div()
-                                .h_flex()
-                                .gap_1()
-                                .invisible()
-                                .group_hover("account-row", |d| d.visible())
+                    .child(
+                        div()
+                            .w_4()
+                            .h_flex()
+                            .justify_center()
+                            .child(account_icon(&account)),
+                    )
+                    .child(
+                        div()
+                            .ml_4()
+                            .when(level == 0, |d| d.font_weight(FontWeight::SEMIBOLD))
+                            .child(account.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .ml_6()
+                            .h_flex()
+                            .gap_3()
+                            .invisible()
+                            .group_hover(group, |d| d.visible())
+                            .when(account.is_group, |d| {
+                                d.child(row_button(("add-account", i), t("Add Account")).on_click(
+                                    cx.listener(move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        this.start_adding(&add_account, false, window, cx)
+                                    }),
+                                ))
                                 .child(
-                                    Button::new(("add-account", i))
-                                        .xsmall()
-                                        .ghost()
-                                        .label(t("Add Account"))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            cx.stop_propagation();
-                                            this.start_adding(&add_account, false, window, cx)
-                                        })),
-                                )
-                                .child(
-                                    Button::new(("add-group", i))
-                                        .xsmall()
-                                        .ghost()
-                                        .label(t("Add Group"))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                    row_button(("add-group", i), t("Add Group")).on_click(
+                                        cx.listener(move |this, _, window, cx| {
                                             cx.stop_propagation();
                                             this.start_adding(&add_group, true, window, cx)
-                                        })),
-                                ),
-                        )
-                    })
+                                        }),
+                                    ),
+                                )
+                            })
+                            .child(
+                                row_button(
+                                    ("delete-account", i),
+                                    t(if account.is_group {
+                                        "Delete Group"
+                                    } else {
+                                        "Delete Account"
+                                    }),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.ask_delete(&delete, cx)
+                                    },
+                                )),
+                            ),
+                    )
                     .when(!account.is_group, |d| {
                         d.child(
                             div()
-                                .text_color(theme.muted_foreground)
+                                .ml_auto()
+                                .text_13()
+                                .text_color(gray(800))
                                 .child(self.balance(&account)),
                         )
                     })
@@ -427,40 +526,124 @@ impl Render for ChartOfAccounts {
             if let Some(adding) = &self.adding
                 && adding.parent == account.name
             {
-                let label = if adding.is_group {
-                    "Add Group"
-                } else {
-                    "Add Account"
+                let icon = Account {
+                    name: String::new(),
+                    is_group: adding.is_group,
+                    root_type: String::new(),
+                    account_type: String::new(),
                 };
+                let parent = account.clone();
+                let is_group = adding.is_group;
+                let input = adding.input.clone();
                 children.push(
                     div()
                         .h_flex()
-                        .h(px(36.))
-                        .pl(px(16. + 24. * (level + 1) as f32))
+                        .flex_none()
+                        .h(px(49.))
+                        .pl(px(16. + 32. * (level + 1) as f32))
                         .pr_4()
-                        .gap_2()
-                        .child(div().w(px(280.)).child(Input::new(&adding.input).small()))
+                        .border_b_1()
+                        .border_color(gray(200))
+                        .text_13()
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(format!("{label}: press Enter to create")),
+                                .w_4()
+                                .h_flex()
+                                .justify_center()
+                                .child(account_icon(&icon)),
+                        )
+                        .child(
+                            div()
+                                .ml_4()
+                                .h_flex()
+                                .child(
+                                    div().w(px(200.)).child(
+                                        Input::new(&adding.input).appearance(false).text_13(),
+                                    ),
+                                )
+                                .child(row_button("adding-save", t("Save")).ml_4().on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        let name = input.read(cx).value().trim().to_owned();
+                                        if !name.is_empty() {
+                                            this.create(&parent, &name, is_group, cx);
+                                        }
+                                    }),
+                                ))
+                                .child(row_button("adding-cancel", t("Cancel")).ml_4().on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.adding = None;
+                                        cx.notify();
+                                    }),
+                                )),
                         )
                         .into_any_element(),
                 );
             }
         }
+
+        let dialog = if let Some((title, detail)) = self.dialog.clone() {
+            let close = cx.listener(|this, _, _, cx| {
+                this.dialog = None;
+                cx.notify();
+            });
+            Some(
+                dialog(
+                    title,
+                    Some(detail.into()),
+                    DialogKind::Error,
+                    vec![DialogButton::new(t("Okay"), false, close)],
+                    window,
+                )
+                .into_any_element(),
+            )
+        } else {
+            self.deleting.as_ref().map(|account| {
+                let yes = cx.listener(|this, _, _, cx| this.delete(cx));
+                let no = cx.listener(|this, _, _, cx| {
+                    this.deleting = None;
+                    cx.notify();
+                });
+                dialog(
+                    format!("Delete {}?", account.name),
+                    Some(t("This action is permanent.").into()),
+                    DialogKind::Warning,
+                    vec![
+                        DialogButton::new(t("Yes"), true, yes),
+                        DialogButton::new(t("No"), false, no),
+                    ],
+                    window,
+                )
+                .into_any_element()
+            })
+        };
+        let toast = self.info.clone().map(|message| {
+            toast(
+                message,
+                DialogKind::Success,
+                cx.listener(|this, _, _, cx| {
+                    this.info = None;
+                    cx.notify();
+                }),
+                window,
+            )
+        });
+
         div()
             .v_flex()
             .size_full()
+            .text_color(gray(900))
             .child(header)
             .children(self.error.clone().map(|e| error_message(e, cx)))
             .child(
                 div()
                     .id("coa")
+                    .v_flex()
                     .flex_1()
+                    .mb_4()
                     .overflow_y_scroll()
                     .children(children),
             )
+            .children(dialog)
+            .children(toast)
     }
 }

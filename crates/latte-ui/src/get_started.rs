@@ -1,10 +1,8 @@
 //! Get Started: `src/pages/GetStarted.vue` @ v0.36.0. A card for each first step, with
-//! Set Up and Documentation buttons shown while the pointer is over it, and a check once
-//! it's done.
-//!
-//! Differences from Books:
-//! - The cards have no pictures, only the check once done.
+//! its icon, Set Up and Documentation buttons shown while the pointer is over it, and a
+//! green check once it's done.
 
+use crate::books::{Text as _, gray};
 use crate::widgets::Button;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -69,7 +67,6 @@ impl GetStartedPage {
     }
 
     fn render_card(&self, card: &Card, cx: &mut Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme().clone();
         let completed = self.is_completed(card);
         let active = self.active == Some(card.key) && !completed;
         let key = card.key;
@@ -78,7 +75,6 @@ impl GetStartedPage {
             let card = card.clone();
             buttons = buttons.child(
                 Button::new(SharedString::from(format!("set-up-{key}")))
-                    .small()
                     .primary()
                     .label(t("Set Up"))
                     .on_click(cx.listener(move |this, _, _, cx| this.set_up(&card, cx))),
@@ -88,7 +84,6 @@ impl GetStartedPage {
             let card = card.clone();
             buttons = buttons.child(
                 Button::new(SharedString::from(format!("documentation-{key}")))
-                    .small()
                     .label(t("Documentation"))
                     .on_click(cx.listener(move |this, _, _, cx| this.documentation(&card, cx))),
             );
@@ -102,8 +97,8 @@ impl GetStartedPage {
             .h(px(160.))
             .p_4()
             .border_1()
-            .border_color(theme.border)
-            .rounded_lg()
+            .border_color(gray(200))
+            .rounded(crate::books::RADIUS_LG)
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
                     this.active = Some(key);
@@ -115,19 +110,28 @@ impl GetStartedPage {
             .child(
                 div()
                     .v_flex()
-                    .when(completed, |d| {
+                    // `getIconComponent`: the card's icon, or a green check once done;
+                    // none while its buttons show.
+                    .when(completed || !active, |d| {
                         d.child(
-                            Icon::new(IconName::CircleCheck)
-                                .text_color(theme.green)
-                                .mb_4(),
+                            img(SharedString::from(format!(
+                                "books/get-started/{}.svg",
+                                if completed {
+                                    "green-check"
+                                } else {
+                                    card_icon(key)
+                                }
+                            )))
+                            .size_5()
+                            .mb_4(),
                         )
                     })
                     .child(div().font_weight(FontWeight::MEDIUM).child(t(card.label)))
                     .child(
                         div()
                             .mt_2()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
+                            .text_12()
+                            .text_color(gray(800))
                             .child(t(card.description)),
                     ),
             )
@@ -135,9 +139,25 @@ impl GetStartedPage {
     }
 }
 
+/// `getGetStartedConfig`'s icon for a card.
+fn card_icon(key: &str) -> &'static str {
+    match key {
+        "General" => "general",
+        "Print" => "invoice",
+        "System" => "system",
+        "Review Accounts" => "review-ac",
+        "Opening Balances" => "opening-ac",
+        "Add Taxes" => "percentage",
+        "Add Sales Items" | "Add Purchase Items" => "item",
+        "Add Customers" => "customer",
+        "Create Sales Invoice" => "sales-invoice",
+        "Add Suppliers" => "supplier",
+        _ => "purchase-invoice",
+    }
+}
+
 impl Render for GetStartedPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
         let sections: Vec<Div> = self
             .sections
             .clone()
@@ -152,7 +172,7 @@ impl Render for GetStartedPage {
                     .v_flex()
                     .p_4()
                     .border_b_1()
-                    .border_color(theme.border)
+                    .border_color(gray(200))
                     .child(
                         div()
                             .font_weight(FontWeight::MEDIUM)
