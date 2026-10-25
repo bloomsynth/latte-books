@@ -81,7 +81,7 @@ pub fn big_button(
         .active(move |s| s.bg(bg.blend(hsla(0., 0., 0., 0.05))))
         .text_14()
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(white())
+        .text_color(books::hex(0xFFFFFF))
         .whitespace_nowrap()
         .child(label.to_uppercase())
 }

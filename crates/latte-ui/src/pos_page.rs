@@ -1563,7 +1563,7 @@ impl Render for PosPage {
             Button::new("close-shift")
                 .label(t("Close POS Shift"))
                 .bg(books::color("red", 500))
-                .text_color(white())
+                .text_color(books::hex(0xFFFFFF))
                 .font_weight(FontWeight::MEDIUM)
                 .on_click(cx.listener(|this, _, window, cx| {
                     if matches!(this.mode, Mode::Selling) {
