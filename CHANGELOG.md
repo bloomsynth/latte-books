@@ -3,6 +3,11 @@
 What changes in each release of Latte Books. A release's notes on GitHub are its section
 here.
 
+## [Unreleased]
+
+- On Windows, the installer updates an older Latte Books in place, without asking whether
+  to uninstall it first.
+
 ## [0.1.0-beta.2] - 2026-10-25
 
 - The dashboard draws Frappe Books' charts: cash in and out as shaded areas, profit and

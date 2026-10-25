@@ -51,3 +51,6 @@ binaries = [
 
 [package.metadata.packager.nsis]
 installer-mode = "currentUser"
+# cargo-packager's template, changed to update an older version in place without asking to
+# uninstall it first (see the file's header).
+template = "installer.nsi"
