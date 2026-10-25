@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-40 -32 816 510" width="816" height="510" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Latte Books against Frappe Books</title>
+  <desc id="d">Opening a company until the window is ready: Latte Books 0.8 seconds, Frappe Books 7.1 seconds. Memory with a company open: Latte Books 18 MB, Frappe Books 150 MB. Windows installer: Latte Books 25 MB, Frappe Books 76 MB.</desc>
+  <style>
+    .h { font-size: 17px; font-weight: 600; fill: #24292f; }
+    .s { font-size: 13px; fill: #57606a; }
+    .l { font-size: 15px; fill: #24292f; }
+    .v { font-size: 15px; font-weight: 600; fill: #24292f; }
+    .latte { fill: #C47A35; }
+    .frappe { fill: #AEB6BF; }
+    .card { fill: #f6f8fa; stroke: #d0d7de; }
+    @media (prefers-color-scheme: dark) {
+      .card { fill: #161b22; stroke: #30363d; }
+      .h, .l, .v { fill: #e6edf3; }
+      .s { fill: #8d96a0; }
+      .latte { fill: #D99A5B; }
+      .frappe { fill: #59636e; }
+    }
+  </style>
+
+  <rect class="card" x="-39.5" y="-31.5" width="815" height="509" rx="12"/>
+
+  <!-- Bars run from x=150 to at most x=670 (520 px for the larger value). -->
+  <text class="h" x="0" y="24">Open a company, until the window is ready</text>
+  <text class="s" x="0" y="44">Seconds, lower is better</text>
+  <text class="l" x="0" y="78">Latte Books</text>
+  <rect class="latte" x="150" y="62" width="58" height="22" rx="4"/>
+  <text class="v" x="218" y="78">0.8 s</text>
+  <text class="l" x="0" y="112">Frappe Books</text>
+  <rect class="frappe" x="150" y="96" width="520" height="22" rx="4"/>
+  <text class="v" x="680" y="112">7.1 s</text>
+
+  <text class="h" x="0" y="174">Memory, with a company open</text>
+  <text class="s" x="0" y="194">Megabytes in Task Manager, lower is better</text>
+  <text class="l" x="0" y="228">Latte Books</text>
+  <rect class="latte" x="150" y="212" width="62" height="22" rx="4"/>
+  <text class="v" x="222" y="228">18 MB</text>
+  <text class="l" x="0" y="262">Frappe Books</text>
+  <rect class="frappe" x="150" y="246" width="520" height="22" rx="4"/>
+  <text class="v" x="680" y="262">150 MB</text>
+
+  <text class="h" x="0" y="324">Windows installer</text>
+  <text class="s" x="0" y="344">Megabytes, lower is better</text>
+  <text class="l" x="0" y="378">Latte Books</text>
+  <rect class="latte" x="150" y="362" width="172" height="22" rx="4"/>
+  <text class="v" x="332" y="378">25 MB</text>
+  <text class="l" x="0" y="412">Frappe Books</text>
+  <rect class="frappe" x="150" y="396" width="520" height="22" rx="4"/>
+  <text class="v" x="680" y="412">76 MB</text>
+</svg>

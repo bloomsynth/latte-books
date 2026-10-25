@@ -51,6 +51,65 @@ Tests that write make their own company files in the temp folder. Example progra
 write refuse a file whose name doesn't contain "test", so they can't touch a real company by
 mistake; keep that rule in any you add.
 
+### Tools
+
+Read a company file from the command line (it is opened read-only):
+
+```sh
+cargo run -p latte-db --example dump -- "path/to/company.books.db"
+cargo run -p latte-core --example report_test -- "path/to/company.books.db" trial-balance
+```
+
+Set up a new company as the setup wizard does (the name must contain "test"):
+
+```sh
+cargo run -p latte-core --example setup_test -- "path/to/new test.books.db" India "Acme" "Acme Bank"
+```
+
+Make installers with [cargo-packager](https://github.com/crabnebula-dev/cargo-packager).
+They land in `target/packages`:
+
+```sh
+cargo install cargo-packager --locked
+cargo packager --release -p latte-app
+```
+
+To try AI assistants from a build, run `cargo build` first so `latte-mcp` sits next to
+`latte-books`.
+
+Startup can be timed against Frappe Books as [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
+describes. The Phase 0 prototypes are in `spikes`, each with its results.
+
+### Screenshots
+
+The README's screenshot is the dashboard of a made-up coffee roaster. To retake it, make
+the company, open it in Latte, and capture the window's contents without the title bar at
+1440×820 (2160×1230 at 150% scale):
+
+```sh
+cargo run -p latte-core --example screenshot_test -- "path/to/screenshot test.books.db"
+```
+
+Save the capture as `docs/images/raw/dashboard.png`, then frame it with
+`python docs/images/frame.py` (needs Pillow).
+
+### Project layout
+
+| Path | What it holds |
+|---|---|
+| `crates/latte-schema` | Loads Frappe Books' JSON schemas |
+| `crates/latte-db` | SQLite access to `.books.db` files |
+| `crates/latte-core` | Accounting rules and reports (no UI) |
+| `crates/latte-i18n` | Translations and formatting |
+| `crates/latte-print` | PDF printing with Typst |
+| `crates/latte-regional` | Country modules (India GST, Switzerland) |
+| `crates/latte-ui` | GPUI screens |
+| `crates/latte-app` | The `latte-books` executable, its icon and installer settings |
+| `crates/latte-mcp` | Dime, Latte's AI layer: the `latte-mcp` server AI assistants run, and their setup |
+| `vendor/books` | Files copied unchanged from Frappe Books v0.36.0 |
+| `spikes` | Phase 0 prototypes and their results |
+| `docs` | The plan, benchmarks, deviations from Frappe Books and the Frappe Books bugs Latte fixes |
+
 ## Pull requests
 
 - Keep one change per pull request, with a message that says what it does for someone using
