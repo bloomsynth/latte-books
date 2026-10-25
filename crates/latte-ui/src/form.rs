@@ -13,19 +13,20 @@
 //! Differences from Books:
 //! - A child row is edited only in its table's columns; Books also opens a row form with
 //!   the row's other fields.
-//! - Attachments and images are shown but can't be changed yet.
+//! - Attachments are shown but can't be changed yet.
 //! - No "View linked entries" panel, and the View actions aren't there yet.
 
 use std::collections::HashMap;
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::books::{self, Text as _, black, gray, white};
 use crate::widgets::{
     Button, DialogButton, Kind as DialogKind, check_box, control_frame, dialog, dropdown_item,
     field_label, mandatory_mark, pill, popover_panel, toast,
 };
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -62,8 +63,15 @@ enum Control {
         state: Entity<LinkInput>,
         _subscriptions: [Subscription; 2],
     },
+    /// `Text.vue`: three rows of text.
+    Text {
+        state: Entity<TextareaState>,
+        _subscription: Subscription,
+    },
     Check,
     Display,
+    /// `AttachImage.vue`: a picture kept in the field as a data URL.
+    Image,
 }
 
 /// An action waiting for the user to confirm it, as Books' dialogs ask.
@@ -96,6 +104,8 @@ pub struct FormPage {
     menu: Option<&'static str>,
     /// "Toggle between form and full width".
     full_width: bool,
+    /// The pictures of the AttachImage fields, by their data URL.
+    images: HashMap<String, Arc<Image>>,
     /// Shown inside another page (Settings), without its own header.
     embedded: bool,
     scroll: ScrollHandle,
@@ -118,6 +128,7 @@ impl FormPage {
             pending: None,
             menu: None,
             full_width: false,
+            images: HashMap::new(),
             embedded: false,
             scroll: ScrollHandle::new(),
         };
@@ -283,13 +294,22 @@ impl FormPage {
         let keys: Vec<Key> = wanted.iter().map(|(key, ..)| key.clone()).collect();
         self.controls.retain(|key, _| keys.contains(key));
         for (key, f, value, read_only, opts, mandatory) in wanted {
-            let kind = control_kind(&f, read_only);
+            let kind = match control_kind(&f, read_only) {
+                Kind::Input
+                    if f.fieldtype == Some(FieldType::Text) && matches!(key, Key::Field(_)) =>
+                {
+                    Kind::Text
+                }
+                kind => kind,
+            };
             let matches = matches!(
                 (self.controls.get(&key), kind),
                 (Some(Control::Input { .. }), Kind::Input)
+                    | (Some(Control::Text { .. }), Kind::Text)
                     | (Some(Control::Link { .. }), Kind::Link)
                     | (Some(Control::Check), Kind::Check)
                     | (Some(Control::Display), Kind::Display)
+                    | (Some(Control::Image), Kind::Image)
             );
             if !matches {
                 let control = self.make_control(&key, &f, kind, opts.clone(), window, cx);
@@ -297,6 +317,14 @@ impl FormPage {
             }
             match self.controls.get(&key) {
                 Some(Control::Input { state, .. }) => {
+                    let text = field::edit_text(&f, value.as_ref());
+                    state.update(cx, |input, cx| {
+                        if !input.focus_handle(cx).is_focused(window) && input.value() != text {
+                            input.set_value(text, window, cx);
+                        }
+                    });
+                }
+                Some(Control::Text { state, .. }) => {
                     let text = field::edit_text(&f, value.as_ref());
                     state.update(cx, |input, cx| {
                         if !input.focus_handle(cx).is_focused(window) && input.value() != text {
@@ -321,7 +349,53 @@ impl FormPage {
                 _ => {}
             }
         }
+        // The pictures shown, decoded once.
+        let urls: Vec<String> = self
+            .controls
+            .iter()
+            .filter(|(_, c)| matches!(c, Control::Image))
+            .filter_map(|(key, _)| match self.current_value(key) {
+                Some(DocValue::Text(url)) if !url.is_empty() => Some(url.clone()),
+                _ => None,
+            })
+            .collect();
+        self.images.retain(|url, _| urls.contains(url));
+        for url in urls {
+            if !self.images.contains_key(&url)
+                && let Some(image) = image_from_data_url(&url)
+            {
+                self.images.insert(url, Arc::new(image));
+            }
+        }
         cx.notify();
+    }
+
+    /// `AttachImage.vue`'s upload: a picture from a file, kept as a data URL.
+    fn pick_image(&mut self, key: Key, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t("Select Image").into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let url = data_url(&path);
+            this.update_in(cx, |this, window, cx| match url {
+                Ok(url) => this.set_value(&key, DocValue::Text(url), window, cx),
+                Err(e) => {
+                    this.field_errors.insert(key.clone(), e);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn make_control(
@@ -358,6 +432,25 @@ impl FormPage {
                     _subscription: subscription,
                 }
             }
+            Kind::Text => {
+                let state = cx.new(|cx| TextareaState::new(window, cx).placeholder(placeholder));
+                let key = key.clone();
+                let field = f.clone();
+                let subscription = cx.subscribe_in(
+                    &state,
+                    window,
+                    move |this, state, event: &InputEvent, window, cx| {
+                        if matches!(event, InputEvent::Blur) {
+                            let text = state.read(cx).value().to_string();
+                            this.commit_text(&key, &field, &text, window, cx);
+                        }
+                    },
+                );
+                Control::Text {
+                    state,
+                    _subscription: subscription,
+                }
+            }
             Kind::Link => {
                 let in_table = matches!(key, Key::Cell(..));
                 let linkable = f.fieldtype == Some(FieldType::Link);
@@ -389,6 +482,7 @@ impl FormPage {
             }
             Kind::Check => Control::Check,
             Kind::Display => Control::Display,
+            Kind::Image => Control::Image,
         }
     }
 
@@ -503,6 +597,9 @@ impl FormPage {
             .iter()
             .filter_map(|(key, control)| match control {
                 Control::Input { state, .. } => {
+                    Some((key.clone(), state.read(cx).value().to_string()))
+                }
+                Control::Text { state, .. } => {
                     Some((key.clone(), state.read(cx).value().to_string()))
                 }
                 _ => None,
@@ -1192,6 +1289,21 @@ impl FormPage {
                     .children(overlay)
                     .into_any_element()
             }
+            Some(Control::Text { state, .. }) => {
+                let focused = state.focus_handle(cx).is_focused(window);
+                // Three rows of 13px text at Books' line height, and `py-2`.
+                control_frame(false, focused)
+                    .items_start()
+                    .child(
+                        Textarea::new(state)
+                            .appearance(false)
+                            .h(px(3. * 19.5 + 16.))
+                            .px_1()
+                            .py_0()
+                            .text_13(),
+                    )
+                    .into_any_element()
+            }
             Some(Control::Link { state, .. }) => state.clone().into_any_element(),
             Some(Control::Check) => {
                 let checked = latte_core::fyo::model::helpers::is_truthy(self.current_value(key));
@@ -1235,6 +1347,86 @@ impl FormPage {
                     })
                     .into_any_element()
             }
+            Some(Control::Image) => {
+                let url = match self.current_value(key) {
+                    Some(DocValue::Text(url)) if !url.is_empty() => Some(url.clone()),
+                    _ => None,
+                };
+                let read_only = {
+                    let ctx = field::context(&s.fyo, &self.doc, None);
+                    field::is_read_only(f, &ctx)
+                };
+                let image = url.as_ref().and_then(|u| self.images.get(u).cloned());
+                let group = SharedString::from(format!("{key:?}-image"));
+                let upload_key = key.clone();
+                let clear_key = key.clone();
+                let has_value = url.is_some();
+                div()
+                    .id(group.clone())
+                    .group(group.clone())
+                    .relative()
+                    .size(px(135.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .overflow_hidden()
+                    .bg(white())
+                    .border_1()
+                    .border_color(gray(200))
+                    .rounded(books::RADIUS)
+                    .map(|d| match image {
+                        Some(image) => {
+                            d.child(img(image).size_full().object_fit(ObjectFit::Contain))
+                        }
+                        None => d.child(
+                            svg()
+                                .path("books/camera.svg")
+                                .w_6()
+                                .h(px(21.))
+                                .text_color(gray(300)),
+                        ),
+                    })
+                    .when(!read_only, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .invisible()
+                                .group_hover(group.clone(), |d| d.visible())
+                                .flex()
+                                .items_end()
+                                .justify_center()
+                                .bg(hsla(0., 0., 0., 0.2))
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("{key:?}-image-button")))
+                                        .mb_1()
+                                        .p(px(2.))
+                                        .rounded(books::RADIUS)
+                                        .bg(gray(100))
+                                        .cursor_pointer()
+                                        .child(books::icon(
+                                            if has_value { "x" } else { "upload" },
+                                            px(16.),
+                                            gray(600),
+                                        ))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            if has_value {
+                                                this.set_value(
+                                                    &clear_key,
+                                                    DocValue::Null,
+                                                    window,
+                                                    cx,
+                                                )
+                                            } else {
+                                                this.pick_image(upload_key.clone(), window, cx)
+                                            }
+                                        })),
+                                ),
+                        )
+                    })
+                    .into_any_element()
+            }
             Some(Control::Display) | None => {
                 let text = field::display(&s.formatter, f, self.current_value(key));
                 let link = (f.fieldtype == Some(FieldType::Link) && !text.is_empty()).then(|| {
@@ -1263,6 +1455,13 @@ impl FormPage {
                 } else {
                     control_frame(true, false).px_3()
                 };
+                // Books' read-only inputs still show their placeholder when empty.
+                let placeholder = (text.is_empty() && !in_table).then(|| {
+                    f.placeholder
+                        .clone()
+                        .or_else(|| f.label.clone())
+                        .unwrap_or_default()
+                });
                 frame
                     .when(link.is_some(), |d| d.pr_2())
                     .child(
@@ -1271,7 +1470,10 @@ impl FormPage {
                             .min_w_0()
                             .truncate()
                             .when(numeric, |d| d.h_flex().justify_end())
-                            .child(text),
+                            .map(|d| match placeholder {
+                                Some(placeholder) => d.text_color(gray(500)).child(placeholder),
+                                None => d.child(text),
+                            }),
                     )
                     .children(link)
                     .into_any_element()
@@ -1460,7 +1662,7 @@ impl FormPage {
             let wide = f.fieldtype == Some(FieldType::Table) || f.fieldname == "termsAndConditions";
             let body = if f.fieldtype == Some(FieldType::Table) {
                 self.render_table(f, window, cx).into_any_element()
-            } else if f.fieldtype == Some(FieldType::Check) {
+            } else if matches!(f.fieldtype, Some(FieldType::Check | FieldType::AttachImage)) {
                 self.render_control(&key, f, window, cx)
             } else {
                 let empty = self.current_value(&key).is_none_or(|v| {
@@ -1486,6 +1688,9 @@ impl FormPage {
             };
             div()
                 .when(wide, |d| d.col_span_full())
+                .when(f.fieldtype == Some(FieldType::AttachImage), |d| {
+                    d.row_span(2)
+                })
                 .when(f.fieldtype == Some(FieldType::Check), |d| d.mt_auto())
                 .when(f.fieldtype != Some(FieldType::Check), |d| d.mb_auto())
                 .child(body)
@@ -1549,6 +1754,38 @@ impl Action {
     }
 }
 
+/// A picture stored as `data:image/png;base64,…`.
+fn image_from_data_url(url: &str) -> Option<Image> {
+    use base64::Engine as _;
+    let (mime, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
+    Some(Image::from_bytes(ImageFormat::from_mime_type(mime)?, bytes))
+}
+
+/// A picture file as a data URL, as Books stores it.
+fn data_url(path: &std::path::Path) -> Result<String, String> {
+    use base64::Engine as _;
+    let extension = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let mime = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        _ => return Err(format!("{} isn't a picture Latte can show", path.display())),
+    };
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
 /// `getErrorLabel`: a dialog's title for an error.
 fn error_label(error: &latte_core::Error) -> &'static str {
     match error {
@@ -1572,9 +1809,11 @@ fn shows_formatted(f: &Field) -> bool {
 #[derive(Clone, Copy)]
 enum Kind {
     Input,
+    Text,
     Link,
     Check,
     Display,
+    Image,
 }
 
 fn is_choice(f: &Field) -> bool {
@@ -1596,8 +1835,9 @@ fn is_numeric(f: &Field) -> bool {
 fn control_kind(f: &Field, read_only: bool) -> Kind {
     match f.fieldtype {
         Some(FieldType::Check) => Kind::Check,
+        Some(FieldType::AttachImage) => Kind::Image,
         _ if read_only => Kind::Display,
-        Some(FieldType::Attachment | FieldType::AttachImage | FieldType::Button) => Kind::Display,
+        Some(FieldType::Attachment | FieldType::Button) => Kind::Display,
         _ if is_choice(f) => Kind::Link,
         _ => Kind::Input,
     }

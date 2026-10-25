@@ -356,6 +356,7 @@ static OWN: &[(&str, &[u8])] = &[
         "books/get-started/system.svg",
         include_bytes!("../icons/get-started/system.svg"),
     ),
+    ("books/camera.svg", include_bytes!("../icons/camera.svg")),
     sidebar!("common-entries", "active"),
     sidebar!("common-entries", "inactive"),
     sidebar!("dashboard", "active"),

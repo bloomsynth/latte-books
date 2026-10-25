@@ -4175,6 +4175,7 @@ dependencies = [
 name = "latte-ui"
 version = "0.1.0-beta.2"
 dependencies = [
+ "base64 0.22.1",
  "fastrand",
  "gpui-kit",
  "jiff",
