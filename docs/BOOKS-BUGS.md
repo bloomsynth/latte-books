@@ -49,6 +49,19 @@ what Books already saved is left as it is.
 - **How we know:** from the code.
 - **Test:** `one_payment_pays_two_invoices`.
 
+### A new payment can default to a group account
+
+- **In Books:** a new payment's cash or bank account is the first account of that type,
+  newest first, groups included. Setting up a company makes the Cash In Hand and Bank
+  Accounts groups just before their accounts, so on a fast computer they can share the
+  same creation time and the group can come first.
+- **What it does to your books:** the payment is posted to Cash In Hand or Bank Accounts,
+  a group, so it doesn't show in the cash account or the dashboard's Cashflow chart.
+- **In Latte:** a payment defaults only to an account that isn't a group.
+- **How we know:** from the code, and seen in Latte's own tests before the fix, which
+  failed now and then on fast CI machines.
+- **Test:** `a_payment_never_defaults_to_a_group_account`.
+
 ### A partial payment slips through until submit
 
 - **In Books:** with partial payments off, a payment for less than what is owed should

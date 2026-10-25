@@ -13,7 +13,8 @@ pub(super) fn payments() -> Fyo {
     let mut fyo = books();
     let cash = map([("name", text("Cash")), ("accountType", text("Cash"))]);
     fyo.db.update("Account", &cash).unwrap();
-    // Made after the Bank Accounts group, which has the Bank type too, so it's listed first.
+    // Made after the Bank Accounts group, which has the Bank type too, so it would be
+    // listed first even if groups weren't left out.
     let bank = map([
         ("name", text("Bank")),
         ("rootType", text("Asset")),
@@ -106,6 +107,32 @@ fn paying_an_invoice_in_full_posts_it_and_clears_what_is_owed() {
     );
     assert_eq!(outstanding(&fyo, "SalesInvoice", "SINV-1001"), "0.00");
     assert_eq!(outstanding(&fyo, "Party", "Acme"), "0.00");
+}
+
+#[test]
+fn a_payment_never_defaults_to_a_group_account() {
+    let mut fyo = payments();
+    // Newest, so listed first, as a group made in the same millisecond as its accounts
+    // can be.
+    let group = map([
+        ("name", text("Cash In Hand")),
+        ("rootType", text("Asset")),
+        ("accountType", text("Cash")),
+        ("isGroup", DocValue::Bool(true)),
+        ("lft", DocValue::Number(25.0)),
+        ("rgt", DocValue::Number(26.0)),
+        ("createdBy", text("Admin")),
+        ("modifiedBy", text("Admin")),
+        ("created", text("2025-01-03T00:00:00.000Z")),
+        ("modified", text("2025-01-03T00:00:00.000Z")),
+    ]);
+    fyo.db.insert("Account", &group).unwrap();
+    let invoice = submitted_invoice(&mut fyo, 3.0);
+
+    let mut payment = get_payment(&invoice, &fyo).unwrap().unwrap();
+    payment.sync(&mut fyo).unwrap();
+    assert_eq!(payment.get("paymentMethod"), Some(&text("Cash")));
+    assert_eq!(payment.get("paymentAccount"), Some(&text("Cash")));
 }
 
 #[test]

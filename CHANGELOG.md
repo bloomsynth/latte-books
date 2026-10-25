@@ -7,6 +7,9 @@ here.
 
 - On Windows, the installer updates an older Latte Books in place, without asking whether
   to uninstall it first.
+- A new payment no longer defaults to the Cash In Hand or Bank Accounts group, which
+  could happen on a fast computer and left the payment out of the cash account and the
+  Cashflow chart.
 
 ## [0.1.0-beta.2] - 2026-10-25
 
