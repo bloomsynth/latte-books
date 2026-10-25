@@ -15,6 +15,7 @@ pub mod party;
 pub mod payment;
 pub mod payment_for;
 pub mod pricing_rule;
+pub mod print_template;
 pub mod purchase_invoice;
 pub mod sales_invoice;
 pub mod sales_quote;

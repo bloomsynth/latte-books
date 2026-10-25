@@ -6,7 +6,7 @@
 //   can't drift by a fraction of a paisa. What is shown is the same.
 // - A report is run with `run`, which returns its rows; it doesn't watch the ledger
 //   for changes as Books' reports do (`shouldRefresh`). The app runs it again.
-// - The JSON export of the accounting reports isn't ported yet. GSTR's is (gstr.rs).
+// - The JSON export names the software "Latte Books" and its version.
 //
 // Books bug Latte fixes: exporting to CSV with a display precision of 0 cuts the last
 // digit off every amount ("123" becomes "12").
@@ -218,6 +218,57 @@ pub fn csv(columns: &[Column], rows: &[ReportRow], display_precision: usize) -> 
         })
         .collect::<Vec<_>>()
         .join("\r\n")
+}
+
+/// `getJsonData`: the report's columns, rows, filters and when it was exported, as JSON.
+/// Each row maps a column's label to its value, as the CSV export writes it.
+pub fn json(
+    report: &dyn Report,
+    fyo: &Fyo,
+    columns: &[Column],
+    rows: &[ReportRow],
+    display_precision: usize,
+) -> String {
+    use serde_json::{Map, Value, json};
+    let json_columns: Vec<Value> = columns
+        .iter()
+        .map(|c| json!({ "fieldname": c.fieldname, "label": c.label }))
+        .collect();
+    let mut json_rows = Vec::new();
+    for row in rows.iter().filter(|r| !r.is_empty) {
+        let mut object = Map::new();
+        for (cell, column) in row.cells.iter().zip(columns) {
+            let value = match &cell.raw_value {
+                // `undefined`, which `JSON.stringify` leaves out.
+                RawValue::Empty => continue,
+                RawValue::Bool(b) => Value::Bool(*b),
+                _ => Value::String(csv_value(cell, display_precision)),
+            };
+            object.insert(column.label.clone(), value);
+        }
+        json_rows.push(Value::Object(object));
+    }
+    let mut filters = Map::new();
+    for filter in report.filters(fyo) {
+        let value = match report.get(&filter.fieldname) {
+            FilterValue::Null => continue,
+            FilterValue::Text(text) => text,
+            FilterValue::Date(date) => date.to_string(),
+            FilterValue::Int(n) => n.to_string(),
+            FilterValue::Bool(b) => b.to_string(),
+        };
+        filters.insert(filter.fieldname, Value::String(value));
+    }
+    json!({
+        "columns": json_columns,
+        "rows": json_rows,
+        "filters": filters,
+        "timestamp": latte_db::to_iso_string(Timestamp::now()),
+        "reportName": report.report_name(),
+        "softwareName": "Latte Books",
+        "softwareVersion": env!("CARGO_PKG_VERSION"),
+    })
+    .to_string()
 }
 
 /// `getValueFromCell`.

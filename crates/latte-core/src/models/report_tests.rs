@@ -283,3 +283,30 @@ fn csv_exports_drop_zero_decimals_and_quote_spaces() {
     assert!(lines.contains(&"Debtors,0,0,354,0,354,0"));
     assert!(csv(&columns, &rows, 0).contains("Debtors,0,0,354,0,354,0"));
 }
+
+#[test]
+fn json_exports_map_each_row_by_column_label() {
+    let fyo = ledger();
+    let formatter = Formatter::new(&fyo).unwrap();
+    let mut report = TrialBalance::default();
+    report.set("fromDate", FilterValue::Date(date(2025, 4, 5)));
+    report.set("toDate", FilterValue::Date(APRIL_10));
+    let rows = report.run_on(&fyo, &formatter, APRIL_10).unwrap();
+    let columns = report.columns(&fyo, &formatter).unwrap();
+
+    let exported: serde_json::Value =
+        serde_json::from_str(&crate::reports::json(&report, &fyo, &columns, &rows, 2)).unwrap();
+    assert_eq!(exported["reportName"], "trial-balance");
+    assert_eq!(exported["softwareName"], "Latte Books");
+    assert_eq!(exported["columns"][0]["label"], "Account");
+    assert_eq!(exported["filters"]["fromDate"], "2025-04-05");
+    assert_eq!(exported["filters"]["toDate"], "2025-04-10");
+    let debtors = exported["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["Account"] == "Debtors")
+        .unwrap();
+    assert_eq!(debtors["Debit"], "354");
+    assert!(exported["timestamp"].as_str().unwrap().ends_with('Z'));
+}
