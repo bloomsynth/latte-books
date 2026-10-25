@@ -9,6 +9,20 @@ here.
   loss as bars above and below zero, and the top expenses as a donut with the total in
   the middle.
 
+### Installing
+
+The installers aren't signed yet, so your system warns you the first time:
+
+- **Windows** (`.exe`): SmartScreen says "Windows protected your PC". Choose **More info**,
+  then **Run anyway**. Latte installs for your user only, without admin rights.
+- **macOS** (`.dmg`, Apple Silicon): drag Latte Books to Applications, then right-click it
+  and choose **Open**. If macOS says the app is damaged, run
+  `xattr -cr "/Applications/Latte Books.app"` in Terminal.
+- **Linux**: install the `.deb`, or make the `.AppImage` executable and run it.
+
+Check a download against `SHA256SUMS.txt`, or that it was built from this repository with
+`gh attestation verify <file> --repo bloomsynth/latte-books`.
+
 ## [0.1.0-beta.1] - 2026-10-24
 
 The first beta: Frappe Books v0.36.0, ported to Rust as a native desktop app.
