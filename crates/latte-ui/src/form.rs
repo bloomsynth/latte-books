@@ -2116,7 +2116,7 @@ impl FormPage {
         doc.inserted()
             && !doc.is_cancelled()
             && !doc.dirty()
-            && crate::print::can_print(doc.schema_name())
+            && crate::print::can_print(&self.session, doc.schema_name())
     }
 
     fn open_print(&mut self, cx: &mut Context<Self>) {

@@ -68,7 +68,12 @@ pub fn docs_path(route: &Route) -> &'static str {
         Route::ChartOfAccounts => docs_path_map("ChartOfAccounts"),
         Route::ImportWizard => docs_path_map("ImportWizard"),
         Route::Settings { .. } => docs_path_map("Settings"),
-        Route::GetStarted | Route::Pos | Route::Print { .. } | Route::AiAssistants => None,
+        Route::TemplateBuilder { .. } => docs_path_map("PrintTemplate"),
+        Route::GetStarted
+        | Route::Pos
+        | Route::Print { .. }
+        | Route::ReportPrint(_)
+        | Route::AiAssistants => None,
     };
     path.unwrap_or("")
 }

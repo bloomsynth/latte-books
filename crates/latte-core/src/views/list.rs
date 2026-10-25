@@ -154,6 +154,11 @@ pub fn columns(fyo: &Fyo, schema_name: &str) -> Vec<ListColumn> {
             "$status" => Some(ListColumn::Status),
             "$enabled" => Some(ListColumn::Enabled),
             "$enabledFor" => Some(ListColumn::EnabledFor),
+            // PrintTemplate's `type` column: "Type", showing the schema's label.
+            "type" if schema_name == "PrintTemplate" => schema.field(name).cloned().map(|mut f| {
+                f.label = Some("Type".to_owned());
+                ListColumn::Field(f)
+            }),
             _ => schema.field(name).cloned().map(ListColumn::Field),
         })
         .collect()
@@ -384,6 +389,14 @@ pub fn rows(
         let cells = columns
             .iter()
             .map(|column| match column {
+                ListColumn::Field(f) if schema_name == "PrintTemplate" && f.fieldname == "type" => {
+                    let kind = field::display(formatter, f, values.get(&f.fieldname));
+                    ListCell::Text(
+                        fyo.schema(&kind)
+                            .map(|s| s.label.clone())
+                            .unwrap_or_default(),
+                    )
+                }
                 ListColumn::Field(f) => {
                     ListCell::Text(field::display(formatter, f, values.get(&f.fieldname)))
                 }

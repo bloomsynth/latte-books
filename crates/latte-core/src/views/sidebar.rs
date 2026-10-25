@@ -41,6 +41,13 @@ pub enum Route {
         schema: String,
         name: String,
     },
+    /// `/report-print/<name>`: a report's Print View.
+    ReportPrint(String),
+    /// `/template-builder/<name>`: a PrintTemplate's form (`formRoute`); no name for a
+    /// new one.
+    TemplateBuilder {
+        name: Option<String>,
+    },
     /// Latte's own: the "Set up AI assistants" screen (Dime).
     AiAssistants,
 }

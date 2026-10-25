@@ -31,6 +31,14 @@ impl Session {
 
     pub fn from_fyo(mut fyo: Fyo, path: &Path) -> Result<Self, String> {
         fyo.translate_schemas(&crate::i18n::translation);
+        // `updatePrintTemplates`, as Books runs it each time a set-up file is opened.
+        let setup_complete = latte_core::fyo::model::helpers::is_truthy(
+            fyo.get_value("AccountingSettings", None, "setupComplete")
+                .as_ref(),
+        );
+        if setup_complete {
+            latte_print::templates::update_print_templates(&mut fyo).map_err(|e| e.to_string())?;
+        }
         let formatter = Formatter::new(&fyo).map_err(|e| e.to_string())?;
         Ok(Self {
             fyo,

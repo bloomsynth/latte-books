@@ -24,13 +24,16 @@ mod pos_link;
 mod pos_page;
 mod pos_parts;
 mod print;
+mod print_parts;
 mod report_page;
+mod report_print;
 mod search_bar;
 mod selector;
 mod session;
 mod settings;
 mod setup_wizard;
 mod shortcuts;
+mod template_builder;
 mod widgets;
 
 use gpui_kit::*;

@@ -34,10 +34,12 @@ use crate::placeholder::Placeholder;
 use crate::pos_page::PosPage;
 use crate::print::PrintPage;
 use crate::report_page::ReportPage;
+use crate::report_print::ReportPrintPage;
 use crate::search_bar::{SearchBar, SearchEvent};
 use crate::session::Shared;
 use crate::settings::SettingsPage;
 use crate::shortcuts::ShortcutsHelper;
+use crate::template_builder::TemplateBuilder;
 use crate::widgets::{error_message, modal};
 use crate::{Nav, Navigate};
 
@@ -174,7 +176,11 @@ impl Desk {
                     })
             }
             Route::Print { schema, name } => changed.iter().any(|(s, n)| s == schema && n == name),
-            Route::Pos | Route::Settings { .. } | Route::ImportWizard => false,
+            Route::Pos
+            | Route::Settings { .. }
+            | Route::ImportWizard
+            | Route::TemplateBuilder { .. }
+            | Route::ReportPrint(_) => false,
             _ => true,
         };
         if !show {
@@ -232,8 +238,18 @@ impl Desk {
     pub fn open(&mut self, nav: Nav, remember: bool, window: &mut Window, cx: &mut Context<Self>) {
         let session = self.session.clone();
         self.error = None;
+        // A PrintTemplate opens in the Template Builder (`formRoute`).
+        let nav = match nav {
+            Nav::Route(Route::Form { schema, name }) if schema == "PrintTemplate" => {
+                Nav::Route(Route::TemplateBuilder { name })
+            }
+            nav => nav,
+        };
         let route = match &nav {
             Nav::Route(route) => route.clone(),
+            Nav::Doc(doc) if doc.schema_name() == "PrintTemplate" => {
+                Route::TemplateBuilder { name: None }
+            }
             Nav::Doc(doc) => Route::Form {
                 schema: doc.schema_name().to_owned(),
                 name: None,
@@ -245,6 +261,11 @@ impl Desk {
         };
         let result: Result<(), String> = match nav {
             Nav::Reopen(_) => Ok(()),
+            Nav::Doc(doc) if doc.schema_name() == "PrintTemplate" => {
+                let page = cx.new(|cx| TemplateBuilder::new(session, doc, window, cx));
+                self.watch(page, window, cx);
+                Ok(())
+            }
             Nav::Doc(doc) => {
                 let page = cx.new(|cx| FormPage::new(session, doc, window, cx));
                 self.watch(page, window, cx);
@@ -354,6 +375,24 @@ impl Desk {
                     self.watch(page, window, cx);
                     Ok(())
                 }
+                Route::TemplateBuilder { name } => {
+                    match TemplateBuilder::build(&session, name.as_deref()) {
+                        Ok(doc) => {
+                            let page = cx.new(|cx| TemplateBuilder::new(session, doc, window, cx));
+                            self.watch(page, window, cx);
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                Route::ReportPrint(name) => match ReportPrintPage::snapshot(&session, &name, cx) {
+                    Ok(report) => {
+                        let page = cx.new(|cx| ReportPrintPage::new(session, report, window, cx));
+                        self.watch(page, window, cx);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                },
             },
         };
         match result {
@@ -363,7 +402,10 @@ impl Desk {
                     self.forward.clear();
                 }
                 match &route {
-                    Route::Form { .. } | Route::Print { .. } => {}
+                    Route::Form { .. }
+                    | Route::Print { .. }
+                    | Route::TemplateBuilder { .. }
+                    | Route::ReportPrint(_) => {}
                     Route::Settings { .. } => self.highlight = Route::Settings { tab: None },
                     Route::FilteredReport { name, .. } => {
                         self.highlight = Route::Report(name.clone())
@@ -580,6 +622,16 @@ impl Desk {
                         cx.notify();
                     })),
             )
+    }
+}
+
+/// Hides or shows the sidebar: the Template Builder's edit mode hides it.
+pub fn set_sidebar_hidden(hidden: bool, cx: &mut App) {
+    if let Some(desk) = cx.try_global::<NavState>().and_then(|n| n.desk.upgrade()) {
+        desk.update(cx, |desk, cx| {
+            desk.sidebar_hidden = hidden;
+            cx.notify();
+        });
     }
 }
 

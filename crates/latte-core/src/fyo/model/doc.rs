@@ -201,6 +201,9 @@ impl Doc {
         if self.not_inserted || self.schema.is_single || self.schema.is_child {
             return false;
         }
+        if !self.model.can_delete(self) {
+            return false;
+        }
         !self.schema.is_submittable || self.is_cancelled() || !self.is_submitted()
     }
 
