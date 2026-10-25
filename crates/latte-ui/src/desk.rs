@@ -13,6 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::t;
+use latte_core::views::search::SearchTarget;
 use latte_core::views::sidebar::{self, Route, SidebarGroup};
 
 use crate::assistants_page::AssistantsPage;
@@ -26,9 +27,10 @@ use crate::placeholder::Placeholder;
 use crate::pos_page::PosPage;
 use crate::print::PrintPage;
 use crate::report_page::ReportPage;
+use crate::search_bar::{SearchBar, SearchEvent};
 use crate::session::Shared;
 use crate::settings::SettingsPage;
-use crate::widgets::error_message;
+use crate::widgets::{error_message, modal};
 use crate::{Nav, Navigate};
 
 /// The user asked to open another company file.
@@ -46,6 +48,9 @@ pub struct Desk {
     history: Vec<Route>,
     forward: Vec<Route>,
     sidebar_hidden: bool,
+    /// The search window, while open (`SearchBar.vue`).
+    search: Option<(Entity<SearchBar>, Subscription)>,
+    focus: FocusHandle,
     page: AnyView,
     error: Option<String>,
     /// The last change in the file's change log that the page shows.
@@ -77,12 +82,15 @@ impl Desk {
             history: Vec::new(),
             forward: Vec::new(),
             sidebar_hidden: false,
+            search: None,
+            focus: cx.focus_handle(),
             page: cx.new(|_| Placeholder::new("", "")).into(),
             error: None,
             last_change,
             _subscription: None,
         };
         desk.open(Nav::Route(route), false, window, cx);
+        desk.focus.focus(window, cx);
         cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -524,6 +532,37 @@ impl Desk {
         self.back(window, cx);
     }
 
+    /// Opens the search window, with the index made afresh.
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let bar = cx.new(|cx| SearchBar::new(&self.session, window, cx));
+        let subscription =
+            cx.subscribe_in(&bar, window, |this, _, event: &SearchEvent, window, cx| {
+                this.search = None;
+                if let SearchEvent::Open(target) = event {
+                    match target {
+                        SearchTarget::Route(route) => {
+                            this.open(Nav::Route(route.clone()), true, window, cx)
+                        }
+                        SearchTarget::NewDoc { schema, values } => {
+                            let doc = this
+                                .session
+                                .borrow()
+                                .fyo
+                                .get_new_doc(schema, values.clone());
+                            match doc {
+                                Ok(doc) => this.open(Nav::Doc(doc), true, window, cx),
+                                Err(e) => this.error = Some(e.to_string()),
+                            }
+                        }
+                    }
+                }
+                this.focus.focus(window, cx);
+                cx.notify();
+            });
+        self.search = Some((bar, subscription));
+        cx.notify();
+    }
+
     pub fn go_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(route) = self.forward.pop() {
             self.history.push(self.route.clone());
@@ -533,7 +572,7 @@ impl Desk {
 }
 
 impl Render for Desk {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.groups = sidebar::sidebar(&self.session.borrow().fyo);
         cx.set_global(NavState {
             desk: cx.entity().downgrade(),
@@ -544,6 +583,29 @@ impl Render for Desk {
             .size_full()
             .h_flex()
             .relative()
+            .track_focus(&self.focus)
+            // Ctrl+K, ⌘K on a Mac, opens the search (`SearchBar.vue`'s shortcut).
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let k = &event.keystroke;
+                if k.key == "k"
+                    && (k.modifiers.control || k.modifiers.platform)
+                    && this.search.is_none()
+                {
+                    this.open_search(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .children(self.search.as_ref().map(|(bar, _)| {
+                modal(
+                    bar.clone(),
+                    cx.listener(|this, _, window, cx| {
+                        this.search = None;
+                        this.focus.focus(window, cx);
+                        cx.notify();
+                    }),
+                    window,
+                )
+            }))
             .when(!self.sidebar_hidden, |d| d.child(self.render_sidebar(cx)))
             .child(
                 div()

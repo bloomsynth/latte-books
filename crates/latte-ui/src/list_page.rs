@@ -1,10 +1,11 @@
 //! A list of documents: `src/pages/ListView/ListView.vue` and `List.vue` @ v0.36.0.
 //!
-//! The header holds Books' Filter menu (`FilterDropdown.vue`) and New. A list opened for
+//! The header holds Books' Export Wizard, Filter menu (`FilterDropdown.vue`) and New. A list opened for
 //! some documents only, such as a party's invoices, starts with those filters.
 
+use crate::export_wizard::{ExportClosed, ExportWizard};
 use crate::filter_dropdown::{FilterDropdown, FiltersChanged};
-use crate::widgets::Button;
+use crate::widgets::{Button, Kind as ToastKind, modal, toast};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -28,6 +29,10 @@ pub struct ListPage {
     /// The Filter menu's filters, on top of `filters`.
     conditions: Vec<(String, String, String)>,
     filter: Entity<FilterDropdown>,
+    /// The Export Wizard, while open.
+    export: Option<(Entity<ExportWizard>, Subscription)>,
+    /// What worked, in a toast.
+    info: Option<String>,
     columns: Vec<ListColumn>,
     rows: Vec<ListRow>,
     /// `Paginator.vue`: the page shown, from 1, and the rows on a page.
@@ -71,6 +76,8 @@ impl ListPage {
             filters,
             conditions,
             filter,
+            export: None,
+            info: None,
             columns,
             rows: Vec::new(),
             page: 1,
@@ -128,6 +135,20 @@ impl ListPage {
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+        cx.notify();
+    }
+
+    fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let session = self.session.clone();
+        let filters = self.query_filter();
+        let (schema, title) = (self.schema.clone(), self.title.clone());
+        let wizard = cx.new(|cx| ExportWizard::new(session, &schema, &title, filters, window, cx));
+        let subscription = cx.subscribe(&wizard, |this, _, event: &ExportClosed, cx| {
+            this.export = None;
+            this.info = event.0.clone();
+            cx.notify();
+        });
+        self.export = Some((wizard, subscription));
         cx.notify();
     }
 
@@ -282,14 +303,23 @@ impl ListPage {
 }
 
 impl Render for ListPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header = page_header(self.title.clone(), cx).child(
-            div().h_flex().gap_2().child(self.filter.clone()).child(
-                Button::new("new")
-                    .primary()
-                    .icon("plus")
-                    .on_click(cx.listener(|this, _, _, cx| this.new_doc(cx))),
-            ),
+            div()
+                .h_flex()
+                .gap_2()
+                .child(
+                    Button::new("export")
+                        .label(t("Export"))
+                        .on_click(cx.listener(|this, _, window, cx| this.open_export(window, cx))),
+                )
+                .child(self.filter.clone())
+                .child(
+                    Button::new("new")
+                        .primary()
+                        .icon("plus")
+                        .on_click(cx.listener(|this, _, _, cx| this.new_doc(cx))),
+                ),
         );
         let columns = self.columns.clone();
         let n = columns.len();
@@ -407,5 +437,26 @@ impl Render for ListPage {
             .when(!self.rows.is_empty(), |d| {
                 d.child(self.render_paginator(cx))
             })
+            .children(self.export.as_ref().map(|(wizard, _)| {
+                modal(
+                    wizard.clone(),
+                    cx.listener(|this, _, _, cx| {
+                        this.export = None;
+                        cx.notify();
+                    }),
+                    window,
+                )
+            }))
+            .children(self.info.clone().map(|message| {
+                toast(
+                    message,
+                    ToastKind::Success,
+                    cx.listener(|this, _, _, cx| {
+                        this.info = None;
+                        cx.notify();
+                    }),
+                    window,
+                )
+            }))
     }
 }

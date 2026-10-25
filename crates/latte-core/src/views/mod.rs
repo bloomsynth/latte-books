@@ -4,4 +4,5 @@
 pub mod field;
 pub mod get_started;
 pub mod list;
+pub mod search;
 pub mod sidebar;

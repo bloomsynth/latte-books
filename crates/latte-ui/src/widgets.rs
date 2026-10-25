@@ -187,7 +187,8 @@ pub fn page_header_with(title: impl Into<SharedString>, left: impl IntoElement, 
         )
 }
 
-/// `PageHeaderNavGroup.vue`: Back and Forward, joined, gray until there is somewhere to go.
+/// `PageHeaderNavGroup.vue`: Search, Back and Forward, joined; Back and Forward gray
+/// until there is somewhere to go.
 fn nav_group(cx: &App) -> Div {
     let (can_back, can_forward) = cx
         .try_global::<crate::desk::NavState>()
@@ -221,14 +222,33 @@ fn nav_group(cx: &App) -> Div {
                 });
             })
     };
+    // `SearchBar.vue`'s button, joined to Back and Forward.
+    let search = div()
+        .id("nav-search")
+        .h_flex()
+        .h_8()
+        .px_3()
+        .bg(gray(200))
+        .rounded_l(books::RADIUS_MD)
+        .cursor_pointer()
+        .child(books::icon("search", px(16.), gray(700)))
+        .on_click(|_, window, cx| {
+            if let Some(desk) = cx
+                .try_global::<crate::desk::NavState>()
+                .and_then(|n| n.desk.upgrade())
+            {
+                desk.update(cx, |desk, cx| desk.open_search(window, cx));
+            }
+        });
     div()
         .h_flex()
         .flex_none()
         .rounded(books::RADIUS_MD)
         .overflow_hidden()
+        .child(search)
         .child(
             link("nav-back", "chevron-left", can_back, true)
-                .rounded_l(books::RADIUS_MD)
+                .border_l_1()
                 .border_r_1()
                 .border_color(white()),
         )
@@ -541,4 +561,47 @@ pub fn small_input(state: &Entity<gpui_kit::component::input::InputState>) -> Di
             .px_2()
             .text_13(),
     )
+}
+
+/// `Modal.vue`: a panel over the dimmed window, closed by a click outside it.
+pub fn modal(
+    content: impl IntoElement,
+    on_close: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    window: &Window,
+) -> impl IntoElement {
+    let viewport = window.viewport_size();
+    deferred(
+        anchored().position(point(px(0.), px(0.))).child(
+            div()
+                .id("modal-backdrop")
+                .occlude()
+                .w(viewport.width)
+                .h(viewport.height)
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hsla(0., 0., 0., 0.1))
+                .on_mouse_down(MouseButton::Left, on_close)
+                .child(
+                    div()
+                        .id("modal")
+                        .bg(white())
+                        .rounded(books::RADIUS_LG)
+                        .border_1()
+                        .border_color(gray(200))
+                        .overflow_hidden()
+                        .shadow(vec![BoxShadow {
+                            color: hsla(0., 0., 0., 0.25),
+                            offset: point(px(0.), px(25.)),
+                            blur_radius: px(50.),
+                            spread_radius: px(-12.),
+                            inset: false,
+                        }])
+                        .text_color(gray(900))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(content),
+                ),
+        ),
+    )
+    .with_priority(2)
 }
