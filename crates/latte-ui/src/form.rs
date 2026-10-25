@@ -104,6 +104,8 @@ pub struct FormPage {
     menu: Option<&'static str>,
     /// "Toggle between form and full width".
     full_width: bool,
+    /// The child row open in the row form (`RowEditForm.vue`): its table and index.
+    row_edit: Option<(String, usize)>,
     /// The pictures of the AttachImage fields, by their data URL.
     images: HashMap<String, Arc<Image>>,
     /// Shown inside another page (Settings), without its own header.
@@ -129,6 +131,7 @@ impl FormPage {
             menu: None,
             full_width: false,
             images: HashMap::new(),
+            row_edit: None,
             embedded: false,
             scroll: ScrollHandle::new(),
         };
@@ -263,6 +266,29 @@ impl FormPage {
                             };
                             wanted.push((
                                 Key::Cell(f.fieldname.clone(), i, column.fieldname.clone()),
+                                column.clone(),
+                                row.get(&column.fieldname).cloned(),
+                                read_only,
+                                opts,
+                                field::is_required(&column, &row_ctx),
+                            ));
+                        }
+                    }
+                    // The open row's other fields, for the row form.
+                    if let Some((table, i)) = &self.row_edit
+                        && table == &f.fieldname
+                        && let Some(row) = self.doc.table(table).get(*i)
+                    {
+                        let row_ctx = field::context(fyo, row, Some(&self.doc));
+                        for column in quick_edit_fields(fyo, f) {
+                            let read_only = field::is_read_only(&column, &row_ctx);
+                            let opts = if is_choice(&column) && !read_only {
+                                options(&column, &row_ctx)
+                            } else {
+                                Vec::new()
+                            };
+                            wanted.push((
+                                Key::Cell(table.clone(), *i, column.fieldname.clone()),
                                 column.clone(),
                                 row.get(&column.fieldname).cloned(),
                                 read_only,
@@ -584,10 +610,128 @@ impl FormPage {
             self.doc.remove(&mut s.fyo, table, idx.unwrap_or(i))
         };
         self.error = result.err().map(|e| e.to_string());
+        self.row_edit = None;
         // Row controls are keyed by position, so they are made again.
         self.controls
             .retain(|key, _| !matches!(key, Key::Cell(t, ..) if t == table));
         self.refresh(window, cx);
+    }
+
+    /// Opens a child row's form beside the document's (`RowEditForm.vue`), or closes it.
+    fn open_row(&mut self, table: &str, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_typed(window, cx);
+        let open = Some((table.to_owned(), i));
+        self.row_edit = if self.row_edit == open { None } else { open };
+        self.refresh(window, cx);
+    }
+
+    /// `RowEditForm.vue`: the open row's quick-edit fields, label beside control, in a
+    /// 22rem panel to the right of the form, with Close and Previous/Next row.
+    fn render_row_edit(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (table, i) = self.row_edit.clone()?;
+        let count = self.doc.table(&table).len();
+        if i >= count {
+            return None;
+        }
+        let (table_field, fields) = {
+            let s = self.session.borrow();
+            let f = self.doc.schema().field(&table)?.clone();
+            let fields = quick_edit_fields(&s.fyo, &f);
+            (f, fields)
+        };
+        let rows = fields.iter().enumerate().map(|(n, f)| {
+            let key = Key::Cell(table.clone(), i, f.fieldname.clone());
+            div()
+                .grid()
+                .grid_cols(3)
+                .items_center()
+                .border_b_1()
+                .border_color(gray(200))
+                .text_12()
+                .when(n == 0, |d| d.border_t_1())
+                .child(
+                    div()
+                        .pl_4()
+                        .text_color(gray(600))
+                        .child(f.label.clone().unwrap_or_else(|| f.fieldname.clone())),
+                )
+                .child(
+                    div()
+                        .col_span(2)
+                        .py_2()
+                        .pr_4()
+                        .child(self.render_control(&key, f, window, cx))
+                        .children(self.field_errors.get(&key).map(|e| {
+                            div()
+                                .mt_1()
+                                .text_11()
+                                .text_color(books::color("red", 600))
+                                .child(e.clone())
+                        })),
+                )
+        });
+        let rows: Vec<Div> = rows.collect();
+        let step = |id: &'static str, icon: &'static str, to: usize| {
+            let table = table.clone();
+            Button::new(id).icon(icon).on_click(
+                cx.listener(move |this, _, window, cx| this.open_row(&table, to, window, cx)),
+            )
+        };
+        let close_table = table.clone();
+        let toolbar = div()
+            .h_flex()
+            .flex_none()
+            .h_16()
+            .px_4()
+            .justify_between()
+            .child(Button::new("close-row").icon("x").on_click(
+                cx.listener(move |this, _, window, cx| this.open_row(&close_table, i, window, cx)),
+            ))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .when(i > 0, |d| d.child(step("prev-row", "chevron-left", i - 1)))
+                    .when(i + 1 < count, |d| {
+                        d.child(step("next-row", "chevron-right", i + 1))
+                    }),
+            );
+        let header = div()
+            .h_flex()
+            .flex_none()
+            .h(px(56.))
+            .px_4()
+            .justify_between()
+            .border_t_1()
+            .border_color(gray(200))
+            .text_18()
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(
+                div()
+                    .text_color(black())
+                    .child(format!("{} {}", t("Row"), i + 1)),
+            )
+            .child(
+                div()
+                    .text_color(gray(600))
+                    .child(table_field.label.clone().unwrap_or_default()),
+            );
+        Some(
+            div()
+                .id("row-edit")
+                .v_flex()
+                .flex_none()
+                .w(rems(22.))
+                .h_full()
+                .bg(white())
+                .border_l_1()
+                .border_color(gray(200))
+                .overflow_y_scroll()
+                .child(toolbar)
+                .child(header)
+                .children(rows)
+                .into_any_element(),
+        )
     }
 
     /// Sets every value typed into an input and not yet set.
@@ -1584,7 +1728,8 @@ impl FormPage {
                             .truncate()
                             .child(c.label.clone().unwrap_or_else(|| c.fieldname.clone())),
                     )
-            }));
+            }))
+            .when(f.edit, |d| d.child(index_cell()));
         let count = self.doc.table(&f.fieldname).len();
         let rows = (0..count)
             .map(|i| {
@@ -1652,7 +1797,18 @@ impl FormPage {
                             .children(columns.iter().map(|c| {
                                 let key = Key::Cell(f.fieldname.clone(), i, c.fieldname.clone());
                                 cell(c).child(self.render_control(&key, c, window, cx))
-                            })),
+                            }))
+                            // `canEditRow`: the row's edit button opens its form beside this one.
+                            .when(f.edit, |d| {
+                                let table = f.fieldname.clone();
+                                d.child(index_cell().justify_center().child(
+                                    Button::new(("edit-row", i)).icon("edit").ghost().on_click(
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.open_row(&table, i, window, cx)
+                                        }),
+                                    ),
+                                ))
+                            }),
                     )
                     .children(error.map(|e| {
                         div()
@@ -1828,6 +1984,19 @@ impl Action {
             run,
         }
     }
+}
+
+/// `quickEditFields`: the fields a child row's form shows.
+fn quick_edit_fields(fyo: &latte_core::Fyo, table: &Field) -> Vec<Field> {
+    let Some(schema) = table.target.as_deref().and_then(|t| fyo.schema(t)) else {
+        return Vec::new();
+    };
+    schema
+        .quick_edit_fields
+        .iter()
+        .flatten()
+        .filter_map(|fieldname| schema.field(fieldname).cloned())
+        .collect()
 }
 
 /// A picture stored as `data:image/png;base64,…`.
@@ -2084,6 +2253,27 @@ impl Render for FormPage {
             .size_full()
             .bg(gray(25))
             .text_13()
+            // Books' shortcuts: Ctrl+S (⌘S) saves or submits; Esc closes a dialog or menu.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let k = &event.keystroke;
+                if k.key == "s" && (k.modifiers.control || k.modifiers.platform) {
+                    if this.doc.can_save() || this.doc.not_inserted() || this.doc.dirty() {
+                        this.save(window, cx);
+                    } else if this.doc.can_submit() {
+                        this.pending = Some(Pending::Submit);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if k.key == "escape"
+                    && (this.pending.is_some() || this.error.is_some() || this.menu.is_some())
+                {
+                    this.pending = None;
+                    this.error = None;
+                    this.menu = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .child(header)
             .child(
                 div()
@@ -2091,7 +2281,16 @@ impl Render for FormPage {
                     .min_h_0()
                     .h_flex()
                     .justify_center()
-                    .child(body),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .h_flex()
+                            .justify_center()
+                            .child(body),
+                    )
+                    .children(self.render_row_edit(window, cx)),
             )
             .children(self.render_dialog(window, cx))
             .children(toast)

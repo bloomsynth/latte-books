@@ -56,6 +56,10 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | CSV export with display precision 0 | Cuts the last digit off every amount | Amounts exported whole | Books bug |
 | Report totals | Summed as floats | Summed as money | No drift on long ledgers; what is shown is the same |
 | Report refresh | Reports watch the ledger and refresh themselves | The app runs a report again | Simpler; the same rows |
+| Search | Recent items, and More Filters (skip child tables or transactions, by document type) | Neither; the search index is made each time the search opens | Not ported yet |
+| Link fields | The dropdown ends with "Create", which opens a quick entry form for a new document; the chevron shows a quick view on hover | No Create entry or quick view | Not ported yet |
+| Linked entries | "View linked entries" lists the documents linked to this one, beside the form | Not offered | Not ported yet |
+| Print View | Print opens the system dialog; the "…" menu also has New Template, the template and Duplicate Template | Save as PDF only; the menu has Print Settings | No template editor; print the saved PDF |
 | Report JSON export | Offered for every report | Offered for GSTR-1 and GSTR-2 only | CSV first; the GST portal needs GSTR's JSON |
 | Dates shown | In the computer's time zone, so west of UTC a ledger entry shows the day before | The date it is stored for | Books bug for anyone west of UTC |
 | Creating a company file where one exists | Deletes the file and starts again | Refused | A typo shouldn't cost anyone their books |
@@ -79,7 +83,6 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | Data import missing links | Named with the schema being imported: "(Sales Invoice, Acme)" | Named with the schema linked to: "(Party, Acme)" | Books bug |
 | Import Wizard | Cells are edited in place; Submit is asked in a dialog; the column picker is a dialog | A clicked cell is edited in a box above the table; "Submit entries?" is a checkbox; the column picker is on the page | Simpler in GPUI; the same import |
 | Dashboard period start | The time of day it is now, so the first day's earlier entries are left out | The start of the first day | Books bug |
-| Dashboard period picker | A period picker on each chart | One period picker for the page, in the header | Simpler; the same numbers |
 | POS shift closing | Posts the difference between Cash and the write-off account, wrong way round, and leaves it on the counter | Counter cleared to Cash; the difference between the counter and the write-off account | Books bug |
 | POS stock check | Stops at the first untracked item | Checks every tracked item | Books bug |
 | POS discounts shown | Only percents above 1 | Any percent above 0 | Books bug |
@@ -90,7 +93,6 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | POS saved sales | Saved and submitted sales are listed in a dialog | Listed in a panel beside the cart | Simpler in GPUI |
 | POS paying a submitted sale | Submits it again, shows the error, then pays | Pays it | Books bug |
 | POS not ported yet | The Modern UI, item groups, keyboard shortcuts, returns, coupons, loyalty points, price lists, and editing a row's rate or discount at the till | Not ported yet | The Modern UI, and returns, coupons and loyalty at the till, come after 1.0 |
-| Get Started cards | A picture on each card | The card's name and text, with a check once done | Latte has no pictures for them yet |
 | Get Started "Create Purchase Invoice" | Ticked once there is a sales invoice | Ticked once there is a purchase invoice | Books bug |
 | Create Demo progress | A full-window loader | A message and bar in the company list | Simpler in GPUI |
 | Create Demo fiscal year | 1 April to 1 April | 1 April to 31 March | Books bug |
