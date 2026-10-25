@@ -105,9 +105,9 @@ pub fn models() -> HashMap<String, Arc<dyn Model>> {
 #[cfg(test)]
 mod inventory_tests;
 #[cfg(test)]
-mod invoice_tests;
+pub(crate) mod invoice_tests;
 #[cfg(test)]
-mod payment_tests;
+pub(crate) mod payment_tests;
 #[cfg(test)]
 mod pricing_tests;
 #[cfg(test)]

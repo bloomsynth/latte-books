@@ -11,7 +11,7 @@ const CREATED: &str = "2025-01-01T00:00:00.000Z";
 
 /// The test company with what invoices need: receivable, payable, tax, round-off,
 /// discount and cost accounts; a customer, a supplier, an item and an 18% GST template.
-pub(super) fn books() -> Fyo {
+pub(crate) fn books() -> Fyo {
     let mut fyo = company();
     fyo.register_models(models(), HashMap::new());
 
@@ -87,7 +87,7 @@ pub(super) fn books() -> Fyo {
 }
 
 /// Writes settings as they'd be saved, without the company details the form needs too.
-pub(super) fn set_accounting_settings(fyo: &mut Fyo, values: DocValueMap) {
+pub(crate) fn set_accounting_settings(fyo: &mut Fyo, values: DocValueMap) {
     fyo.db.update("AccountingSettings", &values).unwrap();
 }
 
@@ -124,7 +124,7 @@ pub(super) fn invoice(
     doc
 }
 
-pub(super) fn sales_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
+pub(crate) fn sales_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
     invoice(
         fyo,
         "SalesInvoice",
@@ -344,7 +344,7 @@ fn discounts_come_off_before_tax_and_post_to_the_discount_account() {
 }
 
 /// Inserts a document as it'd be saved, with its meta values.
-pub(super) fn insert(fyo: &mut Fyo, schema_name: &str, values: DocValueMap) {
+pub(crate) fn insert(fyo: &mut Fyo, schema_name: &str, values: DocValueMap) {
     let mut values = values;
     for fieldname in ["createdBy", "modifiedBy"] {
         values.insert(fieldname.to_owned(), text("Admin"));

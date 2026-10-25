@@ -159,16 +159,23 @@ pub fn link_target(field: &Field, ctx: &DocContext<'_>) -> Option<String> {
     }
 }
 
-/// The filters a Link field's options must pass: the field's own `filters` and the
-/// model's `static filters` (`getCreateFilters` is not applied: Books uses those only for
-/// creating from the dropdown).
+/// `getFilters`: the filters a Link field's options must pass: the field's own
+/// `filters`, else the model's `static filters`, which SystemSettings' `removeFilter`
+/// turns off. (`getCreateFilters` is not applied: Books uses those only for creating
+/// from the dropdown.)
 pub fn link_filters(field: &Field, ctx: &DocContext<'_>) -> QueryFilter {
     let mut filters = QueryFilter::new();
-    for (key, value) in field.filters.iter().flatten() {
-        filters.insert(
-            key.clone(),
-            Filter::Equals(FilterValue::Text(value.clone())),
-        );
+    if let Some(own) = &field.filters {
+        for (key, value) in own {
+            filters.insert(
+                key.clone(),
+                Filter::Equals(FilterValue::Text(value.clone())),
+            );
+        }
+        return filters;
+    }
+    if crate::models::helpers::single_is_truthy(ctx.fyo, "SystemSettings", "removeFilter") {
+        return filters;
     }
     if let Some(model_filters) = ctx.doc.model().link_filters(&field.fieldname, ctx) {
         filters.extend(model_filters);
@@ -183,6 +190,17 @@ pub fn link_options(
     field: &Field,
     ctx: &DocContext<'_>,
 ) -> Result<Vec<(String, String)>, Error> {
+    link_options_filtered(fyo, field, ctx, true)
+}
+
+/// [`link_options`], or with `filtered` false every document of the target, as after
+/// "No results found, disable filters".
+pub fn link_options_filtered(
+    fyo: &Fyo,
+    field: &Field,
+    ctx: &DocContext<'_>,
+    filtered: bool,
+) -> Result<Vec<(String, String)>, Error> {
     let Some(target) = link_target(field, ctx) else {
         return Ok(Vec::new());
     };
@@ -195,7 +213,11 @@ pub fn link_options(
         .filter(|title| title != "name" && schema.field(title).is_some());
     let mut fields = vec!["name".to_owned()];
     fields.extend(title_field.clone());
-    let filters = link_filters(field, ctx);
+    let filters = if filtered {
+        link_filters(field, ctx)
+    } else {
+        QueryFilter::new()
+    };
     let options = GetAllOptions {
         fields: Some(fields),
         filters: filters
