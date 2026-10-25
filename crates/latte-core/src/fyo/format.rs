@@ -117,6 +117,12 @@ impl Formatter {
     }
 }
 
+/// `fyo.format(value, 'Currency')` in a message: the amount in the locale's format with the
+/// company's currency symbol; rounded only, if the settings can't be read.
+pub fn currency(fyo: &Fyo, money: &Money) -> String {
+    Formatter::new(fyo).map_or_else(|_| money.round(None), |f| f.currency(money))
+}
+
 /// The UTC date of an instant: the date a ledger entry's date and time is stored for.
 pub fn utc_date(timestamp: Timestamp) -> Date {
     timestamp.to_zoned(TimeZone::UTC).date()
@@ -126,4 +132,20 @@ pub fn utc_date(timestamp: Timestamp) -> Date {
 /// zone, as Books reads them.
 pub fn local_date(timestamp: Timestamp) -> Date {
     timestamp.to_zoned(TimeZone::system()).date()
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::currency;
+    use crate::setup_tests::{TempFile, indian_company};
+
+    #[test]
+    fn amounts_in_messages_are_formatted_as_books_formats_them() {
+        let file = TempFile::new("format message");
+        let fyo = indian_company(&file);
+        let money = fyo.pesa().from_f64(1250.0).unwrap();
+        assert_eq!(currency(&fyo, &money), "₹ 1,250.00");
+        let money = fyo.pesa().from_f64(1234567.891).unwrap();
+        assert_eq!(currency(&fyo, &money), "₹ 12,34,567.89");
+    }
 }

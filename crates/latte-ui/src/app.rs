@@ -103,11 +103,15 @@ impl LatteApp {
         session::remember_file(&session.path, &session.company_name());
         let title = format!("{} - Latte Books", session.company_name());
         window.set_window_title(&title);
+        // `setDarkMode(!!fyo.singles.SystemSettings?.darkMode)`.
+        crate::books::set_dark(session.dark_mode(), cx);
         let shared: Shared = std::rc::Rc::new(std::cell::RefCell::new(session));
         let desk = cx.new(|cx| Desk::new(shared, route, window, cx));
         self._subscriptions = vec![
             cx.subscribe_in(&desk, window, |this, _, _: &ChangeFile, window, cx| {
                 window.set_window_title("Latte Books");
+                // `showDbSelector` clears what the company kept: the recent searches.
+                session::set_config_value(crate::search_bar::RECENTS_KEY, "[]");
                 this.show_selector(None, window, cx)
             }),
             cx.subscribe_in(&desk, window, |this, desk, event: &Reopen, window, cx| {
@@ -124,7 +128,7 @@ impl LatteApp {
 }
 
 impl Render for LatteApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let screen = match &self.screen {
             Screen::Selector(view) => view.clone().into_any_element(),
@@ -138,5 +142,7 @@ impl Render for LatteApp {
             // The browser's 16px, which Books' unstyled text keeps.
             .text_size(px(16.))
             .child(screen)
+            // `#toast-container`.
+            .children(crate::widgets::toasts(window, cx))
     }
 }

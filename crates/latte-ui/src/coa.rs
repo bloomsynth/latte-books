@@ -447,7 +447,9 @@ fn account_icon(account: &Account) -> Img {
         _ if account.is_group => ("books/coa/folder.svg", 12.),
         _ => ("books/coa/leaf.svg", 8.),
     };
-    img(path).size(px(size)).flex_none()
+    img(crate::books::themed_icon(path))
+        .size(px(size))
+        .flex_none()
 }
 
 /// The small text buttons a row shows on hover.
