@@ -45,6 +45,8 @@ pub struct LinkInput {
     linkable: bool,
     /// Required and empty: the selector is red (`showMandatory`).
     mandatory: bool,
+    /// `size="small"`: `px-2 py-1`, as report filters are.
+    small: bool,
     _subscription: Subscription,
 }
 
@@ -70,6 +72,7 @@ impl LinkInput {
             bordered: true,
             linkable: false,
             mandatory: false,
+            small: false,
             _subscription: subscription,
         }
     }
@@ -77,6 +80,12 @@ impl LinkInput {
     /// As a table cell: no frame.
     pub fn bare(mut self) -> Self {
         self.bordered = false;
+        self
+    }
+
+    /// The small size, as report filters are.
+    pub fn small(mut self) -> Self {
+        self.small = true;
         self
     }
 
@@ -310,7 +319,7 @@ impl Render for LinkInput {
             .text_13()
             .map(|i| if self.bordered { i.px_3() } else { i.px_2() });
         let frame = if self.bordered {
-            control_frame(false, focused)
+            control_frame(false, focused).when(self.small, |d| d.min_h(px(30.)))
         } else {
             div()
                 .h_flex()

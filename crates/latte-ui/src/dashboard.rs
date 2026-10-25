@@ -2,28 +2,91 @@
 //!
 //! The data comes from `latte_core::dashboard`; this draws it.
 //!
-//! Differences from Books:
-//! - The period is picked in the header for the whole page; Books also has a picker on
-//!   each chart.
+//! As in Books, each chart has its own period, and the header's period sets them all;
+//! picking another period on a chart leaves the header at "Set Period".
+//!
+//! Differences from Books: the Paid and Unpaid amounts don't open the invoice list yet.
 
-use crate::widgets::Button;
 use gpui_kit::component::chart::{AreaChart, BarChart, PieChart};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
 use latte_core::dashboard::{self, CashflowMonth, Period, Unpaid};
-use latte_core::views::sidebar::Route;
 
+use gpui_kit::prelude::FluentBuilder as _;
+
+use crate::Navigate;
+use crate::books::{self, Text as _, gray, white};
 use crate::i18n::t;
 use crate::session::Shared;
-use crate::widgets::{error_message, page_header};
-use crate::{Nav, Navigate};
+use crate::widgets::{dropdown_item, error_message, page_header, popover_panel};
+
+/// A dashboard widget, each with its own period (`BaseDashboardChart.vue`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Widget {
+    Header,
+    Cashflow,
+    Sales,
+    Purchases,
+    Profit,
+    Expenses,
+}
+
+impl Widget {
+    const CHARTS: [Widget; 5] = [
+        Widget::Cashflow,
+        Widget::Sales,
+        Widget::Purchases,
+        Widget::Profit,
+        Widget::Expenses,
+    ];
+
+    /// The periods a widget offers: the charts by month have no This Month.
+    fn options(self) -> &'static [Period] {
+        match self {
+            Widget::Cashflow | Widget::Profit => {
+                &[Period::ThisYear, Period::ThisQuarter, Period::Ytd]
+            }
+            _ => &[
+                Period::ThisYear,
+                Period::ThisQuarter,
+                Period::ThisMonth,
+                Period::Ytd,
+            ],
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Widget::Header => "header",
+            Widget::Cashflow => "cashflow",
+            Widget::Sales => "sales",
+            Widget::Purchases => "purchases",
+            Widget::Profit => "profit",
+            Widget::Expenses => "expenses",
+        }
+    }
+}
+
+/// `PeriodSelector.vue`'s labels.
+fn period_label(period: Option<Period>) -> &'static str {
+    match period {
+        None => "Set Period",
+        Some(Period::Ytd) => "Year to Date",
+        Some(period) => period.label(),
+    }
+}
 
 pub struct DashboardPage {
     session: Shared,
-    period: Period,
-    /// The period of the charts by month, which This Month leaves as it was.
-    month_period: Period,
+    /// The header's period; `None` once a chart's own differs ("Set Period").
+    period: Option<Period>,
+    /// Each chart's period, in `Widget::CHARTS` order.
+    periods: [Period; 5],
+    /// The period menu open, if any.
+    menu: Option<Widget>,
+    /// The invoices bar under the pointer, which shows its counts.
+    hovered: Option<&'static str>,
     cashflow: Vec<CashflowMonth>,
     has_cashflow: bool,
     sales: Option<Unpaid>,
@@ -44,8 +107,10 @@ impl DashboardPage {
     pub fn new(session: Shared, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut page = Self {
             session,
-            period: Period::ThisYear,
-            month_period: Period::ThisYear,
+            period: Some(Period::ThisYear),
+            periods: [Period::ThisYear; 5],
+            menu: None,
+            hovered: None,
             cashflow: Vec::new(),
             has_cashflow: false,
             sales: None,
@@ -59,10 +124,31 @@ impl DashboardPage {
         page
     }
 
-    fn set_period(&mut self, period: Period, cx: &mut Context<Self>) {
-        self.period = period;
-        if period.has_months() {
-            self.month_period = period;
+    fn period_of(&self, widget: Widget) -> Period {
+        Widget::CHARTS
+            .iter()
+            .position(|w| *w == widget)
+            .map_or(Period::ThisYear, |i| self.periods[i])
+    }
+
+    /// `handlePeriodChange`: the header's period sets every chart that offers it; a
+    /// chart's own leaves the header at "Set Period" when it differs.
+    fn set_period(&mut self, widget: Widget, period: Period, cx: &mut Context<Self>) {
+        self.menu = None;
+        if widget == Widget::Header {
+            self.period = Some(period);
+            for (i, chart) in Widget::CHARTS.iter().enumerate() {
+                if chart.options().contains(&period) {
+                    self.periods[i] = period;
+                }
+            }
+        } else {
+            if let Some(i) = Widget::CHARTS.iter().position(|w| *w == widget) {
+                self.periods[i] = period;
+            }
+            if self.period != Some(period) {
+                self.period = None;
+            }
         }
         self.load(cx);
     }
@@ -76,14 +162,31 @@ impl DashboardPage {
     fn read(&mut self) -> Result<(), latte_core::Error> {
         let s = self.session.borrow();
         let fyo = &s.fyo;
-        let dates = dashboard::dates_and_months(self.period, today());
-        let month_dates = dashboard::dates_and_months(self.month_period, today());
+        let periods: Vec<(Widget, Period)> = Widget::CHARTS
+            .iter()
+            .map(|w| (*w, self.period_of(*w)))
+            .collect();
+        let dates = |widget: Widget| {
+            let period = periods
+                .iter()
+                .find(|(w, _)| *w == widget)
+                .map_or(Period::ThisYear, |(_, p)| *p);
+            dashboard::dates_and_months(period, today())
+        };
         self.has_cashflow = dashboard::has_cashflow(fyo)?;
-        self.cashflow = dashboard::cashflow(fyo, &month_dates)?;
-        self.sales = Some(dashboard::unpaid(fyo, "SalesInvoice", &dates)?);
-        self.purchases = Some(dashboard::unpaid(fyo, "PurchaseInvoice", &dates)?);
-        (self.profit, self.has_profit) = dashboard::profit_and_loss(fyo, &month_dates)?;
-        self.expenses = dashboard::top_expenses(fyo, &dates)?;
+        self.cashflow = dashboard::cashflow(fyo, &dates(Widget::Cashflow))?;
+        self.sales = Some(dashboard::unpaid(
+            fyo,
+            "SalesInvoice",
+            &dates(Widget::Sales),
+        )?);
+        self.purchases = Some(dashboard::unpaid(
+            fyo,
+            "PurchaseInvoice",
+            &dates(Widget::Purchases),
+        )?);
+        (self.profit, self.has_profit) = dashboard::profit_and_loss(fyo, &dates(Widget::Profit))?;
+        self.expenses = dashboard::top_expenses(fyo, &dates(Widget::Expenses))?;
         Ok(())
     }
 
@@ -95,48 +198,120 @@ impl DashboardPage {
         }
     }
 
-    fn period_picker(&self, cx: &mut Context<Self>) -> Div {
+    /// `PeriodSelector.vue`: the period and a chevron, opening a menu of the periods.
+    fn period_selector(&self, widget: Widget, cx: &mut Context<Self>) -> Div {
+        let current = if widget == Widget::Header {
+            self.period
+        } else {
+            Some(self.period_of(widget))
+        };
+        let open = self.menu == Some(widget);
+        let menu = open.then(|| {
+            deferred(
+                anchored().anchor(Anchor::TopRight).snap_to_window().child(
+                    popover_panel()
+                        .id(SharedString::from(format!("period-menu-{}", widget.id())))
+                        .occlude()
+                        .mt_2()
+                        .min_w(px(160.))
+                        .p_1()
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.menu = None;
+                            cx.notify();
+                        }))
+                        .children(widget.options().iter().enumerate().map(|(i, &period)| {
+                            dropdown_item(
+                                SharedString::from(format!("{}-{i}", widget.id())),
+                                t(period_label(Some(period))),
+                            )
+                            .when(i > 0, |d| d.mt_1())
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| this.set_period(widget, period, cx),
+                            ))
+                        })),
+                ),
+            )
+            .with_priority(1)
+        });
+        let color = if current.is_some() {
+            gray(900)
+        } else {
+            gray(600)
+        };
+        div()
+            .relative()
+            .child(
+                div()
+                    .id(SharedString::from(format!("period-{}", widget.id())))
+                    .h_flex()
+                    .py_1()
+                    .text_12()
+                    .text_color(color)
+                    .cursor_pointer()
+                    .hover(|d| d.text_color(gray(800)))
+                    .child(t(period_label(current)))
+                    .child(books::icon("chevron-down", px(12.), color).ml_1())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.menu = if this.menu == Some(widget) {
+                            None
+                        } else {
+                            Some(widget)
+                        };
+                        cx.notify();
+                    })),
+            )
+            .children(menu)
+    }
+
+    /// `SectionHeader.vue`: the title, then the widget's period.
+    fn section_header(&self, title: &str, widget: Widget, cx: &mut Context<Self>) -> Div {
         div()
             .h_flex()
-            .gap_1()
-            .children(Period::ALL.iter().map(|&period| {
-                let button = Button::new(SharedString::from(format!("period-{}", period.label())))
-                    .small()
-                    .label(t(period.label()))
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_period(period, cx)));
-                if period == self.period {
-                    button.primary()
-                } else {
-                    button.ghost()
-                }
-            }))
+            .justify_between()
+            .child(
+                div()
+                    .text_13()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t(title)),
+            )
+            .child(self.period_selector(widget, cx))
     }
 
-    fn section(title: &str, cx: &App) -> Div {
-        let theme = cx.theme();
-        div().v_flex().gap_3().p_4().child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.foreground)
-                .child(t(title)),
-        )
-    }
-
-    fn empty(text: &str, cx: &App) -> Div {
+    fn empty(text: &str) -> Div {
         div()
-            .h(px(120.))
+            .my_20()
             .h_flex()
             .justify_center()
-            .text_color(cx.theme().muted_foreground)
+            .text_13()
+            .text_color(gray(600))
             .child(t(text))
     }
 
     fn render_cashflow(&self, cx: &mut Context<Self>) -> Div {
-        let section = Self::section("Cashflow", cx);
+        let (inflow, outflow) = (books::color("blue", 500), books::color("pink", 500));
+        // `Cashflow.vue`: the title, the legend and the period on one row.
+        let header = div()
+            .h_flex()
+            .justify_between()
+            .child(
+                div()
+                    .text_13()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t("Cashflow")),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_8()
+                    .text_13()
+                    .child(legend(t("Inflow"), inflow))
+                    .child(legend(t("Outflow"), outflow)),
+            )
+            .child(self.period_selector(Widget::Cashflow, cx));
+        let section = div().v_flex().p_4().child(header);
         if !self.has_cashflow {
-            return section.child(Self::empty("No transactions yet", cx));
+            return section.child(Self::empty("No transactions yet"));
         }
-        let (inflow, outflow): (Hsla, Hsla) = (INFLOW.into(), OUTFLOW.into());
         let money = self.money_fn();
         // Four round steps up to the largest month, so the axis reads 0, 20K, 40K….
         let top = self
@@ -160,101 +335,152 @@ impl DashboardPage {
             .y_axis(true)
             .y_tick_format(short_number)
             .tooltip_value(move |_, _, value| SharedString::from(money(value)));
-        section
-            .child(
-                div()
-                    .h_flex()
-                    .gap_4()
-                    .text_sm()
-                    .child(legend(t("Inflow"), inflow))
-                    .child(legend(t("Outflow"), outflow)),
-            )
-            .child(div().h(px(220.)).child(chart))
+        section.child(div().mt_4().h(px(220.)).child(chart))
     }
 
+    /// `UnpaidInvoices.vue`: what was paid and what wasn't, and a bar; its counts show
+    /// over the bar.
     fn render_unpaid(
         &self,
         schema_name: &'static str,
         unpaid: Option<&Unpaid>,
         cx: &mut Context<Self>,
     ) -> Div {
-        let theme = cx.theme().clone();
-        let (title, color) = if schema_name == "SalesInvoice" {
-            ("Sales Invoices", theme.blue)
+        let (title, color, widget) = if schema_name == "SalesInvoice" {
+            ("Sales Invoices", "blue", Widget::Sales)
         } else {
-            ("Purchase Invoices", theme.magenta)
+            ("Purchase Invoices", "pink", Widget::Purchases)
         };
-        let new_button = Button::new(SharedString::from(format!("new-{schema_name}")))
-            .small()
-            .ghost()
-            .label(t("New Invoice"))
-            .on_click(cx.listener(move |_, _, _, cx| {
-                cx.emit(Navigate(Nav::Route(Route::Form {
-                    schema: schema_name.to_owned(),
-                    name: None,
-                })))
-            }));
-        let header = div()
-            .h_flex()
-            .justify_between()
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(t(title)))
-            .child(new_button);
-        let mut section = div().v_flex().flex_1().gap_3().p_4().child(header);
-        let Some(unpaid) = unpaid.filter(|u| u.count > 0) else {
-            return section.child(Self::empty("No invoices yet", cx));
+        let (paid_color, unpaid_color) = (books::color(color, 500), books::color(color, 200));
+        let empty = Unpaid {
+            total: 0.,
+            unpaid: 0.,
+            paid: 0.,
+            count: 0,
+            paid_count: 0,
+            unpaid_count: 0,
         };
+        let unpaid = unpaid.unwrap_or(&empty);
+        let has_data = unpaid.count > 0;
         let paid_share = if unpaid.total > 0.0 {
             (unpaid.paid / unpaid.total).clamp(0.0, 1.0) as f32
         } else {
             0.0
         };
-        section = section
-            .child(
-                div()
-                    .h_flex()
-                    .justify_between()
-                    .text_sm()
-                    .child(format!("{} {}", self.money(unpaid.paid), t("Paid")))
-                    .child(format!("{} {}", self.money(unpaid.unpaid), t("Unpaid"))),
-            )
-            .child(
-                div()
-                    .h(px(10.))
-                    .w_full()
-                    .rounded_full()
-                    .bg(color.opacity(0.2))
-                    .child(
+        let amount = |value: f64, label: &str| {
+            div()
+                .text_12()
+                .font_weight(FontWeight::MEDIUM)
+                .when(!has_data, |d| {
+                    d.bg(gray(200)).text_color(gray(200)).rounded(books::RADIUS)
+                })
+                .child(self.money(value))
+                .child(
+                    div()
+                        .ml_1()
+                        .when(has_data, |d| {
+                            d.text_color(gray(900)).font_weight(FontWeight::NORMAL)
+                        })
+                        .child(t(label)),
+                )
+                .h_flex()
+        };
+        let hovered = self.hovered == Some(schema_name);
+        let counts = (hovered && has_data).then(|| {
+            div()
+                .absolute()
+                .bottom(px(24.))
+                .left(relative(0.4))
+                .v_flex()
+                .px_2()
+                .py_1()
+                .bg(white())
+                .shadow_md()
+                .border_l_4()
+                .border_color(paid_color)
+                .text_12()
+                .text_color(gray(900))
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_4()
+                        .justify_between()
+                        .child(t("Paid"))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(unpaid.paid_count.to_string()),
+                        ),
+                )
+                .when(unpaid.unpaid_count > 0, |d| {
+                    d.child(
                         div()
-                            .h_full()
-                            .w(relative(paid_share))
-                            .rounded_full()
-                            .bg(color),
-                    ),
+                            .h_flex()
+                            .gap_4()
+                            .justify_between()
+                            .child(t("Unpaid"))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(unpaid.unpaid_count.to_string()),
+                            ),
+                    )
+                })
+        });
+        div()
+            .v_flex()
+            .flex_1()
+            .p_4()
+            .child(self.section_header(title, widget, cx))
+            .child(
+                div()
+                    .mt_4()
+                    .h_flex()
+                    .justify_between()
+                    .child(amount(unpaid.paid, "Paid"))
+                    .child(amount(unpaid.unpaid, "Unpaid")),
             )
             .child(
                 div()
-                    .h_flex()
-                    .justify_between()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(format!("{} {}", unpaid.paid_count, t("Paid")))
-                    .child(format!("{} {}", unpaid.unpaid_count, t("Unpaid"))),
-            );
-        section
+                    .id(SharedString::from(format!("bar-{schema_name}")))
+                    .relative()
+                    .mt_2()
+                    .h_4()
+                    .w_full()
+                    .rounded(books::RADIUS)
+                    .bg(if has_data { unpaid_color } else { gray(200) })
+                    .when(has_data, |d| {
+                        d.child(
+                            div()
+                                .h_full()
+                                .w(relative(paid_share))
+                                .rounded_l(books::RADIUS)
+                                .bg(paid_color),
+                        )
+                    })
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        this.hovered = hovered.then_some(schema_name);
+                        cx.notify();
+                    }))
+                    .children(counts),
+            )
     }
 
     fn render_profit(&self, cx: &mut Context<Self>) -> Div {
-        let section = Self::section("Profit and Loss", cx);
+        let section =
+            div()
+                .v_flex()
+                .p_4()
+                .child(self.section_header("Profit and Loss", Widget::Profit, cx));
         if !self.has_profit {
-            return section.child(Self::empty("No transactions yet", cx));
+            return section.child(Self::empty("No transactions yet"));
         }
         let money = self.money_fn();
         let chart = BarChart::new(self.profit.clone())
             .band(|(month, _): &(String, f64)| SharedString::from(month_label(month)))
             .value(|(_, value): &(String, f64)| *value)
             .fill(|(_, value): &(String, f64), _, _, _| {
-                let color: Hsla = if *value < 0.0 { OUTFLOW } else { INFLOW }.into();
-                color
+                books::color(if *value < 0.0 { "pink" } else { "blue" }, 500)
             })
             // The value axis spans the data's own range, so its ticks fall on odd
             // amounts; the grid and the tooltips are enough.
@@ -264,14 +490,17 @@ impl DashboardPage {
             .corner_radii(px(3.))
             .min_length(2.)
             .tooltip_value(move |_, value| SharedString::from(money(value)));
-        section.child(div().h(px(220.)).child(chart))
+        section.child(div().mt_4().h(px(220.)).child(chart))
     }
 
     fn render_expenses(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
-        let section = Self::section("Top Expenses", cx);
+        let section =
+            div()
+                .v_flex()
+                .p_4()
+                .child(self.section_header("Top Expenses", Widget::Expenses, cx));
         if self.expenses.is_empty() {
-            return section.child(Self::empty("No expenses in this period", cx));
+            return section.child(Self::empty("No expenses in this period"));
         }
         let total: f64 = self.expenses.iter().map(|(_, v)| *v).sum();
         let slices: Vec<(String, f64, Hsla)> = self
@@ -289,17 +518,20 @@ impl DashboardPage {
             .pad_angle(0.02)
             .tooltip_name(|(account, _, _): &(String, f64, Hsla)| account.clone().into())
             .tooltip_value(move |_, value, _| SharedString::from(money(f64::from(value))));
-        let legend = div().v_flex().flex_1().gap_3().children(slices.iter().map(
-            |(account, value, color)| {
+        // `Expenses.vue`'s legend: a square, the account and its total.
+        let legend = div()
+            .v_flex()
+            .w_1_2()
+            .gap_4()
+            .justify_center()
+            .children(slices.iter().map(|(account, value, color)| {
                 div()
                     .h_flex()
-                    .gap_2()
-                    .text_sm()
-                    .child(div().size(px(10.)).flex_none().rounded_full().bg(*color))
-                    .child(div().flex_1().truncate().child(account.clone()))
-                    .child(div().flex_none().child(self.money(*value)))
-            },
-        ));
+                    .text_12()
+                    .child(div().size_3().flex_none().rounded(px(2.)).bg(*color))
+                    .child(div().ml_2().w(px(112.)).truncate().child(account.clone()))
+                    .child(div().ml_auto().flex_none().child(self.money(*value)))
+            }));
         let center = div()
             .absolute()
             .inset_0()
@@ -313,18 +545,20 @@ impl DashboardPage {
             )
             .child(
                 div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .text_11()
+                    .text_color(hex_a1abb4())
                     .child(t("Total Spending")),
             );
         section.child(
-            div().h_flex().gap_6().items_center().child(legend).child(
-                div()
-                    .relative()
-                    .flex_none()
-                    .size(px(190.))
-                    .child(donut)
-                    .child(center),
+            div().mt_4().h_flex().items_center().child(legend).child(
+                div().w_1_2().h_flex().justify_center().child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .size(px(190.))
+                        .child(donut)
+                        .child(center),
+                ),
             ),
         )
     }
@@ -342,19 +576,10 @@ impl DashboardPage {
     }
 }
 
-/// Books' chart colours: blue for money in and profit, pink for money out and loss.
-const INFLOW: Rgba = Rgba {
-    r: 0.231,
-    g: 0.510,
-    b: 0.965,
-    a: 1.0,
-};
-const OUTFLOW: Rgba = Rgba {
-    r: 0.882,
-    g: 0.506,
-    b: 0.659,
-    a: 1.0,
-};
+/// The donut's label colour (`DonutChart.vue`).
+fn hex_a1abb4() -> Hsla {
+    books::hex(0xA1ABB4)
+}
 
 /// A colour fading to clear downwards, under a line in an area chart.
 fn fade(color: Hsla) -> Background {
@@ -365,10 +590,9 @@ fn fade(color: Hsla) -> Background {
     )
 }
 
-/// The top expenses' colours: Books' pink, lighter for each smaller one.
+/// The top expenses' colours (`Expenses.vue`): pink 500 down to 100.
 fn expense_color(i: usize) -> Hsla {
-    let pink: Hsla = OUTFLOW.into();
-    pink.opacity([1.0, 0.75, 0.55, 0.38, 0.24][i.min(4)])
+    books::color("pink", [500, 400, 300, 200, 100][i.min(4)])
 }
 
 /// The smallest of 1, 2, 2.5 or 5 times a power of ten that is at least `value`.
@@ -420,19 +644,29 @@ fn month_label(yearmonth: &str) -> String {
 fn legend(label: String, color: Hsla) -> Div {
     div()
         .h_flex()
-        .gap_1()
-        .child(div().size(px(10.)).rounded_sm().bg(color))
-        .child(label)
+        .gap_2()
+        .child(div().size_3().rounded(px(2.)).bg(color))
+        .child(div().text_color(gray(900)).child(label))
 }
 
 impl Render for DashboardPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let header = page_header(t("Dashboard"), cx).child(self.period_picker(cx));
-        let divider = || div().w_full().h(px(1.)).bg(theme.border);
+        // `Dashboard.vue`: the page's period in a bordered box.
+        let header = page_header(t("Dashboard"), cx).child(
+            div()
+                .h_flex()
+                .px_3()
+                .border_1()
+                .border_color(gray(200))
+                .rounded(books::RADIUS)
+                .bg(gray(50))
+                .child(self.period_selector(Widget::Header, cx)),
+        );
+        let divider = || div().w_full().h(px(1.)).flex_none().bg(gray(200));
         div()
             .v_flex()
             .size_full()
+            .text_color(gray(900))
             .child(header)
             .children(self.error.clone().map(|e| error_message(e, cx)))
             .child(
@@ -446,24 +680,40 @@ impl Render for DashboardPage {
                     .child(
                         div()
                             .h_flex()
-                            .items_start()
-                            .child(self.render_unpaid("SalesInvoice", self.sales.as_ref(), cx))
-                            .child(div().w(px(1.)).h_full().bg(theme.border))
-                            .child(self.render_unpaid(
+                            .items_stretch()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .h_flex()
+                                    .border_r_1()
+                                    .border_color(gray(200))
+                                    .child(self.render_unpaid(
+                                        "SalesInvoice",
+                                        self.sales.as_ref(),
+                                        cx,
+                                    )),
+                            )
+                            .child(div().flex_1().h_flex().child(self.render_unpaid(
                                 "PurchaseInvoice",
                                 self.purchases.as_ref(),
                                 cx,
-                            )),
+                            ))),
                     )
                     .child(divider())
                     .child(
                         div()
                             .h_flex()
-                            .items_start()
-                            .child(div().flex_1().child(self.render_profit(cx)))
-                            .child(div().w(px(1.)).h_full().bg(theme.border))
+                            .items_stretch()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .border_r_1()
+                                    .border_color(gray(200))
+                                    .child(self.render_profit(cx)),
+                            )
                             .child(div().flex_1().child(self.render_expenses(cx))),
-                    ),
+                    )
+                    .child(divider()),
             )
     }
 }
