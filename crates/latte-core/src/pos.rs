@@ -145,6 +145,9 @@ pub struct PosItem {
     pub available: f64,
     pub has_batch: bool,
     pub has_serial_number: bool,
+    /// The item's picture, as Books keeps it: a data URL.
+    pub image: Option<String>,
+    pub item_group: Option<String>,
 }
 
 /// `setItems`: the items the point of sale sells, tracked ones or the others as its item
@@ -162,9 +165,17 @@ pub fn items(
     }
     let options = GetAllOptions {
         fields: Some(
-            ["name", "rate", "unit", "hasBatch", "hasSerialNumber"]
-                .map(str::to_owned)
-                .to_vec(),
+            [
+                "name",
+                "rate",
+                "unit",
+                "hasBatch",
+                "hasSerialNumber",
+                "image",
+                "itemGroup",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
         ),
         filters,
         order_by: Some(vec!["name".to_owned()]),
@@ -194,6 +205,14 @@ pub fn items(
             available,
             has_batch: is_truthy(row.get("hasBatch")),
             has_serial_number: is_truthy(row.get("hasSerialNumber")),
+            image: match row.get("image") {
+                Some(DocValue::Text(image)) if !image.is_empty() => Some(image.clone()),
+                _ => None,
+            },
+            item_group: match row.get("itemGroup") {
+                Some(DocValue::Text(group)) if !group.is_empty() => Some(group.clone()),
+                _ => None,
+            },
         });
     }
     Ok(items)
@@ -423,6 +442,15 @@ pub fn add_item(
         row.insert("batch".to_owned(), DocValue::Text(batch.to_owned()));
     }
     sale.append(fyo, "items", row)?;
+
+    // A sale on a price list takes the list's rate for the item.
+    if let Some(price_list) = text(sale, "priceList").filter(|p| !p.is_empty()) {
+        let price_list = price_list.to_owned();
+        let idx = sale.table("items").len() - 1;
+        if let Some(rate) = till::price_list_rate(fyo, &price_list, &sale.table("items")[idx])? {
+            sale.set_child(fyo, "items", idx, "rate", DocValue::Money(rate))?;
+        }
+    }
     Ok(())
 }
 
@@ -618,10 +646,17 @@ fn make_payment(fyo: &mut Fyo, sale: &Doc, payment: &PosPayment) -> Result<Optio
         return Ok(None);
     };
     let outstanding = money(&doc, "amount").unwrap_or_else(|| fyo.pesa().zero());
-    let amount = if payment.amount.gt(&outstanding)? {
-        outstanding
+    // A return's refund is for what the return is owed, which Books' payment modal shows
+    // as a negative amount.
+    let tendered = if crate::models::base_models::invoice::is_return(sale) {
+        payment.amount.abs()?
     } else {
         payment.amount.clone()
+    };
+    let amount = if tendered.gt(&outstanding)? {
+        outstanding
+    } else {
+        tendered
     };
     doc.set(fyo, "paymentMethod", DocValue::Text(payment.method.clone()))?;
     doc.set(fyo, "amount", DocValue::Money(amount))?;
@@ -633,8 +668,16 @@ fn make_payment(fyo: &mut Fyo, sale: &Doc, payment: &PosPayment) -> Result<Optio
 
     let method_type = fyo.get_value("PaymentMethod", Some(&payment.method), "type");
     if method_type == Some(DocValue::Text("Cash".to_owned())) {
+        // A refund is paid from the counter, which is the payment's From Account. Books
+        // sets the counter as the To Account, as for a sale, which the payment refuses as
+        // the same account twice.
+        let fieldname = if crate::models::base_models::invoice::is_return(sale) {
+            "account"
+        } else {
+            "paymentAccount"
+        };
         if let Some(account) = single_text(fyo, "POSSettings", "cashAccount") {
-            doc.set(fyo, "paymentAccount", DocValue::Text(account))?;
+            doc.set(fyo, fieldname, DocValue::Text(account))?;
         }
     } else {
         let reference = payment
@@ -964,6 +1007,10 @@ fn transfer_cash_and_write_off(fyo: &mut Fyo, shift: &Doc) -> Result<(), Error> 
     }
     transfer_entry(fyo, &rows)
 }
+
+#[path = "pos_till.rs"]
+mod till;
+pub use till::*;
 
 #[cfg(test)]
 #[path = "pos_tests.rs"]

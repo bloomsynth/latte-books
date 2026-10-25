@@ -434,3 +434,393 @@ fn a_saved_sale_is_taken_up_and_paid_later() {
     assert!(done.shipment.is_none());
     assert!(held_sales(&fyo, true).unwrap().is_empty());
 }
+
+fn accounting(fyo: &mut Fyo, values: &[(&str, bool)]) {
+    let values: DocValueMap = values
+        .iter()
+        .map(|(fieldname, on)| ((*fieldname).to_owned(), DocValue::Bool(*on)))
+        .collect();
+    fyo.db.update("AccountingSettings", &values).unwrap();
+}
+
+/// A sale of `quantity` Pens to the default customer, not saved.
+fn cart(fyo: &mut Fyo, quantity: f64) -> Doc {
+    let mut sale = new_sale(fyo, None).unwrap();
+    let qty_map = item_qty_map(fyo).unwrap();
+    let item = pen(fyo);
+    add_item(fyo, &mut sale, &item, quantity, None, &qty_map).unwrap();
+    sale
+}
+
+fn quantity_of(sale: &Doc, idx: usize) -> f64 {
+    crate::models::helpers::number(&sale.table("items")[idx], "quantity").unwrap()
+}
+
+#[test]
+fn the_ui_follows_the_profile_then_the_settings() {
+    let (_file, mut fyo) = shop();
+    set_up_pos(&mut fyo);
+    assert_eq!(pos_ui(&fyo), PosUi::Classic);
+    fyo.db
+        .update("POSSettings", &map([("posUI", text("Modern"))]))
+        .unwrap();
+    assert_eq!(pos_ui(&fyo), PosUi::Modern);
+
+    let values = map([
+        ("name", text("Counter 1")),
+        ("posUI", text("Classic")),
+        ("inventory", text("Stores")),
+    ]);
+    fyo.get_new_doc("POSProfile", values)
+        .unwrap()
+        .sync(&mut fyo)
+        .unwrap();
+    fyo.db
+        .update("POSSettings", &map([("posProfile", text("Counter 1"))]))
+        .unwrap();
+    assert_eq!(pos_ui(&fyo), PosUi::Classic);
+    assert!(!can_change_rate(&fyo));
+    fyo.db
+        .update(
+            "POSSettings",
+            &map([("canChangeRate", DocValue::Bool(true))]),
+        )
+        .unwrap();
+    assert!(can_change_rate(&fyo));
+}
+
+#[test]
+fn a_row_quantity_is_checked_and_put_back_if_refused() {
+    let (_file, mut fyo) = shop();
+    set_up_pos(&mut fyo);
+    let qty_map = item_qty_map(&fyo).unwrap();
+    let mut sale = cart(&mut fyo, 2.0);
+
+    let error = set_row_quantity(&mut fyo, &mut sale, 0, 11.0, &qty_map).unwrap_err();
+    assert_eq!(error.to_string(), "Item Pen only has 10 Quantity");
+    assert_eq!(quantity_of(&sale, 0), 2.0);
+    let error = set_row_quantity(&mut fyo, &mut sale, 0, 0.0, &qty_map).unwrap_err();
+    assert_eq!(error.to_string(), "Quantity must be greater than zero.");
+
+    set_row_quantity(&mut fyo, &mut sale, 0, 4.0, &qty_map).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "2800.00");
+    adjust_row_quantity(&mut fyo, &mut sale, 0, -1.0, &qty_map).unwrap();
+    assert_eq!(quantity_of(&sale, 0), 3.0);
+    // The chevrons never take a row to nothing.
+    set_row_quantity(&mut fyo, &mut sale, 0, 1.0, &qty_map).unwrap();
+    adjust_row_quantity(&mut fyo, &mut sale, 0, -1.0, &qty_map).unwrap();
+    assert_eq!(quantity_of(&sale, 0), 1.0);
+
+    // Q and 5: the last row.
+    quick_quantity(&mut fyo, &mut sale, None, 5.0, &qty_map).unwrap();
+    assert_eq!(quantity_of(&sale, 0), 5.0);
+}
+
+#[test]
+fn a_row_keeps_its_discount_and_takes_a_new_rate() {
+    let (_file, mut fyo) = shop();
+    set_up_pos(&mut fyo);
+    accounting(&mut fyo, &[("enableDiscounting", true)]);
+    let qty_map = item_qty_map(&fyo).unwrap();
+    let mut sale = cart(&mut fyo, 1.0);
+
+    set_row_discount(&mut fyo, &mut sale, 0, Discount::Percent(10.0)).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "630.00");
+    set_row_quantity(&mut fyo, &mut sale, 0, 2.0, &qty_map).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "1260.00");
+
+    let fifty = fyo.pesa().from_f64(50.0).unwrap();
+    set_row_discount(&mut fyo, &mut sale, 0, Discount::Amount(fifty)).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "1300.00");
+    set_row_quantity(&mut fyo, &mut sale, 0, 3.0, &qty_map).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "1950.00");
+    assert!(discount_read_only(&fyo, &sale.table("items")[0], true));
+
+    let rate = fyo.pesa().from_f64(600.0).unwrap();
+    set_row_rate(&mut fyo, &mut sale, 0, rate).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "1650.00");
+}
+
+#[test]
+fn the_keypad_types_and_saves_as_books_does() {
+    let (_file, mut fyo) = shop();
+    set_up_pos(&mut fyo);
+    accounting(&mut fyo, &[("enableDiscounting", true)]);
+    let qty_map = item_qty_map(&fyo).unwrap();
+    let mut sale = cart(&mut fyo, 1.0);
+
+    let row = &sale.table("items")[0];
+    assert_eq!(keypad_start(row, KeypadField::Quantity), "1");
+    assert_eq!(keypad_start(row, KeypadField::Rate), "");
+    let mut value = String::new();
+    for key in ["0", "3", "-", "-", "+", ".", "5", "Del", "Del"] {
+        value = keypad_press(&value, key);
+    }
+    assert_eq!(value, "3");
+    assert_eq!(keypad_press("12", "Clear"), "");
+
+    keypad_save(&mut fyo, &mut sale, 0, KeypadField::Quantity, "3", &qty_map).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "2100.00");
+    let error = keypad_save(
+        &mut fyo,
+        &mut sale,
+        0,
+        KeypadField::Quantity,
+        "-2",
+        &qty_map,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "Quantity must be greater than zero.");
+
+    let error = keypad_save(
+        &mut fyo,
+        &mut sale,
+        0,
+        KeypadField::ItemDiscountPercent,
+        "120",
+        &qty_map,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Discount Percent (120) cannot be greater than 100."
+    );
+    keypad_save(
+        &mut fyo,
+        &mut sale,
+        0,
+        KeypadField::ItemDiscountPercent,
+        "50",
+        &qty_map,
+    )
+    .unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "1050.00");
+
+    keypad_save(&mut fyo, &mut sale, 0, KeypadField::Rate, "500", &qty_map).unwrap();
+    assert_eq!(money(&sale.table("items")[0], "rate"), "500.00");
+}
+
+#[test]
+fn a_coupon_is_applied_and_taken_off_at_the_till() {
+    let (_file, mut fyo) = shop();
+    set_up_pos(&mut fyo);
+    accounting(
+        &mut fyo,
+        &[("enablePricingRule", true), ("enableCouponCode", true)],
+    );
+    let values = map([
+        ("title", text("Pen offer")),
+        (
+            "appliedItems",
+            DocValue::Table(vec![map([("item", text(PEN))])]),
+        ),
+        ("discountType", text("Price Discount")),
+        ("priceDiscountType", text("rate")),
+        ("discountRate", DocValue::Number(600.0)),
+        ("minQuantity", DocValue::Number(1.0)),
+        ("maxQuantity", DocValue::Number(10.0)),
+        ("minAmount", DocValue::Number(100.0)),
+        ("maxAmount", DocValue::Number(10000.0)),
+        ("validFrom", text("2020-01-01")),
+        ("validTo", text("2099-12-31")),
+        ("priority", text("1")),
+        ("isCouponCodeBased", DocValue::Bool(true)),
+    ]);
+    let mut rule = fyo.get_new_doc("PricingRule", values).unwrap();
+    rule.sync(&mut fyo).unwrap();
+    let values = map([
+        ("name", text("PEN100")),
+        ("couponName", text("Pen 100")),
+        ("pricingRule", text(rule.name().unwrap())),
+        ("maximumUse", DocValue::Number(5.0)),
+        ("minAmount", DocValue::Number(200.0)),
+        ("maxAmount", DocValue::Number(9000.0)),
+        ("validFrom", text("2021-01-01")),
+        ("validTo", text("2098-12-31")),
+    ]);
+    fyo.get_new_doc("CouponCode", values)
+        .unwrap()
+        .sync(&mut fyo)
+        .unwrap();
+    assert_eq!(coupon_codes(&fyo).unwrap(), ["PEN100"]);
+
+    let mut sale = cart(&mut fyo, 1.0);
+    let rate = |sale: &Doc| money(&sale.table("items")[0], "rate");
+    assert_eq!(rate(&sale), "700.00");
+    apply_coupon(&mut fyo, &mut sale, "PEN100").unwrap();
+    assert_eq!(rate(&sale), "600.00");
+    assert_eq!(
+        apply_coupon(&mut fyo, &mut sale, "PEN100")
+            .unwrap_err()
+            .to_string(),
+        "PEN100 already applied."
+    );
+    remove_coupon(&mut fyo, &mut sale, 0).unwrap();
+    assert!(sale.table("coupons").is_empty());
+    assert_eq!(rate(&sale), "700.00");
+}
+
+#[test]
+fn a_price_list_sets_the_rates() {
+    let (_file, mut fyo) = shop();
+    set_up_pos(&mut fyo);
+    accounting(
+        &mut fyo,
+        &[("enablePriceList", true), ("enablePricingRule", true)],
+    );
+    let values = map([
+        ("name", text("Festive")),
+        (
+            "priceListItem",
+            DocValue::Table(vec![map([
+                ("item", text(PEN)),
+                ("unit", text("Unit")),
+                ("rate", DocValue::Number(650.0)),
+            ])]),
+        ),
+    ]);
+    fyo.get_new_doc("PriceList", values)
+        .unwrap()
+        .sync(&mut fyo)
+        .unwrap();
+    assert_eq!(price_lists(&fyo).unwrap(), ["Festive"]);
+
+    let mut sale = cart(&mut fyo, 1.0);
+    let rate = |sale: &Doc| money(&sale.table("items")[0], "rate");
+    set_price_list(&mut fyo, &mut sale, Some("Festive")).unwrap();
+    assert_eq!(rate(&sale), "650.00");
+    set_price_list(&mut fyo, &mut sale, None).unwrap();
+    assert_eq!(rate(&sale), "700.00");
+
+    // Added on the list, an item takes its rate.
+    let mut sale = new_sale(&fyo, None).unwrap();
+    set_price_list(&mut fyo, &mut sale, Some("Festive")).unwrap();
+    let qty_map = item_qty_map(&fyo).unwrap();
+    let item = pen(&fyo);
+    add_item(&mut fyo, &mut sale, &item, 1.0, None, &qty_map).unwrap();
+    assert_eq!(rate(&sale), "650.00");
+}
+
+#[test]
+fn loyalty_points_are_redeemed_at_the_till() {
+    let (_file, mut fyo) = shop();
+    set_up_pos(&mut fyo);
+    accounting(&mut fyo, &[("enableLoyaltyProgram", true)]);
+    let values = map([
+        ("name", text("Program")),
+        ("fromDate", text("2020-01-01")),
+        ("toDate", text("2099-12-31")),
+        ("isEnabled", DocValue::Bool(true)),
+        ("conversionFactor", DocValue::Number(0.5)),
+        ("expiryDuration", DocValue::Number(30.0)),
+        ("expenseAccount", text("Discounts")),
+        (
+            "collectionRules",
+            DocValue::Table(vec![map([
+                ("tierName", text("Silver")),
+                ("collectionFactor", DocValue::Number(1.0)),
+                ("minimumTotalSpent", DocValue::Number(1000.0)),
+            ])]),
+        ),
+    ]);
+    fyo.get_new_doc("LoyaltyProgram", values)
+        .unwrap()
+        .sync(&mut fyo)
+        .unwrap();
+    let mut party = fyo.get_doc("Party", Some(CUSTOMER)).unwrap();
+    party
+        .set_and_sync(&mut fyo, "loyaltyProgram", text("Program"))
+        .unwrap();
+    sell(&mut fyo, 2.0, None);
+    let loyalty = customer_loyalty(&fyo, CUSTOMER);
+    assert_eq!(loyalty.program.as_deref(), Some("Program"));
+    assert_eq!(loyalty.points, 1400.0);
+
+    let mut sale = cart(&mut fyo, 1.0);
+    let error = redeem_loyalty_points(&mut fyo, &mut sale, 1500.0, loyalty.points).unwrap_err();
+    assert_eq!(error.to_string(), "Walk-in only has 1400 points");
+    redeem_loyalty_points(&mut fyo, &mut sale, 400.0, loyalty.points).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "500.00");
+    cancel_loyalty_points(&mut fyo, &mut sale).unwrap();
+    assert_eq!(money(&sale, "grandTotal"), "700.00");
+
+    let mut sale = new_sale(&fyo, None).unwrap();
+    let row = map([
+        ("item", text("Pencil")),
+        ("quantity", DocValue::Number(1.0)),
+    ]);
+    sale.append(&mut fyo, "items", row).unwrap();
+    let error = redeem_loyalty_points(&mut fyo, &mut sale, 100.0, loyalty.points).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "no need 100 points to purchase this item"
+    );
+}
+
+#[test]
+fn an_item_enquiry_is_taken_down() {
+    let (_file, mut fyo) = shop();
+    let mut party = fyo.get_doc("Party", Some(CUSTOMER)).unwrap();
+    party
+        .set_and_sync(&mut fyo, "phone", text("98765"))
+        .unwrap();
+    assert_eq!(party_phone(&fyo, CUSTOMER), "98765");
+    let enquiry = ItemEnquiry {
+        item: "Fountain Pen".to_owned(),
+        customer: CUSTOMER.to_owned(),
+        contact: party_phone(&fyo, CUSTOMER),
+        ..ItemEnquiry::default()
+    };
+    let name = submit_item_enquiry(&mut fyo, &enquiry).unwrap();
+    assert_eq!(
+        fyo.get_value("ItemEnquiry", Some(&name), "item"),
+        Some(text("Fountain Pen"))
+    );
+    assert!(submit_item_enquiry(&mut fyo, &ItemEnquiry::default()).is_err());
+}
+
+#[test]
+fn a_sale_is_returned_and_paid_back_at_the_till() {
+    let (_file, mut fyo) = shop();
+    set_up_pos(&mut fyo);
+    accounting(&mut fyo, &[("enableInvoiceReturns", true)]);
+    let tendered = cash(&fyo, 1400.0);
+    let sold = sell(&mut fyo, 2.0, Some(&tendered)).invoice;
+    let names = |fyo: &Fyo| -> Vec<DocValue> {
+        returnable_sales(fyo)
+            .unwrap()
+            .iter()
+            .filter_map(|row| row.get("name").cloned())
+            .collect()
+    };
+    assert_eq!(names(&fyo), [text(&sold)]);
+
+    let mut back = return_sale(&mut fyo, &sold).unwrap().unwrap();
+    assert!(is_return_sale(&back));
+    assert_eq!(quantity_of(&back, 0), -2.0);
+    let qty_map = item_qty_map(&fyo).unwrap();
+    let item = pen(&fyo);
+    assert_eq!(
+        add_item(&mut fyo, &mut back, &item, 1.0, None, &qty_map)
+            .unwrap_err()
+            .to_string(),
+        "Unable to add an item to the return invoice."
+    );
+    // The payment modal offers what is owed, which is negative for a return.
+    let refund = cash(&fyo, -1400.0);
+    let done = create_transaction(&mut fyo, &mut back, &HashMap::new(), Some(&refund)).unwrap();
+    assert!(done.payment.is_some());
+    assert_eq!(item_qty_map(&fyo).unwrap()[PEN].available, 10.0);
+    assert!(names(&fyo).is_empty());
+}
+
+#[test]
+fn serial_numbers_are_one_a_line() {
+    validate_serial_number_count("A1\nA2", 2.0, PEN).unwrap();
+    assert_eq!(
+        validate_serial_number_count("A1", 3.0, PEN)
+            .unwrap_err()
+            .to_string(),
+        "Need 3 Serial Numbers for Item Pen. You have provided 1"
+    );
+}

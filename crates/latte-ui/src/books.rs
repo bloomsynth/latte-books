@@ -417,6 +417,7 @@ static OWN: &[(&str, &[u8])] = &[
     feather!("search"),
     feather!("settings"),
     feather!("square"),
+    feather!("trash"),
     feather!("trash-2"),
     feather!("upload"),
     feather!("x"),

@@ -18,6 +18,7 @@ mod import_wizard;
 mod link;
 mod list_page;
 mod placeholder;
+mod pos_link;
 mod pos_page;
 mod pos_parts;
 mod print;
