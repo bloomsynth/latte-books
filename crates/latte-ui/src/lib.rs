@@ -8,6 +8,7 @@ mod assistants_page;
 mod books;
 mod coa;
 mod dashboard;
+mod date_picker;
 mod desk;
 mod export_wizard;
 mod filter_dropdown;

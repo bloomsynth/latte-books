@@ -243,6 +243,19 @@ fn a_rule_that_stops_applying_takes_its_discount_back() {
 }
 
 #[test]
+fn a_rate_rule_that_stops_applying_gives_the_items_rate_back() {
+    let (_file, mut fyo) = shop();
+    jacket_rule(&mut fyo, &[]);
+    let mut sinv = invoice(&mut fyo, "2024-02-10", JACKET, 5.0, 1000.0);
+    assert_eq!(money(&sinv.table("items")[0], "rate"), "800.00");
+
+    sinv.set_child(&mut fyo, "items", 0, "quantity", number(9.0))
+        .unwrap();
+    assert!(rules_applied(&sinv).is_empty());
+    assert_eq!(money(&sinv.table("items")[0], "rate"), "1000.00");
+}
+
+#[test]
 fn a_product_discount_adds_free_items() {
     let (_file, mut fyo) = shop();
     let mut rule = cap_rule(&mut fyo, "1");

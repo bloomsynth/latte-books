@@ -16,7 +16,7 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | Who made a change | `createdBy` and `modifiedBy` are the signed-in user | Always `Admin` | There is no sign-in yet |
 | Custom forms and fields | Customize Form is a page of its own, and a new field appears straight away | Customize Form is the CustomForm list and form; saving or deleting one opens the file again by itself, which adds the new fields and their columns | The schemas are built when a file is opened; reopening is how Books makes the column too |
 | A custom field's label set again to the same value | Refused as a duplicate of itself | Allowed | Books bug |
-| Exchange rates | An invoice in a foreign currency fetches today's rate from api.vatcomply.com | The rate is 1 until you set it, as in Books when it can't fetch | No network calls yet |
+| Exchange rates | An invoice in a foreign currency fetches today's rate from api.vatcomply.com | The rate is 1 until it is set in the header's exchange rate control, as in Books when it can't fetch | No network calls yet |
 | Returning an invoice with loyalty points | The return changes the invoice's loyalty entry by its own points, whichever way they went | Refused with "Returning an invoice with loyalty points isn't supported in Latte yet." | Books' result isn't clearly right; to settle with real cases |
 | Pricing rule applied flag | Set on every sales invoice once pricing rules are on | Set only when a rule applies | Books bug |
 | A coupon for an item in several pricing rules | Checked against the first rule the item is in only | Applies whatever the order of the item's rules | Books bug |
@@ -57,8 +57,11 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | Report totals | Summed as floats | Summed as money | No drift on long ledgers; what is shown is the same |
 | Report refresh | Reports watch the ledger and refresh themselves | The app runs a report again | Simpler; the same rows |
 | Search | Recent items, and More Filters (skip child tables or transactions, by document type) | Neither; the search index is made each time the search opens | Not ported yet |
-| Link fields | The dropdown ends with "Create", which opens a quick entry form for a new document; the chevron shows a quick view on hover | No Create entry or quick view | Not ported yet |
-| Linked entries | "View linked entries" lists the documents linked to this one, beside the form | Not offered | Not ported yet |
+| Date controls | The browser's date input, typed in the computer's date format, with the browser's calendar | Typed as YYYY-MM-DD (and HH:MM), with a calendar drawn like Chromium's | No browser engine in a native app |
+| Color control's custom colour | An `<input type="color">` that opens the system's colour picker | A "Custom Hex" box for `#RRGGBB` under the swatches | GPUI has no colour dialog |
+| After Delete | The page gone back to says "X deleted" in a toast | No toast | A form's toasts close with it |
+| Short stock before submitting | An item with exactly enough stock is listed as short, "(0)" | Only items with less stock than their quantity | Books bug |
+| Scanning a barcode into a Stock Movement | Says the item was added, but adds no row (`StockMovement.addItem` only reads the item) | Adds a row, or one more of it | Books bug |
 | Print View | Print opens the system dialog; the "…" menu also has New Template, the template and Duplicate Template | Save as PDF only; the menu has Print Settings | No template editor; print the saved PDF |
 | Report JSON export | Offered for every report | Offered for GSTR-1 and GSTR-2 only | CSV first; the GST portal needs GSTR's JSON |
 | Dates shown | In the computer's time zone, so west of UTC a ledger entry shows the day before | The date it is stored for | Books bug for anyone west of UTC |
@@ -78,7 +81,7 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | Shipment and receipt returns | Post the negative amount on the swapped sides; count draft and cancelled returns; let a return take back more than was shipped; copy the Returned flag and the invoice link; return serial numbers already returned | Reverse the posting; the same return rules as invoices; leave out the invoice link and returned serial numbers | Books bugs |
 | A return invoice's shipment or receipt | Always looks for a sales invoice's shipment, and fails when there's none | Made against its own invoice's shipment or receipt | Books bug |
 | Stock Ledger and Stock Balance To Date | Entries on the To Date are left out | Included | Books bug |
-| Inventory not ported yet | The barcode scanner (`addItem`) and the inventory list filters | Not ported yet | Phase 4 |
+| Inventory not ported yet | The inventory list filters | Not ported yet | Phase 4 |
 | Data import columns | A file's columns take the fields the template had in those places, even past the end of the file | Columns past the end of the file are for no field | Books bug |
 | Data import missing links | Named with the schema being imported: "(Sales Invoice, Acme)" | Named with the schema linked to: "(Party, Acme)" | Books bug |
 | Import Wizard | Cells are edited in place; Submit is asked in a dialog; the column picker is a dialog | A clicked cell is edited in a box above the table; "Submit entries?" is a checkbox; the column picker is on the page | Simpler in GPUI; the same import |

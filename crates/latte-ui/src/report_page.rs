@@ -6,8 +6,10 @@
 //! column widths, a group row folds what is under it, and the ledgers come a page at a
 //! time.
 //!
+//! A date filter opens the calendar of `date_picker.rs` when clicked, as Books' date
+//! input opens the browser's; it can be typed as YYYY-MM-DD too.
+//!
 //! Differences from Books:
-//! - Dates are typed as YYYY-MM-DD.
 //! - Export saves CSV, and JSON for the GSTR reports; Books also offers a PDF print.
 
 use std::collections::{HashMap, HashSet};
@@ -29,6 +31,7 @@ use latte_core::reports::{
 use latte_db::{DocValue, GetAllOptions};
 
 use crate::Navigate;
+use crate::date_picker::{DatePicked, DatePicker, PickerClosed, anchored_picker};
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::Shared;
 use crate::widgets::{error_message, page_header};
@@ -55,6 +58,8 @@ pub struct ReportPage {
     /// `Paginator.vue`, for the ledgers: the page, from 1, and the rows on a page.
     page: usize,
     count: usize,
+    /// The calendar open under a date filter, by its fieldname.
+    picker: Option<(String, Entity<DatePicker>, [Subscription; 2])>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -103,6 +108,7 @@ impl ReportPage {
             folded: HashSet::new(),
             page: 1,
             count: 50,
+            picker: None,
             _subscriptions: Vec::new(),
         };
         // The first run sets the default filters, which the controls then show.
@@ -336,6 +342,33 @@ impl ReportPage {
         .detach();
     }
 
+    /// `showPicker()`: the calendar under a date filter.
+    fn open_picker(&mut self, fieldname: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let value = match self.report.get(fieldname) {
+            FilterValue::Date(date) => Some(date.to_datetime(jiff::civil::Time::midnight())),
+            _ => None,
+        };
+        let picker = cx.new(|_| DatePicker::new(value, false));
+        let picked_name = fieldname.to_owned();
+        let picked = cx.subscribe_in(
+            &picker,
+            window,
+            move |this, _, event: &DatePicked, window, cx| {
+                let value = event
+                    .0
+                    .map_or(FilterValue::Null, |d| FilterValue::Date(d.date()));
+                this.set_filter(&picked_name, value, window, cx);
+            },
+        );
+        let closed = cx.subscribe_in(&picker, window, |this, _, _: &PickerClosed, window, cx| {
+            this.picker = None;
+            window.blur(cx);
+            cx.notify();
+        });
+        self.picker = Some((fieldname.to_owned(), picker, [picked, closed]));
+        cx.notify();
+    }
+
     /// A filter as `Report.vue` shows it: its label above a small bordered control.
     fn render_filter(
         &self,
@@ -363,6 +396,7 @@ impl ReportPage {
                 };
                 let overlay = shown.clone().map(|text| {
                     let state = state.clone();
+                    let fieldname = filter.fieldname.clone();
                     let empty = text.is_empty();
                     div()
                         .id(SharedString::from(format!(
@@ -382,10 +416,19 @@ impl ReportPage {
                                 .child(if empty { filter.label.clone() } else { text }),
                         )
                         .child(books::icon("calendar", px(16.), gray(600)))
-                        .on_click(move |_, window, cx| state.focus_handle(cx).focus(window, cx))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            state.focus_handle(cx).focus(window, cx);
+                            this.open_picker(&fieldname, window, cx);
+                        }))
                 });
+                let picker = self
+                    .picker
+                    .as_ref()
+                    .filter(|(name, ..)| *name == filter.fieldname)
+                    .map(|(_, picker, _)| anchored_picker(picker));
                 div()
                     .v_flex()
+                    .relative()
                     .child(label())
                     .child(
                         control_frame(false, focused)
@@ -401,6 +444,7 @@ impl ReportPage {
                             )
                             .children(overlay),
                     )
+                    .children(picker)
                     .into_any_element()
             }
             Some(FilterControl::Link(state)) => div()

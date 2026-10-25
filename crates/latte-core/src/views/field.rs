@@ -5,7 +5,8 @@
 // Differences from Books:
 // - A field the schema marks `hidden: false` (or `readOnly: false`) still asks the model.
 //   Books' schemas never write those out, so this changes nothing in practice.
-// - Dates are typed as YYYY-MM-DD; Books opens a date picker.
+// - Dates are typed as YYYY-MM-DD; Books' browser input takes the computer's format. Both
+//   open a calendar (`latte-ui`'s `date_picker.rs`).
 
 use jiff::Timestamp;
 use jiff::civil::Date;

@@ -1,23 +1,34 @@
 //! A document's form, drawn from its schema: `src/pages/CommonForm/CommonForm.vue`,
-//! `CommonFormSection.vue`, `FormHeader.vue` and the controls in
-//! `src/components/Controls` @ v0.36.0.
+//! `CommonFormSection.vue`, `FormHeader.vue`, `RowEditForm.vue`, `LinkedEntries.vue`,
+//! `src/pages/QuickEditForm.vue` and the controls in `src/components/Controls` @ v0.36.0.
 //!
 //! Every change goes through `Doc::set`, so formulas, validations and the model's `change`
 //! hook run as in Books, and the form then shows what the document holds.
 //!
-//! As in Books, the page header holds the actions (Print, the width toggle, the Create and
-//! View groups, the "…" menu, then Save or Submit), and the form is a 600px card below it,
-//! or the full width. Submit, Cancel and Delete ask first in a dialog; what worked is said
-//! in a toast; a value that can't be set is shown under its field.
+//! As in Books, the page header holds the actions (Linked Entries, Print, the width
+//! toggle, the Create and View groups, the "…" menu, then Save or Submit), and, on the left,
+//! the barcode scanner and the exchange rate of a document in another currency; the form
+//! is a 600px card below it, or the full width. Beside it one panel at a time: a child
+//! row's form, the linked entries, or a quick edit form (a document made from a Link
+//! field's Create, or the payment Make Payment makes). Submit, Cancel and Delete ask first
+//! in a dialog, and Ctrl+S asks before it saves; what worked is said in a toast; a value
+//! that can't be set is shown under its field.
 //!
-//! Differences from Books:
-//! - A child row is edited only in its table's columns; Books also opens a row form with
-//!   the row's other fields.
-//! - Attachments are shown but can't be changed yet.
-//! - No "View linked entries" panel.
+//! The same page, made with [`FormPage::new_quick`], is the quick edit panel: its title
+//! (and picture) on top, then the schema's quick edit fields, label beside control.
+//!
+//! Shortcuts, as `useDocShortcuts` and `CommonForm.vue` set them: Ctrl+S saves or submits,
+//! Ctrl+Backspace cancels or deletes, Ctrl+P opens the print view, Ctrl+L the linked
+//! entries, and Esc closes a dialog, a menu or the side panel.
+//!
+//! Differences from Books (each in docs/DEVIATIONS.md):
+//! - Dates are typed as YYYY-MM-DD, with a calendar drawn like Chromium's
+//!   (`date_picker.rs`) in place of the browser's date input.
+//! - A Color control's custom colour is typed as `#RRGGBB`; Books opens the system's
+//!   colour picker.
+//! - After Delete the page gone back to shows no "deleted" toast.
 
-use std::collections::HashMap;
-
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -31,18 +42,22 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::date_picker::{DatePicked, DatePicker, PickerClosed, anchored_picker};
 use crate::i18n::t;
 use latte_core::Doc;
 use latte_core::models::base_models::{invoice, lead, sales_quote};
 use latte_core::models::helpers::single_is_truthy;
 use latte_core::models::inventory::stock_transfer;
 use latte_core::views::field::{self, Tab};
+use latte_core::views::form::{self as form_view, LinkedGroup};
 use latte_core::views::list;
 use latte_core::views::sidebar::Route;
 use latte_db::DocValue;
 use latte_schema::{Field, FieldType};
 
-use crate::link::{LinkInput, LinkOpened, LinkOption, LinkPicked};
+use crate::link::{
+    LinkCreate, LinkDisableFilters, LinkInput, LinkOpened, LinkOption, LinkPicked, QuickViewData,
+};
 use crate::session::Shared;
 use crate::widgets::page_header_with;
 use crate::{Nav, Navigate};
@@ -61,7 +76,7 @@ enum Control {
     },
     Link {
         state: Entity<LinkInput>,
-        _subscriptions: [Subscription; 2],
+        _subscriptions: [Subscription; 4],
     },
     /// `Text.vue`: three rows of text.
     Text {
@@ -72,19 +87,184 @@ enum Control {
     Display,
     /// `AttachImage.vue`: a picture kept in the field as a data URL.
     Image,
+    /// `Attachment.vue`: a file kept in the field as `{name, type, data}`.
+    Attachment,
+    /// `Color.vue`: a swatch and the colour's name, which opens the swatches.
+    Color,
 }
 
 /// An action waiting for the user to confirm it, as Books' dialogs ask.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Pending {
+    /// Ctrl+S's "Save X?" (`showSubmitOrSyncDialog(doc, 'sync')`).
+    Sync,
     Submit,
+    /// `showInsufficientInventoryDialog`: the items short, then Submit is asked.
+    Insufficient(Vec<(String, f64)>),
     Cancel,
     Delete,
 }
 
-/// A control a tab needs: its key, field, value, whether read-only, its options, and
-/// whether required.
-type Wanted = (Key, Field, Option<DocValue>, bool, Vec<LinkOption>, bool);
+/// The side panel beside the form; only one shows at a time.
+enum Side {
+    None,
+    /// `RowEditForm.vue`: a child row's form, by its table and index.
+    Row(String, usize),
+    /// `LinkedEntries.vue`: the linked documents, and the schemas folded.
+    Links(Vec<LinkedGroup>, HashSet<String>),
+}
+
+/// What a quick edit panel tells the page that opened it.
+pub enum QuickEvent {
+    /// Closed with its ×, Esc, or after a delete.
+    Close,
+    /// Saved (`afterSync`).
+    Saved,
+    /// A Link field of the panel made a new document to edit in a panel of its own.
+    Open(Box<QuickRequest>),
+}
+
+impl EventEmitter<QuickEvent> for FormPage {}
+
+/// What the page does once a quick edit panel's document is saved: the panel is passed.
+pub type AfterSave = Rc<dyn Fn(Entity<FormPage>, &mut Window, &mut App)>;
+
+/// A document to edit in a quick edit panel (`openQuickEdit`): its fields to hide, and
+/// what follows its save. Without `after_save`, the panel stays open.
+#[derive(Clone)]
+pub struct QuickRequest {
+    pub doc: Doc,
+    pub hide: Vec<String>,
+    pub after_save: Option<AfterSave>,
+}
+
+/// The quick edit panels a page shows, the last on top (Books' `edit` route query).
+#[derive(Default)]
+pub struct QuickPanels {
+    panels: Vec<(Entity<FormPage>, Option<AfterSave>, [Subscription; 2])>,
+}
+
+impl QuickPanels {
+    pub fn top(&self) -> Option<&Entity<FormPage>> {
+        self.panels.last().map(|(form, ..)| form)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.panels.is_empty()
+    }
+
+    /// Whether the top panel edits this document.
+    pub fn shows(&self, schema: &str, name: &str, cx: &App) -> bool {
+        self.top().is_some_and(|form| {
+            let doc = form.read(cx).doc();
+            doc.schema_name() == schema && doc.name() == Some(name)
+        })
+    }
+
+    pub fn clear(&mut self) {
+        self.panels.clear();
+    }
+
+    fn remove(&mut self, form: &Entity<FormPage>) {
+        self.panels.retain(|(f, ..)| f != form);
+    }
+
+    fn after_save(&self, form: &Entity<FormPage>) -> Option<AfterSave> {
+        self.panels
+            .iter()
+            .find(|(f, ..)| f == form)
+            .and_then(|(_, after, _)| after.clone())
+    }
+}
+
+/// A page that shows quick edit panels: the form, the chart of accounts.
+pub trait QuickHost: EventEmitter<Navigate> + Sized + 'static {
+    fn quick_panels(&mut self) -> &mut QuickPanels;
+    /// A panel opened, or saved, closed or deleted its document: show what changed.
+    fn quick_changed(&mut self, window: &mut Window, cx: &mut Context<Self>);
+    /// A panel that closed on saving said what it did: the host's toast says it now.
+    fn quick_toast(&mut self, _message: String) {}
+}
+
+/// `openQuickEdit`: shows `request` in a quick edit panel on top of the host's.
+pub fn open_quick<H: QuickHost>(
+    host: &mut H,
+    session: Shared,
+    request: QuickRequest,
+    window: &mut Window,
+    cx: &mut Context<H>,
+) {
+    // The same document open already: nothing to do (`openQuickEdit`'s name check).
+    if let Some(name) = request.doc.name()
+        && host
+            .quick_panels()
+            .shows(request.doc.schema_name(), name, cx)
+    {
+        return;
+    }
+    let QuickRequest {
+        doc,
+        hide,
+        after_save,
+    } = request;
+    let form = cx.new(|cx| FormPage::new_quick(session.clone(), doc, hide, window, cx));
+    let subscription = cx.subscribe_in(
+        &form,
+        window,
+        move |host: &mut H, form, event: &QuickEvent, window, cx| match event {
+            QuickEvent::Close => {
+                host.quick_panels().remove(form);
+                host.quick_changed(window, cx);
+            }
+            QuickEvent::Saved => {
+                if let Some(after) = host.quick_panels().after_save(form) {
+                    host.quick_panels().remove(form);
+                    if let Some(message) = form.read(cx).info.clone() {
+                        host.quick_toast(message);
+                    }
+                    // Once the host is no longer being updated: `after` may update it.
+                    let form = form.clone();
+                    window.defer(cx, move |window, cx| after(form, window, cx));
+                }
+                host.quick_changed(window, cx);
+            }
+            QuickEvent::Open(request) => {
+                open_quick(host, session.clone(), (**request).clone(), window, cx);
+            }
+        },
+    );
+    // What the panel opens (a linked document) opens in place of the host's page.
+    let navigate = cx.subscribe(&form, |_: &mut H, _, event: &Navigate, cx| {
+        cx.emit(Navigate(event.0.clone()))
+    });
+    host.quick_panels()
+        .panels
+        .push((form.clone(), after_save, [subscription, navigate]));
+    form.update(cx, |form, cx| form.focus_first(window, cx));
+    host.quick_changed(window, cx);
+}
+
+/// The exchange rate control's state (`ExchangeRate.vue`): the left amount, the right
+/// one's input, and whether the company's currency is on the left.
+struct ExchangeRate {
+    from_value: Entity<InputState>,
+    right: Entity<InputState>,
+    swapped: bool,
+    _subscriptions: [Subscription; 2],
+}
+
+/// A control the form needs: its key, field and value, whether read-only and required,
+/// and a Link's options, whether it may bypass its filters and its options' groups.
+struct Wanted {
+    key: Key,
+    field: Field,
+    value: Option<DocValue>,
+    read_only: bool,
+    options: Vec<LinkOption>,
+    required: bool,
+    bypass: bool,
+    groups: HashMap<String, String>,
+}
 
 pub struct FormPage {
     session: Shared,
@@ -97,44 +277,69 @@ pub struct FormPage {
     error_title: &'static str,
     /// A value a control couldn't set, shown under it.
     field_errors: HashMap<Key, String>,
-    /// What worked, shown in a toast.
+    /// A toast: what worked, or a warning.
     info: Option<String>,
+    info_kind: DialogKind,
     pending: Option<Pending>,
     /// The action group whose menu is open.
     menu: Option<&'static str>,
     /// "Toggle between form and full width".
     full_width: bool,
-    /// The child row open in the row form (`RowEditForm.vue`): its table and index.
-    row_edit: Option<(String, usize)>,
+    side: Side,
+    /// The quick edit panels this form opened (a Link's Create, Make Payment).
+    quick_panels: QuickPanels,
+    /// In a quick edit panel: the fields hidden (`hideFields`).
+    quick: Option<Vec<String>>,
+    /// Link fields whose filters were turned off ("No results found, disable filters").
+    unfiltered: HashSet<Key>,
+    /// The calendar open under a Date or Datetime control.
+    picker: Option<(Key, Entity<DatePicker>, [Subscription; 2])>,
+    /// The Color control whose swatches are open, and its Custom Hex input.
+    color: Option<(Key, Entity<InputState>, Subscription)>,
+    exchange: Option<ExchangeRate>,
+    /// `Barcode.vue`'s input.
+    barcode: Option<(Entity<InputState>, Subscription)>,
     /// The pictures of the AttachImage fields, by their data URL.
     images: HashMap<String, Arc<Image>>,
     /// Shown inside another page (Settings), without its own header.
     embedded: bool,
     scroll: ScrollHandle,
+    /// Focused when the form opens, so its shortcuts work before anything is clicked.
+    focus: FocusHandle,
+    focus_on_open: bool,
+    /// `scanListener`: the digits a scanner typed, and when the last came.
+    scanned: (String, Option<std::time::Instant>),
+    /// `cooldown`: the code just scanned, so one scan isn't added twice.
+    cooldown: Option<(String, std::time::Instant)>,
 }
 
 impl EventEmitter<Navigate> for FormPage {}
 
+impl QuickHost for FormPage {
+    fn quick_panels(&mut self) -> &mut QuickPanels {
+        &mut self.quick_panels
+    }
+
+    fn quick_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quick_panels.is_empty() {
+            // The panel had the focus: the form takes it back for its shortcuts.
+            if self.quick.is_none() && !self.embedded {
+                self.focus.focus(window, cx);
+            }
+        } else {
+            self.side = Side::None;
+        }
+        self.refresh(window, cx);
+    }
+
+    fn quick_toast(&mut self, message: String) {
+        self.toast(message, DialogKind::Success);
+    }
+}
+
 impl FormPage {
     pub fn new(session: Shared, doc: Doc, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut page = Self {
-            session,
-            doc,
-            tabs: Vec::new(),
-            tab: 0,
-            controls: HashMap::new(),
-            error: None,
-            error_title: "Error",
-            field_errors: HashMap::new(),
-            info: None,
-            pending: None,
-            menu: None,
-            full_width: false,
-            images: HashMap::new(),
-            row_edit: None,
-            embedded: false,
-            scroll: ScrollHandle::new(),
-        };
+        let mut page = Self::blank(session, doc, cx);
         // `focusOrSelectFormControl`: a new document named by hand starts with an empty
         // name, not "New Party 01".
         let temporary = {
@@ -152,6 +357,68 @@ impl FormPage {
         }
         page.refresh(window, cx);
         page
+    }
+
+    /// The quick edit panel for `doc` (`QuickEditForm.vue`), without the fields in `hide`.
+    pub fn new_quick(
+        session: Shared,
+        doc: Doc,
+        hide: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut page = Self::blank(session, doc, cx);
+        page.quick = Some(hide);
+        page.refresh(window, cx);
+        page
+    }
+
+    fn blank(session: Shared, doc: Doc, cx: &mut Context<Self>) -> Self {
+        Self {
+            session,
+            doc,
+            tabs: Vec::new(),
+            tab: 0,
+            controls: HashMap::new(),
+            error: None,
+            error_title: "Error",
+            field_errors: HashMap::new(),
+            info: None,
+            info_kind: DialogKind::Success,
+            pending: None,
+            menu: None,
+            full_width: false,
+            side: Side::None,
+            quick_panels: QuickPanels::default(),
+            quick: None,
+            unfiltered: HashSet::new(),
+            picker: None,
+            color: None,
+            exchange: None,
+            barcode: None,
+            images: HashMap::new(),
+            embedded: false,
+            scroll: ScrollHandle::new(),
+            focus: cx.focus_handle(),
+            focus_on_open: true,
+            scanned: (String::new(), None),
+            cooldown: None,
+        }
+    }
+
+    /// `focusOrSelectFormControl`: a quick edit panel focuses its title, else its first
+    /// input.
+    fn focus_first(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.title_field().map(|f| Key::Field(f.fieldname));
+        let key = title.filter(|k| self.controls.contains_key(k)).or_else(|| {
+            self.shown_fields()
+                .into_iter()
+                .map(|f| Key::Field(f.fieldname))
+                .find(|k| matches!(self.controls.get(k), Some(Control::Input { .. })))
+        });
+        if let Some(Control::Input { state, .. }) = key.and_then(|k| self.controls.get(&k)) {
+            state.update(cx, |input, cx| input.focus(window, cx));
+        }
     }
 
     /// Loads a stored document, the single `schema`, or a new one when `name` is `None`.
@@ -203,123 +470,198 @@ impl FormPage {
         &self.doc
     }
 
+    /// `QuickEditForm.vue`'s title field (`titleField ?? 'name'`), in a quick edit panel.
+    fn title_field(&self) -> Option<Field> {
+        self.quick.as_ref()?;
+        let schema = self.doc.schema();
+        let name = schema
+            .title_field
+            .clone()
+            .unwrap_or_else(|| "name".to_owned());
+        schema.field(&name).cloned()
+    }
+
+    /// `QuickEditForm.vue`'s picture, beside the title.
+    fn image_field(&self) -> Option<Field> {
+        self.quick.as_ref()?;
+        self.doc
+            .schema()
+            .field("image")
+            .filter(|f| f.fieldtype == Some(FieldType::AttachImage))
+            .cloned()
+    }
+
+    /// The fields shown now: the tab's, or the quick edit panel's.
+    fn shown_fields(&self) -> Vec<Field> {
+        match &self.quick {
+            Some(hide) => {
+                let s = self.session.borrow();
+                form_view::quick_edit_fields(&s.fyo, &self.doc, hide)
+            }
+            None => self
+                .tabs
+                .get(self.tab)
+                .map(|t| t.sections.iter().flat_map(|s| s.fields.clone()).collect())
+                .unwrap_or_default(),
+        }
+    }
+
     /// Lays the form out again and shows what the document holds now. Inputs being typed
     /// into keep their text.
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let session = self.session.clone();
-        let s = session.borrow();
-        let fyo = &s.fyo;
-        self.tabs = field::form_layout(fyo, &self.doc);
+        {
+            let s = self.session.borrow();
+            self.tabs = field::form_layout(&s.fyo, &self.doc);
+        }
         if self.tab >= self.tabs.len() {
             self.tab = 0;
         }
+        let mut fields = self.shown_fields();
+        fields.extend(self.title_field());
+        fields.extend(self.image_field());
+        let title = self.title_field().map(|f| f.fieldname);
 
-        // Every control the current tab needs, with its field and value.
+        let session = self.session.clone();
+        let s = session.borrow();
+        let fyo = &s.fyo;
+        let bypass = single_is_truthy(fyo, "SystemSettings", "allowFilterBypass");
+
+        // Every control the fields need, with its field and value.
         let mut wanted: Vec<Wanted> = Vec::new();
         let mut option_cache: HashMap<String, Vec<LinkOption>> = HashMap::new();
-        let mut options = |f: &Field, ctx: &latte_core::DocContext<'_>| -> Vec<LinkOption> {
-            match f.fieldtype {
-                Some(FieldType::Link | FieldType::DynamicLink) => {
-                    let filters = field::link_filters(f, ctx);
-                    let target = field::link_target(f, ctx).unwrap_or_default();
-                    let cache_key = format!("{target}{filters:?}");
-                    option_cache
-                        .entry(cache_key)
-                        .or_insert_with(|| {
-                            field::link_options(fyo, f, ctx)
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(|(value, label)| LinkOption {
-                                    value: value.into(),
-                                    label: label.into(),
-                                })
-                                .collect()
+        let unfiltered = self.unfiltered.clone();
+        let mut options =
+            |key: &Key, f: &Field, ctx: &latte_core::DocContext<'_>| -> Vec<LinkOption> {
+                match f.fieldtype {
+                    Some(FieldType::Link | FieldType::DynamicLink) => {
+                        let filtered = !unfiltered.contains(key);
+                        let filters = field::link_filters(f, ctx);
+                        let target = field::link_target(f, ctx).unwrap_or_default();
+                        let cache_key = format!("{target}{filtered}{filters:?}");
+                        option_cache
+                            .entry(cache_key)
+                            .or_insert_with(|| {
+                                field::link_options_filtered(fyo, f, ctx, filtered)
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|(value, label)| LinkOption {
+                                        value: value.into(),
+                                        label: label.into(),
+                                    })
+                                    .collect()
+                            })
+                            .clone()
+                    }
+                    _ => field::select_options(f, ctx)
+                        .into_iter()
+                        .map(|o| LinkOption {
+                            value: o.value.into(),
+                            label: o.label.into(),
                         })
-                        .clone()
+                        .collect(),
                 }
-                _ => field::select_options(f, ctx)
-                    .into_iter()
-                    .map(|o| LinkOption {
-                        value: o.value.into(),
-                        label: o.label.into(),
-                    })
-                    .collect(),
-            }
-        };
+            };
         let ctx = field::context(fyo, &self.doc, None);
-        for section in self
-            .tabs
-            .get(self.tab)
-            .map(|t| &t.sections[..])
-            .unwrap_or(&[])
-        {
-            for f in &section.fields {
-                if f.fieldtype == Some(FieldType::Table) {
-                    for column in field::table_columns(fyo, f) {
-                        for (i, row) in self.doc.table(&f.fieldname).iter().enumerate() {
-                            let row_ctx = field::context(fyo, row, Some(&self.doc));
-                            let read_only = field::is_read_only(&column, &row_ctx);
-                            let opts = if is_choice(&column) && !read_only {
-                                options(&column, &row_ctx)
-                            } else {
-                                Vec::new()
-                            };
-                            wanted.push((
-                                Key::Cell(f.fieldname.clone(), i, column.fieldname.clone()),
-                                column.clone(),
-                                row.get(&column.fieldname).cloned(),
-                                read_only,
-                                opts,
-                                field::is_required(&column, &row_ctx),
-                            ));
-                        }
-                    }
-                    // The open row's other fields, for the row form.
-                    if let Some((table, i)) = &self.row_edit
-                        && table == &f.fieldname
-                        && let Some(row) = self.doc.table(table).get(*i)
-                    {
-                        let row_ctx = field::context(fyo, row, Some(&self.doc));
-                        for column in quick_edit_fields(fyo, f) {
-                            let read_only = field::is_read_only(&column, &row_ctx);
-                            let opts = if is_choice(&column) && !read_only {
-                                options(&column, &row_ctx)
-                            } else {
-                                Vec::new()
-                            };
-                            wanted.push((
-                                Key::Cell(table.clone(), *i, column.fieldname.clone()),
-                                column.clone(),
-                                row.get(&column.fieldname).cloned(),
-                                read_only,
-                                opts,
-                                field::is_required(&column, &row_ctx),
-                            ));
-                        }
-                    }
-                    continue;
-                }
-                let read_only = field::is_read_only(f, &ctx);
-                let opts = if is_choice(f) && !read_only {
-                    options(f, &ctx)
-                } else {
-                    Vec::new()
-                };
-                wanted.push((
-                    Key::Field(f.fieldname.clone()),
-                    f.clone(),
-                    self.doc.get(&f.fieldname).cloned(),
-                    read_only,
-                    opts,
-                    field::is_required(f, &ctx),
-                ));
+        let link_extra = |key: &Key, f: &Field, ctx: &latte_core::DocContext<'_>| {
+            if !matches!(f.fieldtype, Some(FieldType::Link | FieldType::DynamicLink)) {
+                return (false, HashMap::new());
             }
+            let filtered =
+                !self.unfiltered.contains(key) && form_view::link_is_filtered(fyo, f, ctx);
+            (bypass && filtered, form_view::link_groups(fyo, f, ctx))
+        };
+        for f in &fields {
+            if f.fieldtype == Some(FieldType::Table) {
+                for column in field::table_columns(fyo, f) {
+                    for (i, row) in self.doc.table(&f.fieldname).iter().enumerate() {
+                        let row_ctx = field::context(fyo, row, Some(&self.doc));
+                        let key = Key::Cell(f.fieldname.clone(), i, column.fieldname.clone());
+                        let read_only = field::is_read_only(&column, &row_ctx);
+                        let opts = if is_choice(&column) && !read_only {
+                            options(&key, &column, &row_ctx)
+                        } else {
+                            Vec::new()
+                        };
+                        let (bypass, groups) = link_extra(&key, &column, &row_ctx);
+                        wanted.push(Wanted {
+                            value: row.get(&column.fieldname).cloned(),
+                            read_only,
+                            options: opts,
+                            required: field::is_required(&column, &row_ctx),
+                            bypass,
+                            groups,
+                            key,
+                            field: column.clone(),
+                        });
+                    }
+                }
+                // The open row's other fields, for the row form.
+                if let Side::Row(table, i) = &self.side
+                    && table == &f.fieldname
+                    && let Some(row) = self.doc.table(table).get(*i)
+                {
+                    let row_ctx = field::context(fyo, row, Some(&self.doc));
+                    for column in quick_edit_fields(fyo, f) {
+                        let key = Key::Cell(table.clone(), *i, column.fieldname.clone());
+                        let read_only = field::is_read_only(&column, &row_ctx);
+                        let opts = if is_choice(&column) && !read_only {
+                            options(&key, &column, &row_ctx)
+                        } else {
+                            Vec::new()
+                        };
+                        let (bypass, groups) = link_extra(&key, &column, &row_ctx);
+                        wanted.push(Wanted {
+                            value: row.get(&column.fieldname).cloned(),
+                            read_only,
+                            options: opts,
+                            required: field::is_required(&column, &row_ctx),
+                            bypass,
+                            groups,
+                            key,
+                            field: column.clone(),
+                        });
+                    }
+                }
+                continue;
+            }
+            let key = Key::Field(f.fieldname.clone());
+            // The quick edit title can be changed only on a new document named by hand.
+            let read_only = field::is_read_only(f, &ctx)
+                || title.as_deref() == Some(&f.fieldname)
+                    && (self.doc.inserted()
+                        || self.doc.schema().naming != Some(latte_schema::Naming::Manual));
+            let opts = if is_choice(f) && !read_only {
+                options(&key, f, &ctx)
+            } else {
+                Vec::new()
+            };
+            let (bypass, groups) = link_extra(&key, f, &ctx);
+            wanted.push(Wanted {
+                value: self.doc.get(&f.fieldname).cloned(),
+                read_only,
+                options: opts,
+                required: field::is_required(f, &ctx),
+                bypass,
+                groups,
+                key,
+                field: f.clone(),
+            });
         }
         drop(s);
 
-        let keys: Vec<Key> = wanted.iter().map(|(key, ..)| key.clone()).collect();
+        let keys: Vec<Key> = wanted.iter().map(|w| w.key.clone()).collect();
         self.controls.retain(|key, _| keys.contains(key));
-        for (key, f, value, read_only, opts, mandatory) in wanted {
+        for w in wanted {
+            let Wanted {
+                key,
+                field: f,
+                value,
+                read_only,
+                options: opts,
+                required: mandatory,
+                bypass,
+                groups,
+            } = w;
             let kind = match control_kind(&f, read_only) {
                 Kind::Input
                     if f.fieldtype == Some(FieldType::Text) && matches!(key, Key::Field(_)) =>
@@ -336,6 +678,8 @@ impl FormPage {
                     | (Some(Control::Check), Kind::Check)
                     | (Some(Control::Display), Kind::Display)
                     | (Some(Control::Image), Kind::Image)
+                    | (Some(Control::Attachment), Kind::Attachment)
+                    | (Some(Control::Color), Kind::Color)
             );
             if !matches {
                 let control = self.make_control(&key, &f, kind, opts.clone(), window, cx);
@@ -364,10 +708,16 @@ impl FormPage {
                         _ => None,
                     };
                     let mandatory = value.is_none() && mandatory;
+                    let groups = groups
+                        .into_iter()
+                        .map(|(k, v)| (k.into(), v.into()))
+                        .collect();
                     state.update(cx, |link, cx| {
                         link.set_mandatory(mandatory);
+                        link.set_bypass(bypass);
+                        link.set_groups(groups);
                         link.set_options(opts, cx);
-                        if !link.is_focused(window, cx) {
+                        if !link.is_typing() {
                             link.set_value(value, window, cx);
                         }
                     });
@@ -393,7 +743,412 @@ impl FormPage {
                 self.images.insert(url, Arc::new(image));
             }
         }
+        self.refresh_header(window, cx);
         cx.notify();
+    }
+
+    /// The header's barcode input and exchange rate, made when the document shows them.
+    fn refresh_header(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quick.is_some() || self.embedded {
+            return;
+        }
+        let (barcode, rate) = {
+            let s = self.session.borrow();
+            (
+                form_view::shows_barcode(&s.fyo, &self.doc),
+                form_view::exchange_rate(&s.fyo, &self.doc),
+            )
+        };
+        if !barcode {
+            self.barcode = None;
+        } else if self.barcode.is_none() {
+            let state = cx.new(|cx| InputState::new(window, cx).placeholder(t("Enter barcode")));
+            let subscription = cx.subscribe_in(
+                &state,
+                window,
+                |this, state, event: &InputEvent, window, cx| {
+                    // `@change`: Enter, or leaving the input with something typed.
+                    if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                        return;
+                    }
+                    let code = state.read(cx).value().to_string();
+                    if code.is_empty() {
+                        return;
+                    }
+                    state.update(cx, |input, cx| input.set_value("", window, cx));
+                    this.scan(&code, window, cx);
+                },
+            );
+            self.barcode = Some((state, subscription));
+        }
+        match rate {
+            None => self.exchange = None,
+            Some((_, _, rate)) => {
+                if self.exchange.is_none() {
+                    let from_value = cx.new(|cx| InputState::new(window, cx).default_value("1"));
+                    let right = cx.new(|cx| InputState::new(window, cx));
+                    let from_sub = cx.subscribe_in(
+                        &from_value,
+                        window,
+                        |this, _, event: &InputEvent, window, cx| {
+                            if matches!(event, InputEvent::Change) {
+                                this.show_rate(window, cx);
+                            }
+                        },
+                    );
+                    let right_sub = cx.subscribe_in(
+                        &right,
+                        window,
+                        |this, state, event: &InputEvent, window, cx| {
+                            if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                                let text = state.read(cx).value().to_string();
+                                this.set_rate_from_right(&text, window, cx);
+                            }
+                        },
+                    );
+                    self.exchange = Some(ExchangeRate {
+                        from_value,
+                        right,
+                        swapped: false,
+                        _subscriptions: [from_sub, right_sub],
+                    });
+                }
+                let _ = rate;
+                self.show_rate(window, cx);
+            }
+        }
+    }
+
+    fn rate_amount(&self, cx: &App) -> f64 {
+        self.exchange
+            .as_ref()
+            .and_then(|e| e.from_value.read(cx).value().trim().parse::<f64>().ok())
+            .unwrap_or(1.0)
+    }
+
+    /// Shows the right amount for the rate and the left amount.
+    fn show_rate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rate = {
+            let s = self.session.borrow();
+            form_view::exchange_rate(&s.fyo, &self.doc).map_or(1.0, |(_, _, r)| r)
+        };
+        let from_value = self.rate_amount(cx);
+        let Some(exchange) = &self.exchange else {
+            return;
+        };
+        let right = form_view::exchange_rate_right(rate, from_value, exchange.swapped);
+        let text = latte_core::fyo::model::helpers::js_number_string(right);
+        exchange.right.update(cx, |input, cx| {
+            if !input.focus_handle(cx).is_focused(window) && input.value() != text {
+                input.set_value(text, window, cx);
+            }
+        });
+        cx.notify();
+    }
+
+    /// `rightChange`: the rate the typed right amount makes is set on the document.
+    fn set_rate_from_right(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(swapped) = self.exchange.as_ref().map(|e| e.swapped) else {
+            return;
+        };
+        let right = text.trim().parse::<f64>().unwrap_or(0.0);
+        let rate = form_view::exchange_rate_from_right(right, self.rate_amount(cx), swapped);
+        if !rate.is_finite() || rate <= 0.0 {
+            self.show_rate(window, cx);
+            return;
+        }
+        let current = {
+            let s = self.session.borrow();
+            form_view::exchange_rate(&s.fyo, &self.doc).map(|(_, _, r)| r)
+        };
+        if current == Some(rate) {
+            return;
+        }
+        self.set_value(
+            &Key::Field("exchangeRate".to_owned()),
+            DocValue::Number(rate),
+            window,
+            cx,
+        );
+        if let Some(e) = self
+            .field_errors
+            .remove(&Key::Field("exchangeRate".to_owned()))
+        {
+            self.error_title = "Error";
+            self.error = Some(e);
+        }
+    }
+
+    /// `scanListener`: a scanner types its digits faster than anyone can (20ms apart at
+    /// most), ending with Enter or a pause; 12 digits or more are a barcode, wherever the
+    /// focus is.
+    fn scan_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use std::time::{Duration, Instant};
+        if self.barcode.is_none() {
+            return;
+        }
+        if key == "enter" {
+            if self.scanned.0.len() >= 12 {
+                let code = std::mem::take(&mut self.scanned.0);
+                self.scan(&code, window, cx);
+            }
+            self.scanned.0.clear();
+            return;
+        }
+        if key.len() != 1 || !key.chars().all(|c| c.is_ascii_digit()) {
+            return;
+        }
+        let now = Instant::now();
+        if self
+            .scanned
+            .1
+            .is_none_or(|last| now.duration_since(last) > Duration::from_millis(20))
+        {
+            self.scanned.0.clear();
+        }
+        self.scanned.0.push_str(key);
+        self.scanned.1 = Some(now);
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(25))
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                let quiet = this
+                    .scanned
+                    .1
+                    .is_some_and(|last| last.elapsed() >= Duration::from_millis(20));
+                if quiet && this.scanned.0.len() >= 12 {
+                    let code = std::mem::take(&mut this.scanned.0);
+                    this.scan(&code, window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// `Barcode.vue`'s `selectItem`, then `addItem`.
+    fn scan(&mut self, code: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // `cooldown`: the same code within 100ms is one scan.
+        let code = code.trim();
+        if self.cooldown.as_ref().is_some_and(|(last, at)| {
+            last == code && at.elapsed() < std::time::Duration::from_millis(100)
+        }) {
+            return;
+        }
+        self.cooldown = Some((code.to_owned(), std::time::Instant::now()));
+        let item = {
+            let s = self.session.borrow();
+            form_view::barcode_item(&s.fyo, code)
+        };
+        match item {
+            Ok(name) => {
+                let result = {
+                    let mut s = self.session.borrow_mut();
+                    form_view::add_item(&mut s.fyo, &mut self.doc, &name)
+                };
+                match result {
+                    Ok(()) => self.toast(format!("{name} quantity 1 added."), DialogKind::Success),
+                    Err(e) => self.toast(e.to_string(), DialogKind::Error),
+                }
+            }
+            Err(message) => self.toast(message, DialogKind::Error),
+        }
+        self.refresh(window, cx);
+    }
+
+    fn toast(&mut self, message: String, kind: DialogKind) {
+        self.info = Some(message);
+        self.info_kind = kind;
+    }
+
+    /// A control's value as shown (`fyo.format(value, field, doc)`), an amount in the
+    /// currency its document gives it.
+    fn display(&self, key: &Key, f: &Field, s: &crate::session::Session) -> String {
+        let value = self.current_value(key);
+        match key {
+            Key::Field(_) => {
+                let ctx = field::context(&s.fyo, &self.doc, None);
+                form_view::display(&s.formatter, f, value, &ctx)
+            }
+            Key::Cell(table, i, _) => match self.doc.table(table).get(*i) {
+                Some(row) => {
+                    let ctx = field::context(&s.fyo, row, Some(&self.doc));
+                    form_view::display(&s.formatter, f, value, &ctx)
+                }
+                None => field::display(&s.formatter, f, value),
+            },
+        }
+    }
+
+    /// `evaluateReadOnly` for a control.
+    fn is_read_only(&self, key: &Key, f: &Field, fyo: &latte_core::Fyo) -> bool {
+        match key {
+            Key::Field(_) => field::is_read_only(f, &field::context(fyo, &self.doc, None)),
+            Key::Cell(table, i, _) => match self.doc.table(table).get(*i) {
+                Some(row) => field::is_read_only(f, &field::context(fyo, row, Some(&self.doc))),
+                None => true,
+            },
+        }
+    }
+
+    /// `showPicker()`: the calendar under a Date or Datetime control.
+    fn open_picker(&mut self, key: &Key, f: &Field, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picker.as_ref().is_some_and(|(k, ..)| k == key) {
+            return;
+        }
+        let with_time = f.fieldtype == Some(FieldType::Datetime);
+        let value = match self.current_value(key) {
+            Some(DocValue::Date(ts)) => Some(if with_time {
+                ts.to_zoned(jiff::tz::TimeZone::system()).datetime()
+            } else {
+                latte_core::fyo::format::local_date(*ts).to_datetime(jiff::civil::Time::midnight())
+            }),
+            _ => None,
+        };
+        let picker = cx.new(|_| DatePicker::new(value, with_time));
+        let (picked_key, picked_field) = (key.clone(), f.clone());
+        let picked = cx.subscribe_in(
+            &picker,
+            window,
+            move |this, _, event: &DatePicked, window, cx| {
+                let value = match event.0 {
+                    None => Ok(DocValue::Null),
+                    Some(datetime) if picked_field.fieldtype == Some(FieldType::Datetime) => {
+                        datetime
+                            .to_zoned(jiff::tz::TimeZone::system())
+                            .map(|z| DocValue::Date(z.timestamp()))
+                            .map_err(|e| e.to_string())
+                    }
+                    Some(datetime) => field::date_timestamp(datetime.date())
+                        .map(DocValue::Date)
+                        .map_err(|e| e.to_string()),
+                };
+                match value {
+                    Ok(value) => this.set_value(&picked_key, value, window, cx),
+                    Err(e) => {
+                        this.field_errors.insert(picked_key.clone(), e);
+                        cx.notify();
+                    }
+                }
+            },
+        );
+        let closed = cx.subscribe_in(&picker, window, |this, _, _: &PickerClosed, window, cx| {
+            this.picker = None;
+            // The typed text is shown formatted again.
+            window.blur(cx);
+            cx.notify();
+        });
+        self.picker = Some((key.clone(), picker, [picked, closed]));
+        cx.notify();
+    }
+
+    /// `Attachment.vue`'s upload: an image or PDF, kept as `{name, type, data}`.
+    fn pick_attachment(&mut self, key: Key, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t("Attachment").into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let attachment = attachment(&path);
+            this.update_in(cx, |this, window, cx| match attachment {
+                Ok(value) => this.set_value(&key, DocValue::Attachment(value), window, cx),
+                Err(e) => {
+                    this.field_errors.insert(key.clone(), e);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// `Attachment.vue`'s download: the file saved where the user picks.
+    fn download_attachment(
+        &mut self,
+        value: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use base64::Engine as _;
+        let (Some(name), Some(data)) = (
+            value.get("name").and_then(|v| v.as_str()),
+            value.get("data").and_then(|v| v.as_str()),
+        ) else {
+            return;
+        };
+        let Some(bytes) = data
+            .split_once(";base64,")
+            .and_then(|(_, b64)| base64::engine::general_purpose::STANDARD.decode(b64).ok())
+        else {
+            return;
+        };
+        let dir = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(|home| std::path::PathBuf::from(home).join("Downloads"))
+            .unwrap_or_default();
+        let path = cx.prompt_for_new_path(&dir, Some(name));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = path.await else {
+                return;
+            };
+            let result = std::fs::write(&path, bytes);
+            this.update(cx, |this, cx| {
+                if let Err(e) = result {
+                    this.error_title = "Error";
+                    this.error = Some(e.to_string());
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens or closes a Color control's swatches.
+    fn toggle_color(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
+        if self.color.as_ref().is_some_and(|(k, ..)| k == key) {
+            self.color = None;
+            cx.notify();
+            return;
+        }
+        let hex = cx.new(|cx| InputState::new(window, cx).placeholder(t("Custom Hex")));
+        let hex_key = key.clone();
+        let subscription = cx.subscribe_in(
+            &hex,
+            window,
+            move |this, state, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    let text = state.read(cx).value().trim().to_owned();
+                    if !text.is_empty() {
+                        this.set_color(&hex_key, &text, window, cx);
+                    }
+                }
+            },
+        );
+        self.color = Some((key.clone(), hex, subscription));
+        cx.notify();
+    }
+
+    /// `setColorValue`: a colour as `#RRGGBB`; anything else is ignored.
+    fn set_color(&mut self, key: &Key, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let value = if value.starts_with('#') {
+            value.to_owned()
+        } else {
+            format!("#{value}")
+        };
+        if parse_hex(&value).is_none() {
+            return;
+        }
+        self.set_value(key, DocValue::Text(value), window, cx);
     }
 
     /// `AttachImage.vue`'s upload: a picture from a file, kept as a data URL.
@@ -478,10 +1233,27 @@ impl FormPage {
                 }
             }
             Kind::Link => {
-                let in_table = matches!(key, Key::Cell(..));
-                let linkable = f.fieldtype == Some(FieldType::Link);
+                let in_table = self.bare(key);
+                let is_link = matches!(f.fieldtype, Some(FieldType::Link | FieldType::DynamicLink));
+                let weak = cx.entity().downgrade();
+                let view_field = f.clone();
+                let quick_view: crate::link::QuickViewFn = Rc::new(move |name, cx| {
+                    weak.upgrade()
+                        .map(|form| form.read(cx).quick_view_data(&view_field, name))
+                        .unwrap_or(QuickViewData {
+                            name: None,
+                            schema_label: String::new(),
+                            values: Vec::new(),
+                        })
+                });
+                let create = f.create;
                 let state = cx.new(|cx| {
-                    let link = LinkInput::new(options, placeholder, window, cx).linkable(linkable);
+                    let mut link = LinkInput::new(options, placeholder, window, cx)
+                        .linkable(is_link)
+                        .quick_view(quick_view);
+                    if is_link {
+                        link = link.link(create);
+                    }
                     if in_table { link.bare() } else { link }
                 });
                 let picked_key = key.clone();
@@ -501,15 +1273,222 @@ impl FormPage {
                 let opened = cx.subscribe(&state, move |this, _, event: &LinkOpened, cx| {
                     this.open_link(&field, &event.0, cx);
                 });
+                let (create_key, create_field) = (key.clone(), f.clone());
+                let created = cx.subscribe_in(
+                    &state,
+                    window,
+                    move |this, _, event: &LinkCreate, window, cx| {
+                        this.create_linked(&create_key, &create_field, &event.0, window, cx);
+                    },
+                );
+                let bypass_key = key.clone();
+                let bypassed = cx.subscribe_in(
+                    &state,
+                    window,
+                    move |this, link, _: &LinkDisableFilters, window, cx| {
+                        this.unfiltered.insert(bypass_key.clone());
+                        this.refresh(window, cx);
+                        link.update(cx, |link, cx| link.reopen(window, cx));
+                    },
+                );
                 Control::Link {
                     state,
-                    _subscriptions: [picked, opened],
+                    _subscriptions: [picked, opened, created, bypassed],
                 }
             }
             Kind::Check => Control::Check,
             Kind::Display => Control::Display,
             Kind::Image => Control::Image,
+            Kind::Attachment => Control::Attachment,
+            Kind::Color => Control::Color,
         }
+    }
+
+    /// `QuickView.vue`'s data for a Link field's value.
+    fn quick_view_data(&self, f: &Field, name: &str) -> QuickViewData {
+        let s = self.session.borrow();
+        let ctx = field::context(&s.fyo, &self.doc, None);
+        let target = field::link_target(f, &ctx).unwrap_or_default();
+        let Some(schema) = s.fyo.schema(&target) else {
+            return QuickViewData {
+                name: None,
+                schema_label: String::new(),
+                values: Vec::new(),
+            };
+        };
+        QuickViewData {
+            name: (schema.naming != Some(latte_schema::Naming::Random) && !schema.is_child)
+                .then(|| name.to_owned()),
+            schema_label: schema.label.clone(),
+            values: form_view::quick_view(&s.fyo, &s.formatter, &target, name),
+        }
+    }
+
+    /// `openNewDoc`: a new document named by what was typed opens in a quick edit panel;
+    /// once saved, the panel closes and the field takes it.
+    fn create_linked(
+        &mut self,
+        key: &Key,
+        f: &Field,
+        typed: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let doc = {
+            let s = self.session.borrow();
+            let values = match key {
+                Key::Cell(table, i, _) => match self.doc.table(table).get(*i) {
+                    Some(row) => {
+                        let ctx = field::context(&s.fyo, row, Some(&self.doc));
+                        form_view::create_values(&s.fyo, f, &ctx, typed)
+                    }
+                    None => return,
+                },
+                Key::Field(_) => {
+                    let ctx = field::context(&s.fyo, &self.doc, None);
+                    form_view::create_values(&s.fyo, f, &ctx, typed)
+                }
+            };
+            let ctx = field::context(&s.fyo, &self.doc, None);
+            let target = match key {
+                Key::Cell(table, i, _) => self
+                    .doc
+                    .table(table)
+                    .get(*i)
+                    .and_then(|row| field::link_target(f, &field::context(&s.fyo, row, None))),
+                Key::Field(_) => field::link_target(f, &ctx),
+            };
+            let Some(target) = target else {
+                return;
+            };
+            s.fyo.get_new_doc(&target, values)
+        };
+        let doc = match doc {
+            Ok(doc) => doc,
+            Err(e) => {
+                self.error_title = error_label(&e);
+                self.error = Some(e.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        let weak = cx.entity().downgrade();
+        let key = key.clone();
+        let after_save: AfterSave = Rc::new(move |quick, window, cx| {
+            let Some(name) = quick.read(cx).doc().name().map(str::to_owned) else {
+                return;
+            };
+            if let Some(form) = weak.upgrade() {
+                form.update(cx, |form, cx| {
+                    form.set_value(&key, DocValue::Text(name), window, cx)
+                });
+            }
+        });
+        let request = QuickRequest {
+            doc,
+            hide: Vec::new(),
+            after_save: Some(after_save),
+        };
+        self.open_quick_edit(request, window, cx);
+    }
+
+    /// Opens a quick edit panel beside this form, or, from a panel, beside its page.
+    fn open_quick_edit(
+        &mut self,
+        request: QuickRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.quick.is_some() {
+            cx.emit(QuickEvent::Open(Box::new(request)));
+        } else {
+            let session = self.session.clone();
+            open_quick(self, session, request, window, cx);
+        }
+    }
+
+    /// `getMakePaymentAction`: the invoice's payment in a quick edit panel, without the
+    /// party and the rows; once saved it is submitted and the invoice shown again.
+    fn make_payment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let payment = {
+            let mut s = self.session.borrow_mut();
+            let fyo = &mut s.fyo;
+            invoice::get_payment(&self.doc, fyo).and_then(|payment| {
+                let Some(mut payment) = payment else {
+                    return Ok(None);
+                };
+                payment.set(
+                    fyo,
+                    "referenceType",
+                    DocValue::Text(self.doc.schema_name().to_owned()),
+                )?;
+                payment.run_formulas(fyo)?;
+                Ok(Some(payment))
+            })
+        };
+        let payment = match payment {
+            Ok(Some(payment)) => payment,
+            Ok(None) => return,
+            Err(e) => {
+                self.error_title = error_label(&e);
+                self.error = Some(e.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        let mut hide = vec!["party".to_owned(), "for".to_owned()];
+        let returns_on = {
+            let s = self.session.borrow();
+            single_is_truthy(&s.fyo, "AccountingSettings", "enableInvoiceReturns")
+        };
+        if !returns_on {
+            hide.push("paymentType".to_owned());
+        }
+        hide.push(if self.doc.schema_name() == "SalesInvoice" {
+            "account".to_owned()
+        } else {
+            "paymentAccount".to_owned()
+        });
+        let weak = cx.entity().downgrade();
+        let session = self.session.clone();
+        let after_save: AfterSave = Rc::new(move |quick, window, cx| {
+            let result = quick.update(cx, |quick, _| {
+                let mut s = session.borrow_mut();
+                quick.doc.submit(&mut s.fyo)
+            });
+            if let Some(form) = weak.upgrade() {
+                form.update(cx, |form, cx| {
+                    if let Err(e) = result {
+                        form.error_title = error_label(&e);
+                        form.error = Some(e.to_string());
+                    }
+                    form.reload(window, cx);
+                });
+            }
+        });
+        self.open_quick_edit(
+            QuickRequest {
+                doc: payment,
+                hide,
+                after_save: Some(after_save),
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// `doc.load()`: the document as it is stored now.
+    fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let result = {
+            let mut s = self.session.borrow_mut();
+            self.doc.load(&mut s.fyo)
+        };
+        if let Err(e) = result {
+            self.error_title = error_label(&e);
+            self.error = Some(e.to_string());
+        }
+        self.controls.clear();
+        self.refresh(window, cx);
     }
 
     fn current_value(&self, key: &Key) -> Option<&DocValue> {
@@ -567,7 +1546,6 @@ impl FormPage {
                 self.field_errors.insert(key.clone(), e.to_string());
             }
         }
-        self.info = None;
         self.refresh(window, cx);
     }
 
@@ -610,25 +1588,226 @@ impl FormPage {
             self.doc.remove(&mut s.fyo, table, idx.unwrap_or(i))
         };
         self.error = result.err().map(|e| e.to_string());
-        self.row_edit = None;
+        if matches!(self.side, Side::Row(..)) {
+            self.side = Side::None;
+        }
         // Row controls are keyed by position, so they are made again.
         self.controls
             .retain(|key, _| !matches!(key, Key::Cell(t, ..) if t == table));
         self.refresh(window, cx);
     }
 
-    /// Opens a child row's form beside the document's (`RowEditForm.vue`), or closes it.
+    /// Opens a child row's form beside the document's (`showRowEditForm`), in place of the
+    /// linked entries.
     fn open_row(&mut self, table: &str, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_typed(window, cx);
-        let open = Some((table.to_owned(), i));
-        self.row_edit = if self.row_edit == open { None } else { open };
+        self.side = Side::Row(table.to_owned(), i);
         self.refresh(window, cx);
+    }
+
+    /// Closes the side panel: the row form or the linked entries.
+    fn close_side(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_typed(window, cx);
+        self.side = Side::None;
+        self.refresh(window, cx);
+    }
+
+    /// `canShowLinks`: a saved document, submitted if it can be.
+    fn can_show_links(&self) -> bool {
+        let doc = &self.doc;
+        !(doc.schema().is_submittable && !doc.is_submitted()) && doc.inserted()
+    }
+
+    /// Shows the linked entries beside the form (`showLinks`), or hides them.
+    fn toggle_links(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.side, Side::Links(..)) {
+            self.close_side(window, cx);
+            return;
+        }
+        if !self.can_show_links() {
+            return;
+        }
+        let groups = {
+            let s = self.session.borrow();
+            form_view::linked_entries(&s.fyo, &s.formatter, &self.doc)
+        };
+        match groups {
+            Ok(groups) => {
+                self.quick_panels.clear();
+                self.side = Side::Links(groups, HashSet::new());
+            }
+            Err(e) => {
+                self.error_title = error_label(&e);
+                self.error = Some(e.to_string());
+            }
+        }
+        self.refresh(window, cx);
+    }
+
+    /// `LinkedEntries.vue`: a 22rem panel with Close and its title, then each schema's
+    /// documents, with their count, folded by a click on the heading.
+    fn render_links(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let Side::Links(groups, folded) = &self.side else {
+            return None;
+        };
+        let header = div()
+            .h_flex()
+            .flex_none()
+            .h(books::H_PAGE_HEADER)
+            .px_4()
+            .justify_between()
+            .child(
+                Button::new("close-links")
+                    .icon("x")
+                    .on_click(cx.listener(|this, _, window, cx| this.close_side(window, cx))),
+            )
+            .child(
+                div()
+                    .text_18()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gray(600))
+                    .child(t("Linked Entries")),
+            );
+        let body = if groups.is_empty() {
+            div()
+                .p_4()
+                .text_12()
+                .text_color(gray(600))
+                .child(t("No linked entries found"))
+                .into_any_element()
+        } else {
+            div()
+                .v_flex()
+                .w_full()
+                .border_t_1()
+                .border_color(gray(200))
+                .children(groups.iter().enumerate().map(|(g, group)| {
+                    let collapsed = folded.contains(&group.schema);
+                    let schema = group.schema.clone();
+                    let heading = div()
+                        .id(("links-heading", g))
+                        .h_flex()
+                        .justify_between()
+                        .cursor_pointer()
+                        .when(!collapsed, |d| d.pb_4())
+                        .child(
+                            div()
+                                .h_flex()
+                                .text_13()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(gray(600))
+                                .child(group.label.clone())
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::NORMAL)
+                                        .child(format!(" – {}", group.entries.len())),
+                                ),
+                        )
+                        .child(books::icon(
+                            if collapsed {
+                                "chevron-up"
+                            } else {
+                                "chevron-down"
+                            },
+                            px(16.),
+                            gray(600),
+                        ))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Side::Links(_, folded) = &mut this.side
+                                && !folded.remove(&schema)
+                            {
+                                folded.insert(schema.clone());
+                            }
+                            cx.notify();
+                        }));
+                    let count = group.entries.len();
+                    let entries = (!collapsed).then(|| {
+                        div()
+                            .v_flex()
+                            .rounded(books::RADIUS_MD)
+                            .border_1()
+                            .border_color(gray(200))
+                            .overflow_hidden()
+                            .children(group.entries.iter().enumerate().map(|(e, entry)| {
+                                let schema = group.schema.clone();
+                                let name = entry.name.clone();
+                                div()
+                                    .id(SharedString::from(format!("link-{g}-{e}")))
+                                    .p_2()
+                                    .text_12()
+                                    .cursor_pointer()
+                                    .when(e + 1 < count, |d| d.border_b_1().border_color(gray(200)))
+                                    .hover(|d| d.bg(gray(50)))
+                                    .child(
+                                        div()
+                                            .h_flex()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .child(entry.name.clone()),
+                                            )
+                                            .children(entry.date.clone().map(|date| {
+                                                div().text_11().text_color(gray(600)).child(date)
+                                            })),
+                                    )
+                                    .when(!entry.pills.is_empty(), |d| {
+                                        d.child(div().h_flex().flex_wrap().gap_2().mt_1().children(
+                                            entry.pills.iter().map(|p| {
+                                                let (bg, fg) = books::bg_text(p.color);
+                                                div()
+                                                    .px(px(6.))
+                                                    .py(px(2.))
+                                                    .rounded(books::RADIUS_MD)
+                                                    .text_11()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .child(p.text.clone())
+                                            }),
+                                        ))
+                                    })
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.emit(Navigate(Nav::Route(Route::Form {
+                                            schema: schema.clone(),
+                                            name: Some(name.clone()),
+                                        })))
+                                    }))
+                            }))
+                    });
+                    div()
+                        .v_flex()
+                        .p_4()
+                        .border_b_1()
+                        .border_color(gray(200))
+                        .child(heading)
+                        .children(entries)
+                }))
+                .into_any_element()
+        };
+        Some(
+            div()
+                .id("linked-entries")
+                .v_flex()
+                .flex_none()
+                .w(rems(22.))
+                .h_full()
+                .bg(white())
+                .border_l_1()
+                .border_color(gray(200))
+                .overflow_y_scroll()
+                .child(header)
+                .child(body)
+                .into_any_element(),
+        )
     }
 
     /// `RowEditForm.vue`: the open row's quick-edit fields, label beside control, in a
     /// 22rem panel to the right of the form, with Close and Previous/Next row.
     fn render_row_edit(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (table, i) = self.row_edit.clone()?;
+        let Side::Row(table, i) = &self.side else {
+            return None;
+        };
+        let (table, i) = (table.clone(), *i);
         let count = self.doc.table(&table).len();
         if i >= count {
             return None;
@@ -677,16 +1856,17 @@ impl FormPage {
                 cx.listener(move |this, _, window, cx| this.open_row(&table, to, window, cx)),
             )
         };
-        let close_table = table.clone();
         let toolbar = div()
             .h_flex()
             .flex_none()
             .h_16()
             .px_4()
             .justify_between()
-            .child(Button::new("close-row").icon("x").on_click(
-                cx.listener(move |this, _, window, cx| this.open_row(&close_table, i, window, cx)),
-            ))
+            .child(
+                Button::new("close-row")
+                    .icon("x")
+                    .on_click(cx.listener(|this, _, window, cx| this.close_side(window, cx))),
+            )
             .child(
                 div()
                     .h_flex()
@@ -736,6 +1916,25 @@ impl FormPage {
 
     /// Sets every value typed into an input and not yet set.
     fn commit_typed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A Link or Select being typed into settles as when it is left.
+        let links: Vec<(Key, Entity<LinkInput>)> = self
+            .controls
+            .iter()
+            .filter_map(|(key, control)| match control {
+                Control::Link { state, .. } => Some((key.clone(), state.clone())),
+                _ => None,
+            })
+            .collect();
+        for (key, link) in links {
+            if let Some(value) = link.update(cx, |link, cx| link.commit(window, cx)) {
+                let value = if value.is_empty() {
+                    DocValue::Null
+                } else {
+                    DocValue::Text(value.to_string())
+                };
+                self.set_value(&key, value, window, cx);
+            }
+        }
         let typed: Vec<(Key, String)> = self
             .controls
             .iter()
@@ -791,9 +1990,19 @@ impl FormPage {
             Ok(()) => {
                 self.error = None;
                 // Settings says it once for all its tabs.
-                self.info = (!self.embedded).then(|| format!("{} {done}", self.reference_label()));
+                if !self.embedded {
+                    self.toast(
+                        format!("{} {done}", self.reference_label()),
+                        DialogKind::Success,
+                    );
+                } else {
+                    self.info = None;
+                }
                 self.controls.clear();
                 self.refresh(window, cx);
+                if self.quick.is_some() && matches!(done, "saved" | "submitted") {
+                    cx.emit(QuickEvent::Saved);
+                }
                 true
             }
             Err(e) => {
@@ -808,11 +2017,7 @@ impl FormPage {
 
     /// `getDocReferenceLabel`: the document's name, or its schema's label.
     fn reference_label(&self) -> String {
-        let schema = self.doc.schema();
-        match self.doc.name() {
-            Some(name) if schema.naming != Some(latte_schema::Naming::Random) => name.to_owned(),
-            _ => schema.label.clone(),
-        }
+        form_view::reference_label(&self.doc)
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -827,26 +2032,129 @@ impl FormPage {
         }
     }
 
+    /// `commonDocSubmit`: a Sales Invoice with inventory on first says which items are
+    /// short, then Submit is asked.
+    fn ask_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_typed(window, cx);
+        let short = {
+            let s = self.session.borrow();
+            form_view::insufficient_quantity(&s.fyo, &self.doc)
+        };
+        self.pending = Some(match short {
+            Ok(short) if !short.is_empty() => Pending::Insufficient(short),
+            _ => Pending::Submit,
+        });
+        cx.notify();
+    }
+
+    /// Ctrl+S (`syncOrSubmitCallback`): asks to save or submit, or says there is nothing
+    /// to do.
+    fn save_or_submit_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_typed(window, cx);
+        let doc = &self.doc;
+        if doc.can_save() || doc.not_inserted() || doc.schema().is_single && doc.dirty() {
+            if self.embedded {
+                self.save(window, cx);
+            } else {
+                self.pending = Some(Pending::Sync);
+            }
+        } else if doc.can_submit() {
+            self.ask_submit(window, cx);
+        } else {
+            self.toast(form_view::cannot_save_message(doc), DialogKind::Warning);
+        }
+        cx.notify();
+    }
+
+    /// Ctrl+Backspace (`cancelOrDeleteCallback`).
+    fn cancel_or_delete_shortcut(&mut self, cx: &mut Context<Self>) {
+        let doc = &self.doc;
+        if doc.can_cancel() {
+            self.pending = Some(Pending::Cancel);
+        } else if doc.inserted() && doc.can_delete() && !doc.schema().is_single {
+            self.pending = Some(Pending::Delete);
+        } else {
+            self.toast(form_view::cannot_cancel_message(doc), DialogKind::Warning);
+        }
+        cx.notify();
+    }
+
+    /// `canPrint`.
+    fn can_print(&self) -> bool {
+        let doc = &self.doc;
+        doc.inserted()
+            && !doc.is_cancelled()
+            && !doc.dirty()
+            && crate::print::can_print(doc.schema_name())
+    }
+
+    fn open_print(&mut self, cx: &mut Context<Self>) {
+        if !self.can_print() {
+            return;
+        }
+        cx.emit(Navigate(Nav::Route(Route::Print {
+            schema: self.doc.schema_name().to_owned(),
+            name: self.doc.name().unwrap_or_default().to_owned(),
+        })));
+    }
+
     fn confirm(&mut self, pending: Pending, window: &mut Window, cx: &mut Context<Self>) {
         match pending {
+            Pending::Sync => self.save(window, cx),
+            Pending::Insufficient(_) => {
+                self.pending = Some(Pending::Submit);
+                cx.notify();
+            }
             Pending::Submit => {
                 self.run("submitted", |doc, fyo| doc.submit(fyo), window, cx);
             }
             Pending::Cancel => {
                 self.run("cancelled", |doc, fyo| doc.cancel(fyo), window, cx);
             }
-            Pending::Delete => {
-                let schema = self.doc.schema_name().to_owned();
-                let label = self.doc.schema().label.clone();
-                if self.run("deleted", |doc, fyo| doc.delete(fyo), window, cx) {
-                    let list = Route::list(&schema, &label, None);
-                    cx.emit(Navigate(if schema == "CustomForm" {
-                        Nav::Reopen(list)
-                    } else {
-                        Nav::Route(list)
-                    }));
-                }
+            Pending::Delete => self.delete(window, cx),
+        }
+    }
+
+    /// `commongDocDelete`: deletes, then goes back to the page before (`router.back()`).
+    /// A document others link to can't go: "Delete Failed".
+    fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending = None;
+        let result = {
+            let mut s = self.session.borrow_mut();
+            self.doc.delete(&mut s.fyo)
+        };
+        if let Err(e) = result {
+            if form_view::is_link_validation_error(&e) {
+                self.error_title = "Delete Failed";
+                self.error = Some(form_view::delete_failed_message(&self.doc));
+            } else {
+                self.error_title = error_label(&e);
+                self.error = Some(e.to_string());
             }
+            cx.notify();
+            return;
+        }
+        if self.quick.is_some() {
+            cx.emit(QuickEvent::Close);
+            return;
+        }
+        let schema = self.doc.schema_name().to_owned();
+        let label = self.doc.schema().label.clone();
+        let list = Route::list(&schema, &label, None);
+        if schema == "CustomForm" {
+            cx.emit(Navigate(Nav::Reopen(list)));
+            return;
+        }
+        // `router.back()`; with nowhere to go back to, the list.
+        let desk = cx
+            .try_global::<crate::desk::NavState>()
+            .filter(|n| n.can_back)
+            .and_then(|n| n.desk.upgrade());
+        match desk {
+            Some(desk) => window.defer(cx, move |window, cx| {
+                desk.update(cx, |desk, cx| desk.go_back(window, cx));
+            }),
+            None => cx.emit(Navigate(Nav::Route(list))),
         }
     }
 
@@ -988,7 +2296,7 @@ impl FormPage {
             if outstanding {
                 actions.push(create(
                     "Payment",
-                    Rc::new(|this, _, cx| this.open_made(invoice::get_payment, cx)),
+                    Rc::new(|this, window, cx| this.make_payment(window, cx)),
                 ));
             }
             // `getMakeStockTransferAction`.
@@ -1246,21 +2554,25 @@ impl FormPage {
     fn header_buttons(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let doc = &self.doc;
         let mut buttons: Vec<AnyElement> = Vec::new();
-        let schema = doc.schema_name().to_owned();
-        // `canPrint`.
-        if doc.inserted() && !doc.is_cancelled() && !doc.dirty() && crate::print::can_print(&schema)
-        {
-            let name = doc.name().unwrap_or_default().to_owned();
+        if self.can_show_links() {
+            buttons.push(
+                Button::new("links")
+                    .icon("link")
+                    .tooltip(t("View linked entries"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if !matches!(this.side, Side::Links(..)) {
+                            this.toggle_links(window, cx)
+                        }
+                    }))
+                    .into_any_element(),
+            );
+        }
+        if self.can_print() {
             buttons.push(
                 Button::new("print")
                     .icon("printer")
                     .tooltip(t("Open Print View"))
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(Navigate(Nav::Route(Route::Print {
-                            schema: schema.clone(),
-                            name: name.clone(),
-                        })))
-                    }))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_print(cx)))
                     .into_any_element(),
             );
         }
@@ -1297,14 +2609,141 @@ impl FormPage {
                 Button::new("submit")
                     .primary()
                     .label(t("Submit"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.pending = Some(Pending::Submit);
-                        cx.notify();
-                    }))
+                    .on_click(cx.listener(|this, _, window, cx| this.ask_submit(window, cx)))
                     .into_any_element(),
             );
         }
         buttons
+    }
+
+    /// `CommonForm.vue`'s `#header-left`: the barcode input and the exchange rate when
+    /// shown, else the schema's label.
+    fn header_left(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let mut left = div().h_flex().gap_2();
+        if let Some((state, _)) = &self.barcode {
+            let focused = state.focus_handle(cx).is_focused(window);
+            let focus = state.clone();
+            // `Barcode.vue`: a 9rem input with the scanner icon.
+            left = left.child(
+                div()
+                    .id("barcode")
+                    .h_flex()
+                    .w(rems(9.))
+                    .h_8()
+                    .px_2()
+                    .rounded(books::RADIUS)
+                    .border_1()
+                    .border_color(gray(200))
+                    .bg(if focused { gray(100) } else { gray(50) })
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(state)
+                                .appearance(false)
+                                .h(px(28.))
+                                .px_0()
+                                .text_13(),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .id("barcode-icon")
+                            .cursor_text()
+                            .child(books::icon("maximize", px(12.), gray(600)))
+                            .on_click(move |_, window, cx| {
+                                focus.focus_handle(cx).focus(window, cx)
+                            }),
+                    ),
+            );
+        }
+        if let Some(exchange) = &self.exchange {
+            left = left.child(self.render_exchange_rate(exchange, cx));
+        }
+        if self.barcode.is_none() && self.exchange.is_none() {
+            left = left.child(
+                div()
+                    .text_18()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gray(600))
+                    .whitespace_nowrap()
+                    .child(t(&self.doc.schema().label)),
+            );
+        }
+        left
+    }
+
+    /// `ExchangeRate.vue`: "1 USD = 82.5 INR", the right amount typed to set the rate, and
+    /// the green swap button.
+    fn render_exchange_rate(&self, exchange: &ExchangeRate, cx: &mut Context<Self>) -> Div {
+        let (from, to) = {
+            let s = self.session.borrow();
+            form_view::exchange_rate(&s.fyo, &self.doc)
+                .map(|(from, to, _)| (from, to))
+                .unwrap_or_default()
+        };
+        let disabled = self.doc.is_submitted() || self.doc.is_cancelled();
+        let (left, right) = if exchange.swapped {
+            (to, from)
+        } else {
+            (from, to)
+        };
+        let rate_box = |state: &Entity<InputState>, currency: String| {
+            div()
+                .h_flex()
+                .gap_2()
+                .px_1()
+                .rounded(books::RADIUS_MD)
+                .border_1()
+                .border_color(gray(100))
+                .bg(if disabled { gray(100) } else { gray(25) })
+                .text_12()
+                .text_color(gray(900))
+                .child(
+                    div().w_12().child(
+                        Input::new(state)
+                            .appearance(false)
+                            .disabled(disabled)
+                            .h(px(22.))
+                            .px(px(2.))
+                            .text_right()
+                            .text_12(),
+                    ),
+                )
+                .child(currency)
+        };
+        div()
+            .h_flex()
+            .h_8()
+            .p_1()
+            .rounded(books::RADIUS_MD)
+            .border_1()
+            .border_color(gray(200))
+            .bg(gray(50))
+            .text_12()
+            .child(rate_box(&exchange.from_value, left))
+            .child(div().mx_1().text_color(gray(600)).child("="))
+            .child(rate_box(&exchange.right, right))
+            .when(!disabled, |d| {
+                d.child(
+                    div()
+                        .id("swap-rate")
+                        .h_flex()
+                        .h_full()
+                        .px_2()
+                        .ml_1()
+                        .mr(px(-2.))
+                        .border_l_1()
+                        .border_color(gray(200))
+                        .bg(books::color("green", 100))
+                        .cursor_pointer()
+                        .child(books::icon("refresh-cw", px(12.), gray(600)))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(e) = &mut this.exchange {
+                                e.swapped = !e.swapped;
+                            }
+                            this.show_rate(window, cx);
+                        })),
+                )
+            })
     }
 
     /// `DropdownWithActions.vue`: a group's button, and its menu below it when open.
@@ -1366,8 +2805,9 @@ impl FormPage {
         div().relative().child(button).children(menu)
     }
 
-    /// The dialog Submit, Cancel and Delete ask in (`showSubmitOrSyncDialog`,
-    /// `cancelDocWithPrompt`, `deleteDocWithPrompt`), or an action's error.
+    /// The dialog Save, Submit, Cancel and Delete ask in (`showSubmitOrSyncDialog`,
+    /// `showInsufficientInventoryDialog`, `cancelDocWithPrompt`, `deleteDocWithPrompt`),
+    /// or an action's error.
     fn render_dialog(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some(error) = &self.error {
             let close = cx.listener(|this, _, _, cx| {
@@ -1385,33 +2825,40 @@ impl FormPage {
                 .into_any_element(),
             );
         }
-        let pending = self.pending?;
+        let pending = self.pending.clone()?;
         let label = self.reference_label();
-        let (title, detail) = match pending {
-            Pending::Submit => (
-                format!("Submit {label}?"),
-                format!("Mark {} as submitted?", self.doc.schema().label),
-            ),
-            Pending::Cancel => (
-                format!("Cancel {label}?"),
-                "This action is permanent".to_owned(),
-            ),
-            Pending::Delete => (
-                format!("Delete {label}?"),
-                if self.doc.is_submitted() && self.doc.schema().is_submittable {
-                    "This action is permanent and will delete associated ledger entries."
-                } else {
-                    "This action is permanent."
-                }
-                .to_owned(),
-            ),
+        let (title, detail, kind) = {
+            let s = self.session.borrow();
+            match &pending {
+                Pending::Sync => (
+                    format!("Save {label}?"),
+                    form_view::sync_message(&s.formatter, &self.doc),
+                    DialogKind::Info,
+                ),
+                Pending::Submit => (
+                    format!("Submit {label}?"),
+                    form_view::submit_message(&s.fyo, &s.formatter, &self.doc),
+                    DialogKind::Info,
+                ),
+                Pending::Insufficient(short) => (
+                    t("Insufficient Quantity"),
+                    form_view::insufficient_quantity_detail(short).join("\n"),
+                    DialogKind::Warning,
+                ),
+                Pending::Cancel => (
+                    format!("Cancel {label}?"),
+                    form_view::cancel_message(&s.fyo, &self.doc)
+                        .unwrap_or_else(|_| "This action is permanent".to_owned()),
+                    DialogKind::Warning,
+                ),
+                Pending::Delete => (
+                    format!("Delete {label}?"),
+                    form_view::delete_message(&self.doc).to_owned(),
+                    DialogKind::Warning,
+                ),
+            }
         };
-        let kind = if pending == Pending::Submit {
-            DialogKind::Info
-        } else {
-            DialogKind::Warning
-        };
-        let yes = cx.listener(move |this, _, window, cx| this.confirm(pending, window, cx));
+        let yes = cx.listener(move |this, _, window, cx| this.confirm(pending.clone(), window, cx));
         let no = cx.listener(|this, _, _, cx| {
             this.pending = None;
             cx.notify();
@@ -1440,17 +2887,15 @@ impl FormPage {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let in_table = matches!(key, Key::Cell(..));
+        let in_table = self.bare(key);
         let numeric = is_numeric(f);
         let s = self.session.borrow();
         match self.controls.get(key) {
             Some(Control::Input { state, .. }) => {
                 let focused = state.focus_handle(cx).is_focused(window);
-                let value = self.current_value(key);
                 // Currency, numbers and dates show their formatted value until clicked
                 // (`Currency.vue`, `Date.vue`).
-                let formatted = (!focused && shows_formatted(f))
-                    .then(|| field::display(&s.formatter, f, value));
+                let formatted = (!focused && shows_formatted(f)).then(|| self.display(key, f, &s));
                 let is_date = matches!(f.fieldtype, Some(FieldType::Date | FieldType::Datetime));
                 let input = Input::new(state)
                     .appearance(false)
@@ -1500,12 +2945,34 @@ impl FormPage {
                         .when(is_date, |d| {
                             d.child(books::icon("calendar", px(16.), gray(600)))
                         })
-                        .on_click(move |_, window, cx| state.focus_handle(cx).focus(window, cx))
+                        .on_click(cx.listener({
+                            let key = key.clone();
+                            let f = f.clone();
+                            move |this, _, window, cx| {
+                                state.focus_handle(cx).focus(window, cx);
+                                // `activateInput`: the input, and its picker.
+                                if is_date {
+                                    this.open_picker(&key, &f, window, cx);
+                                }
+                            }
+                        }))
                 });
-                frame
+                let picker = self
+                    .picker
+                    .as_ref()
+                    .filter(|(k, ..)| k == key)
+                    .map(|(_, picker, _)| anchored_picker(picker));
+                div()
+                    .v_flex()
                     .relative()
-                    .child(div().flex_1().min_w_0().child(input))
-                    .children(overlay)
+                    .w_full()
+                    .child(
+                        frame
+                            .relative()
+                            .child(div().flex_1().min_w_0().child(input))
+                            .children(overlay),
+                    )
+                    .children(picker)
                     .into_any_element()
             }
             Some(Control::Text { state, .. }) => {
@@ -1529,7 +2996,8 @@ impl FormPage {
                 let key2 = key.clone();
                 let id: SharedString = format!("{key:?}").into();
                 let label = match key {
-                    Key::Field(_) => f.label.clone(),
+                    Key::Field(_) if self.quick.is_none() => f.label.clone(),
+                    Key::Field(_) => None,
                     Key::Cell(..) => None,
                 };
                 let read_only = {
@@ -1580,11 +3048,21 @@ impl FormPage {
                 let upload_key = key.clone();
                 let clear_key = key.clone();
                 let has_value = url.is_some();
+                // In a quick edit panel, a 5rem circle with the title's first letter
+                // (`letterPlaceholder`); in the form, the `form` size.
+                let letter = self.quick.as_ref().and_then(|_| {
+                    let title = self.title_field()?;
+                    match self.doc.get(&title.fieldname) {
+                        Some(DocValue::Text(t)) => t.chars().next().map(|c| c.to_string()),
+                        _ => None,
+                    }
+                });
+                let round = self.quick.is_some();
                 div()
                     .id(group.clone())
                     .group(group.clone())
                     .relative()
-                    .size(px(135.))
+                    .size(if round { px(80.) } else { px(135.) })
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1592,11 +3070,24 @@ impl FormPage {
                     .bg(white())
                     .border_1()
                     .border_color(gray(200))
-                    .rounded(books::RADIUS)
+                    .map(|d| {
+                        if round {
+                            d.rounded_full()
+                        } else {
+                            d.rounded(books::RADIUS)
+                        }
+                    })
                     .map(|d| match image {
                         Some(image) => {
                             d.child(img(image).size_full().object_fit(ObjectFit::Contain))
                         }
+                        None if letter.is_some() => d.child(
+                            div()
+                                .text_size(px(36.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(gray(400))
+                                .children(letter),
+                        ),
                         None => d.child(
                             svg()
                                 .path("books/camera.svg")
@@ -1646,8 +3137,173 @@ impl FormPage {
                     })
                     .into_any_element()
             }
+            Some(Control::Attachment) => {
+                let read_only = self.is_read_only(key, f, &s.fyo);
+                let value = match self.current_value(key) {
+                    Some(DocValue::Attachment(value)) => Some(value.clone()),
+                    _ => None,
+                };
+                let name = value
+                    .as_ref()
+                    .and_then(|v| v.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_owned);
+                let label = name.clone().unwrap_or_else(|| {
+                    f.placeholder
+                        .clone()
+                        .or_else(|| f.label.clone())
+                        .unwrap_or_else(|| t("Attachment"))
+                });
+                let button = |id: &str, icon: &'static str| {
+                    div()
+                        .id(SharedString::from(format!("{key:?}-{id}")))
+                        .p(px(2.))
+                        .rounded(books::RADIUS)
+                        .cursor_pointer()
+                        .child(books::icon(icon, px(16.), gray(600)))
+                };
+                let (upload_key, clear_key) = (key.clone(), key.clone());
+                let has_value = value.is_some();
+                self.frame(key, read_only)
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .when(!has_value, |d| d.text_color(gray(600)))
+                            .when(has_value && read_only, |d| d.text_color(gray(800)))
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_1()
+                            .when(!has_value && !read_only, |d| {
+                                d.child(button("upload", "upload").on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.pick_attachment(upload_key.clone(), window, cx)
+                                    },
+                                )))
+                            })
+                            .children(value.clone().map(|value| {
+                                button("download", "download").on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.download_attachment(&value, window, cx)
+                                    },
+                                ))
+                            }))
+                            .when(has_value && !read_only, |d| {
+                                d.child(button("clear", "x").on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.set_value(&clear_key, DocValue::Null, window, cx)
+                                    },
+                                )))
+                            }),
+                    )
+                    .into_any_element()
+            }
+            Some(Control::Color) => {
+                let read_only = self.is_read_only(key, f, &s.fyo);
+                let value = match self.current_value(key) {
+                    Some(DocValue::Text(v)) if !v.is_empty() => Some(v.clone()),
+                    _ => None,
+                };
+                let label = value.as_ref().map(|v| {
+                    f.options
+                        .iter()
+                        .flatten()
+                        .find(|o| &o.value == v)
+                        .map_or_else(|| v.clone(), |o| o.label.clone())
+                });
+                let placeholder = f
+                    .placeholder
+                    .clone()
+                    .or_else(|| f.label.clone())
+                    .unwrap_or_default();
+                let open = self.color.as_ref().filter(|(k, ..)| k == key);
+                let popover = open.map(|(_, hex, _)| {
+                    let swatches = f.options.clone().unwrap_or_default();
+                    let hex = hex.clone();
+                    // `placement="bottom-end"`.
+                    div().absolute().right_0().bottom_0().size_0().child(
+                        deferred(
+                            anchored().snap_to_window().anchor(Anchor::TopRight).child(
+                                popover_panel()
+                                    .id("color-popover")
+                                    .occlude()
+                                    .mt_2()
+                                    .p_2()
+                                    .text_12()
+                                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                        this.color = None;
+                                        cx.notify();
+                                    }))
+                                    .child(div().grid().grid_cols(5).gap_2().children(
+                                        swatches.into_iter().enumerate().map(|(i, o)| {
+                                            let key = key.clone();
+                                            let value = o.value.clone();
+                                            div()
+                                                .id(("swatch", i))
+                                                .size_4()
+                                                .rounded(books::RADIUS)
+                                                .cursor_pointer()
+                                                .bg(parse_hex(&o.value).unwrap_or(white()))
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.set_color(&key, &value, window, cx)
+                                                    },
+                                                ))
+                                        }),
+                                    ))
+                                    .child(
+                                        div().mt_3().w(rems(7.)).child(
+                                            control_frame(false, false).min_h(px(28.)).child(
+                                                Input::new(&hex)
+                                                    .appearance(false)
+                                                    .h(px(26.))
+                                                    .px_2()
+                                                    .text_12(),
+                                            ),
+                                        ),
+                                    ),
+                            ),
+                        )
+                        .with_priority(1),
+                    )
+                });
+                let toggle_key = key.clone();
+                div()
+                    .v_flex()
+                    .relative()
+                    .w_full()
+                    .child(
+                        self.frame(key, read_only)
+                            .id(SharedString::from(format!("{key:?}-color")))
+                            .when(!read_only, |d| d.cursor_pointer())
+                            .map(|d| match (&value, label) {
+                                (Some(v), Some(label)) => d
+                                    .child(
+                                        div()
+                                            .size_3()
+                                            .mr_1()
+                                            .rounded(books::RADIUS)
+                                            .bg(parse_hex(v).unwrap_or(white())),
+                                    )
+                                    .child(label),
+                                _ => d.child(div().text_color(gray(400)).child(placeholder)),
+                            })
+                            .when(!read_only, |d| {
+                                d.on_click(cx.listener(move |this, _, window, cx| {
+                                    this.toggle_color(&toggle_key, window, cx)
+                                }))
+                            }),
+                    )
+                    .children(popover)
+                    .into_any_element()
+            }
             Some(Control::Display) | None => {
-                let text = field::display(&s.formatter, f, self.current_value(key));
+                let text = self.display(key, f, &s);
                 let link = (f.fieldtype == Some(FieldType::Link) && !text.is_empty()).then(|| {
                     let field = f.clone();
                     let name = match self.current_value(key) {
@@ -2051,6 +3707,45 @@ fn shows_formatted(f: &Field) -> bool {
     )
 }
 
+/// A file as `Attachment.vue` keeps it: `{name, type, data}`, the data a data URL.
+fn attachment(path: &std::path::Path) -> Result<serde_json::Value, String> {
+    use base64::Engine as _;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let extension = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    // `accept="image/*,.pdf"`.
+    let mime = match extension.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        _ => return Err(format!("{name} isn't an image or a PDF")),
+    };
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let data = format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    );
+    Ok(serde_json::json!({ "name": name, "type": mime, "data": data }))
+}
+
+/// A `#RRGGBB` colour.
+fn parse_hex(value: &str) -> Option<Hsla> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(hex, 16).ok().map(books::hex)
+}
+
 #[derive(Clone, Copy)]
 enum Kind {
     Input,
@@ -2059,6 +3754,8 @@ enum Kind {
     Check,
     Display,
     Image,
+    Attachment,
+    Color,
 }
 
 fn is_choice(f: &Field) -> bool {
@@ -2081,8 +3778,10 @@ fn control_kind(f: &Field, read_only: bool) -> Kind {
     match f.fieldtype {
         Some(FieldType::Check) => Kind::Check,
         Some(FieldType::AttachImage) => Kind::Image,
+        Some(FieldType::Attachment) => Kind::Attachment,
         _ if read_only => Kind::Display,
-        Some(FieldType::Attachment | FieldType::Button) => Kind::Display,
+        Some(FieldType::Color) => Kind::Color,
+        Some(FieldType::Button) => Kind::Display,
         _ if is_choice(f) => Kind::Link,
         _ => Kind::Input,
     }
@@ -2108,8 +3807,302 @@ fn index_cell() -> Div {
         .h_flex()
 }
 
+impl FormPage {
+    /// Controls drawn bare, without Books' border: in a table, a row form or a quick
+    /// edit panel (`TwoColumnForm.vue` doesn't pass `border`).
+    fn bare(&self, key: &Key) -> bool {
+        matches!(key, Key::Cell(..)) || self.quick.is_some()
+    }
+
+    /// A control's frame (`Base.vue`'s container): bordered in the form, bare elsewhere.
+    fn frame(&self, key: &Key, read_only: bool) -> Div {
+        if self.bare(key) {
+            div()
+                .h_flex()
+                .w_full()
+                .min_h(px(32.))
+                .px_2()
+                .rounded(books::RADIUS)
+                .text_13()
+                .text_color(if read_only { gray(800) } else { gray(900) })
+        } else {
+            control_frame(read_only, false).px_3()
+        }
+    }
+
+    /// `QuickEditForm.vue`: Close and Save or Submit, the title (and picture), then the
+    /// fields, label beside control (`TwoColumnForm.vue`, columns 1.1 : 2).
+    fn render_quick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let doc = &self.doc;
+        let action = if doc.can_save() || doc.not_inserted() {
+            Some(
+                Button::new("quick-save")
+                    .primary()
+                    .label(t("Save"))
+                    .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
+            )
+        } else if doc.can_submit() {
+            Some(
+                Button::new("quick-submit")
+                    .primary()
+                    .label(t("Submit"))
+                    .on_click(cx.listener(|this, _, window, cx| this.ask_submit(window, cx))),
+            )
+        } else {
+            None
+        };
+        let toolbar = div()
+            .h_flex()
+            .flex_none()
+            .h(books::H_PAGE_HEADER)
+            .px_4()
+            .justify_between()
+            .child(
+                Button::new("quick-close")
+                    .icon("x")
+                    .on_click(cx.listener(|this, _, window, cx| this.close_quick(window, cx))),
+            )
+            .children(action);
+
+        let title_field = self.title_field();
+        let image_field = self.image_field();
+        let title_row = (title_field.is_some() || image_field.is_some()).then(|| {
+            let title = title_field.as_ref().map(|f| {
+                let key = Key::Field(f.fieldname.clone());
+                match self.controls.get(&key) {
+                    Some(Control::Input { state, .. }) => div()
+                        .w_full()
+                        .rounded(books::RADIUS)
+                        .when(state.focus_handle(cx).is_focused(window), |d| {
+                            d.bg(gray(100))
+                        })
+                        .child(
+                            Input::new(state)
+                                .appearance(false)
+                                .h(px(32.))
+                                .px_2()
+                                .text_18()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .when(image_field.is_none(), |i| i.text_center()),
+                        )
+                        .into_any_element(),
+                    _ => {
+                        let s = self.session.borrow();
+                        div()
+                            .w_full()
+                            .px_2()
+                            .truncate()
+                            .text_18()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(gray(800))
+                            .when(image_field.is_none(), |d| d.h_flex().justify_center())
+                            .child(self.display(&key, f, &s))
+                            .into_any_element()
+                    }
+                }
+            });
+            let image = image_field.as_ref().map(|f| {
+                let key = Key::Field(f.fieldname.clone());
+                self.render_control(&key, f, window, cx)
+            });
+            let has_image = image.is_some();
+            div()
+                .h_flex()
+                .flex_none()
+                .border_t_1()
+                .border_b_1()
+                .border_color(gray(200))
+                .h(if has_image { px(97.) } else { px(48.) })
+                .map(|d| {
+                    if has_image {
+                        d.child(
+                            div()
+                                .flex_grow(1.1)
+                                .flex_basis(px(0.))
+                                .min_w_0()
+                                .pl_4()
+                                .children(image),
+                        )
+                        .child(
+                            div()
+                                .flex_grow(2.)
+                                .flex_basis(px(0.))
+                                .min_w_0()
+                                .pr_4()
+                                .children(title),
+                        )
+                    } else {
+                        d.justify_center()
+                            .child(div().w_full().mx_4().children(title))
+                    }
+                })
+        });
+
+        let fields = self.shown_fields();
+        let rows: Vec<AnyElement> = fields
+            .iter()
+            .map(|f| {
+                if f.fieldtype == Some(FieldType::Table) {
+                    return div()
+                        .p_4()
+                        .child(self.render_table(f, window, cx))
+                        .into_any_element();
+                }
+                let key = Key::Field(f.fieldname.clone());
+                let tall = matches!(f.fieldtype, Some(FieldType::AttachImage | FieldType::Text))
+                    || self.field_errors.contains_key(&key);
+                div()
+                    .h_flex()
+                    .flex_none()
+                    .min_h(if tall { px(97.) } else { px(49.) })
+                    .border_b_1()
+                    .border_color(gray(200))
+                    .text_12()
+                    .child(
+                        div()
+                            .flex_grow(1.1)
+                            .flex_basis(px(0.))
+                            .min_w_0()
+                            .pl_4()
+                            .text_color(gray(600))
+                            .child(f.label.clone().unwrap_or_else(|| f.fieldname.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_grow(2.)
+                            .flex_basis(px(0.))
+                            .min_w_0()
+                            .py_2()
+                            .pr_4()
+                            .when(f.fieldtype == Some(FieldType::AttachImage), |d| d.pl_2())
+                            .child(self.render_control(&key, f, window, cx))
+                            .children(self.field_errors.get(&key).map(|e| {
+                                div()
+                                    .mt_2()
+                                    .pl_2()
+                                    .text_12()
+                                    .text_color(books::color("red", 600))
+                                    .child(e.clone())
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+
+        div()
+            .id("quick-edit")
+            .track_focus(&self.focus)
+            .v_flex()
+            .flex_none()
+            .w(rems(22.))
+            .h_full()
+            .bg(white())
+            .border_l_1()
+            .border_color(gray(200))
+            .overflow_y_scroll()
+            .text_13()
+            .on_key_down(
+                cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    this.on_key(event, window, cx)
+                }),
+            )
+            .child(toolbar)
+            .children(title_row)
+            .children(rows)
+            .children(self.render_dialog(window, cx))
+            .children(self.render_toast(window, cx))
+            .into_any_element()
+    }
+
+    /// `routeToPrevious`: a saved document's changes are dropped, and the panel closes.
+    fn close_quick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.doc.dirty() && self.doc.inserted() {
+            let mut s = self.session.borrow_mut();
+            self.doc.load(&mut s.fyo).ok();
+        }
+        let _ = window;
+        cx.emit(QuickEvent::Close);
+    }
+
+    fn render_toast(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let message = self.info.clone()?;
+        Some(
+            toast(
+                message,
+                self.info_kind,
+                cx.listener(|this, _, _, cx| {
+                    this.info = None;
+                    cx.notify();
+                }),
+                window,
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// Books' shortcuts (`useDocShortcuts`, `CommonForm.vue`, `LinkedEntries.vue`,
+    /// `RowEditForm.vue`, `QuickEditForm.vue`).
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let k = &event.keystroke;
+        let pmod = k.modifiers.control || k.modifiers.platform;
+        if !pmod && self.quick.is_none() {
+            self.scan_key(&k.key.clone(), window, cx);
+        }
+        let handled = match k.key.as_str() {
+            "s" if pmod => {
+                if self.pending.is_none() && self.error.is_none() {
+                    self.save_or_submit_shortcut(window, cx);
+                }
+                true
+            }
+            "backspace" if pmod && !self.embedded => {
+                if self.pending.is_none() && self.error.is_none() {
+                    self.commit_typed(window, cx);
+                    self.cancel_or_delete_shortcut(cx);
+                }
+                true
+            }
+            "p" if pmod && self.quick.is_none() && !self.embedded => {
+                self.open_print(cx);
+                true
+            }
+            "l" if pmod && self.quick.is_none() && !self.embedded => {
+                if self.can_show_links() || matches!(self.side, Side::Links(..)) {
+                    self.toggle_links(window, cx);
+                }
+                true
+            }
+            "escape" => {
+                if self.pending.is_some() || self.error.is_some() || self.menu.is_some() {
+                    self.pending = None;
+                    self.error = None;
+                    self.menu = None;
+                } else if self.picker.is_some() || self.color.is_some() {
+                    self.picker = None;
+                    self.color = None;
+                } else if self.quick.is_some() {
+                    self.close_quick(window, cx);
+                } else if !matches!(self.side, Side::None) {
+                    self.close_side(window, cx);
+                } else {
+                    return;
+                }
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
+}
+
 impl Render for FormPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.quick.is_some() {
+            return self.render_quick(window, cx);
+        }
         let tabs = self.tabs.clone();
         let sections = tabs
             .get(self.tab)
@@ -2131,6 +4124,11 @@ impl Render for FormPage {
             return div()
                 .v_flex()
                 .w_full()
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.on_key(event, window, cx)
+                    }
+                }))
                 .children(sections)
                 .children(self.render_dialog(window, cx))
                 .into_any_element();
@@ -2224,74 +4222,53 @@ impl Render for FormPage {
             )
             .children(tab_bar);
 
+        // The form takes the focus from the desk when it opens, so its shortcuts work.
+        if std::mem::take(&mut self.focus_on_open) {
+            self.focus.focus(window, cx);
+        }
         let buttons = self.header_buttons(window, cx);
-        // `CommonForm.vue`'s `#header-left`: the schema's label beside Back and Forward.
-        let label = div()
-            .text_18()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(gray(600))
-            .whitespace_nowrap()
-            .child(t(&self.doc.schema().label));
-        let header = page_header_with("", label, cx)
+        let left = self.header_left(window, cx);
+        let header = page_header_with("", left, cx)
             .border_b_0()
             .child(div().h_flex().gap_2().children(buttons));
 
-        let toast = self.info.clone().map(|message| {
-            toast(
-                message,
-                DialogKind::Success,
-                cx.listener(|this, _, _, cx| {
-                    this.info = None;
-                    cx.notify();
-                }),
-                window,
-            )
-        });
+        // `FormContainer.vue`: the header and form, then the side panel the full height.
+        let side = self
+            .quick_panels
+            .top()
+            .map(|panel| panel.clone().into_any_element())
+            .or_else(|| self.render_links(cx))
+            .or_else(|| self.render_row_edit(window, cx));
+        let toast = self.render_toast(window, cx);
 
         div()
-            .v_flex()
+            .h_flex()
             .size_full()
             .bg(gray(25))
             .text_13()
-            // Books' shortcuts: Ctrl+S (⌘S) saves or submits; Esc closes a dialog or menu.
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let k = &event.keystroke;
-                if k.key == "s" && (k.modifiers.control || k.modifiers.platform) {
-                    if this.doc.can_save() || this.doc.not_inserted() || this.doc.dirty() {
-                        this.save(window, cx);
-                    } else if this.doc.can_submit() {
-                        this.pending = Some(Pending::Submit);
-                    }
-                    cx.stop_propagation();
-                    cx.notify();
-                } else if k.key == "escape"
-                    && (this.pending.is_some() || this.error.is_some() || this.menu.is_some())
-                {
-                    this.pending = None;
-                    this.error = None;
-                    this.menu = None;
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }))
-            .child(header)
+            .track_focus(&self.focus)
+            .on_key_down(
+                cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    this.on_key(event, window, cx)
+                }),
+            )
             .child(
                 div()
+                    .v_flex()
                     .flex_1()
-                    .min_h_0()
-                    .h_flex()
-                    .justify_center()
+                    .min_w_0()
+                    .h_full()
+                    .child(header)
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
-                            .h_full()
+                            .min_h_0()
                             .h_flex()
                             .justify_center()
                             .child(body),
-                    )
-                    .children(self.render_row_edit(window, cx)),
+                    ),
             )
+            .children(side)
             .children(self.render_dialog(window, cx))
             .children(toast)
             .into_any_element()

@@ -1,13 +1,13 @@
 //! The chart of accounts as a tree: `src/pages/ChartOfAccounts.vue` @ v0.36.0.
 //!
-//! A group opens on click; an account opens its form. Each account shows its balance, a
-//! group can take a new account or group, and Expand/Collapse open or close every group.
+//! A group opens on click; an account (or a group with nothing under it) opens in the
+//! quick edit panel beside the tree, its row marked. Each account shows its balance, a
+//! group can take a new account or group, which then opens in the panel, and
+//! Expand/Collapse open or close every group.
 //!
 //! Hovering a row offers Add Account, Add Group and Delete, as in Books.
 //!
-//! Differences from Books:
-//! - An account opens in the full form, not the quick-edit panel.
-//! - Balances are summed as money, not as floating-point numbers.
+//! Differences from Books: balances are summed as money, not as floating-point numbers.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,13 +19,13 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::t;
-use latte_core::views::sidebar::Route;
 use latte_db::pesa::Money;
 use latte_db::{DocValue, DocValueMap, Filter, FilterValue, GetAllOptions, Order, QueryFilter};
 
+use crate::Navigate;
+use crate::form::{QuickHost, QuickPanels, QuickRequest, open_quick};
 use crate::session::Shared;
 use crate::widgets::{error_message, page_header};
-use crate::{Nav, Navigate};
 
 #[derive(Clone)]
 struct Account {
@@ -58,6 +58,28 @@ pub struct ChartOfAccounts {
     info: Option<String>,
     /// `isAllExpanded`, `isAllCollapsed`: which of Expand and Collapse are offered.
     all_expanded: bool,
+    /// The account open in the quick edit panel.
+    quick_panels: QuickPanels,
+}
+
+impl QuickHost for ChartOfAccounts {
+    fn quick_panels(&mut self) -> &mut QuickPanels {
+        &mut self.quick_panels
+    }
+
+    fn quick_toast(&mut self, message: String) {
+        self.info = Some(message);
+    }
+
+    /// A deleted or changed account shows in the tree at once (`afterDelete`).
+    fn quick_changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        let parents: Vec<Option<String>> = self.children.keys().cloned().collect();
+        for parent in parents {
+            self.fetch_children(parent.as_deref(), cx);
+        }
+        self.load_totals();
+        cx.notify();
+    }
 }
 
 impl EventEmitter<Navigate> for ChartOfAccounts {}
@@ -87,6 +109,7 @@ impl ChartOfAccounts {
             dialog: None,
             info: None,
             all_expanded: false,
+            quick_panels: QuickPanels::default(),
         };
         page.load_totals();
         page.fetch_children(None, cx);
@@ -173,12 +196,32 @@ impl ChartOfAccounts {
         has
     }
 
-    fn on_click(&mut self, account: &Account, cx: &mut Context<Self>) {
+    /// `openQuickEdit` for an account.
+    fn open_account(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let doc = {
+            let mut s = self.session.borrow_mut();
+            s.fyo.get_doc("Account", Some(name))
+        };
+        match doc {
+            Ok(doc) => {
+                let session = self.session.clone();
+                let request = QuickRequest {
+                    doc,
+                    hide: Vec::new(),
+                    after_save: None,
+                };
+                open_quick(self, session, request, window, cx);
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
+                cx.notify();
+            }
+        }
+    }
+
+    fn on_click(&mut self, account: &Account, window: &mut Window, cx: &mut Context<Self>) {
         if !account.is_group {
-            cx.emit(Navigate(Nav::Route(Route::Form {
-                schema: "Account".to_owned(),
-                name: Some(account.name.clone()),
-            })));
+            self.open_account(&account.name, window, cx);
             return;
         }
         if self.expanded.remove(&account.name) {
@@ -195,11 +238,8 @@ impl ChartOfAccounts {
         if has {
             self.expanded.insert(account.name.clone());
         } else {
-            // An empty group opens its form, as Books opens it when it has no children.
-            cx.emit(Navigate(Nav::Route(Route::Form {
-                schema: "Account".to_owned(),
-                name: Some(account.name.clone()),
-            })));
+            // An empty group opens, as Books opens it when it has no children.
+            self.open_account(&account.name, window, cx);
         }
         cx.notify();
     }
@@ -245,11 +285,11 @@ impl ChartOfAccounts {
         let subscription = cx.subscribe_in(
             &input,
             window,
-            move |this, input, event: &InputEvent, _, cx| match event {
+            move |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { .. } => {
                     let name = input.read(cx).value().trim().to_owned();
                     if !name.is_empty() {
-                        this.create(&parent_account, &name, is_group, cx);
+                        this.create(&parent_account, &name, is_group, window, cx);
                     }
                 }
                 InputEvent::Blur => {
@@ -269,7 +309,14 @@ impl ChartOfAccounts {
     }
 
     /// `createNewAccount`: the new account takes its parent's root and account types.
-    fn create(&mut self, parent: &Account, name: &str, is_group: bool, cx: &mut Context<Self>) {
+    fn create(
+        &mut self,
+        parent: &Account,
+        name: &str,
+        is_group: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let result = {
             let mut s = self.session.borrow_mut();
             let fyo = &mut s.fyo;
@@ -304,6 +351,8 @@ impl ChartOfAccounts {
                 self.adding = None;
                 self.error = None;
                 self.fetch_children(Some(&parent.name), cx);
+                // `openQuickEdit` for the new account.
+                self.open_account(name, window, cx);
             }
             Err(e) => {
                 self.error = Some(e.to_string());
@@ -444,6 +493,8 @@ impl Render for ChartOfAccounts {
             let add_group = account.clone();
             let delete = account.clone();
             let group = SharedString::from(format!("account-row-{i}"));
+            // `isQuickEditOpen`.
+            let open = self.quick_panels.shows("Account", &account.name, cx);
             children.push(
                 div()
                     .id(("account", i))
@@ -451,6 +502,7 @@ impl Render for ChartOfAccounts {
                     .h_flex()
                     .flex_none()
                     .h(px(49.))
+                    .when(open, |d| d.bg(gray(200)))
                     .pl(indent)
                     .pr_4()
                     .border_b_1()
@@ -458,7 +510,9 @@ impl Render for ChartOfAccounts {
                     .cursor_pointer()
                     .hover(|d| d.bg(gray(50)))
                     .map(|d| if level == 0 { d.text_14() } else { d.text_13() })
-                    .on_click(cx.listener(move |this, _, _, cx| this.on_click(&click, cx)))
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.on_click(&click, window, cx)),
+                    )
                     .child(
                         div()
                             .w_4()
@@ -562,10 +616,10 @@ impl Render for ChartOfAccounts {
                                     ),
                                 )
                                 .child(row_button("adding-save", t("Save")).ml_4().on_click(
-                                    cx.listener(move |this, _, _, cx| {
+                                    cx.listener(move |this, _, window, cx| {
                                         let name = input.read(cx).value().trim().to_owned();
                                         if !name.is_empty() {
-                                            this.create(&parent, &name, is_group, cx);
+                                            this.create(&parent, &name, is_group, window, cx);
                                         }
                                     }),
                                 ))
@@ -628,21 +682,31 @@ impl Render for ChartOfAccounts {
             )
         });
 
+        // The quick edit panel beside the page, the full height (`Desk.vue`'s `edit` view).
+        let side = self.quick_panels.top().cloned();
         div()
-            .v_flex()
+            .h_flex()
             .size_full()
-            .text_color(gray(900))
-            .child(header)
-            .children(self.error.clone().map(|e| error_message(e, cx)))
             .child(
                 div()
-                    .id("coa")
                     .v_flex()
                     .flex_1()
-                    .mb_4()
-                    .overflow_y_scroll()
-                    .children(children),
+                    .min_w_0()
+                    .h_full()
+                    .text_color(gray(900))
+                    .child(header)
+                    .children(self.error.clone().map(|e| error_message(e, cx)))
+                    .child(
+                        div()
+                            .id("coa")
+                            .v_flex()
+                            .flex_1()
+                            .mb_4()
+                            .overflow_y_scroll()
+                            .children(children),
+                    ),
             )
+            .children(side)
             .children(dialog)
             .children(toast)
     }
