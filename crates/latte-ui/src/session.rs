@@ -15,6 +15,9 @@ pub struct Session {
     pub fyo: Fyo,
     pub formatter: Formatter,
     pub path: PathBuf,
+    /// The search's filters while it is closed (Books keeps one `Search` while a
+    /// company is open).
+    pub search_filters: Option<latte_core::views::search::SearchFilters>,
 }
 
 pub type Shared = Rc<RefCell<Session>>;
@@ -41,6 +44,7 @@ impl Session {
             fyo,
             formatter,
             path: path.to_owned(),
+            search_filters: None,
         })
     }
 
@@ -59,6 +63,15 @@ impl Session {
             Some(DocValue::Text(name)) => name,
             _ => String::new(),
         }
+    }
+
+    /// SystemSettings' Dark Mode.
+    pub fn dark_mode(&self) -> bool {
+        latte_core::fyo::model::helpers::is_truthy(
+            self.fyo
+                .get_value("SystemSettings", None, "darkMode")
+                .as_ref(),
+        )
     }
 
     pub fn setup_complete(&self) -> bool {

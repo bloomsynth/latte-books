@@ -6,7 +6,7 @@
 //! picking another period on a chart leaves the header at "Set Period".
 //! The Paid and Unpaid amounts open those invoices.
 
-use gpui_kit::component::chart::{AreaChart, BarChart, PieChart};
+use gpui_kit::component::chart::{AreaChart, BarChart};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
@@ -94,6 +94,12 @@ pub struct DashboardPage {
     profit: Vec<(String, f64)>,
     has_profit: bool,
     expenses: Vec<(String, f64)>,
+    /// The expense under the pointer, in the legend or the donut (`active`).
+    expense_active: Option<usize>,
+    /// The slice under the pointer in the donut, which wins over the legend.
+    expense_slice: Option<usize>,
+    /// Where the donut was drawn, to find the slice under the pointer.
+    donut_bounds: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
     error: Option<String>,
 }
 
@@ -118,6 +124,9 @@ impl DashboardPage {
             profit: Vec::new(),
             has_profit: false,
             expenses: Vec::new(),
+            expense_active: None,
+            expense_slice: None,
+            donut_bounds: Default::default(),
             error: None,
         };
         page.load(cx);
@@ -527,62 +536,92 @@ impl DashboardPage {
             return section.child(Self::empty("No expenses in this period"));
         }
         let total: f64 = self.expenses.iter().map(|(_, v)| *v).sum();
-        let slices: Vec<(String, f64, Hsla)> = self
-            .expenses
-            .iter()
-            .enumerate()
-            .map(|(i, (account, value))| (account.clone(), *value, expense_color(i)))
-            .collect();
-        let money = self.money_fn();
-        let donut = PieChart::new(slices.clone())
-            .value(|(_, value, _): &(String, f64, Hsla)| *value as f32)
-            .color(|(_, _, color): &(String, f64, Hsla)| *color)
-            .inner_radius(62.)
-            .outer_radius(88.)
-            .pad_angle(0.02)
-            .tooltip_name(|(account, _, _): &(String, f64, Hsla)| account.clone().into())
-            .tooltip_value(move |_, value, _| SharedString::from(money(f64::from(value))));
-        // `Expenses.vue`'s legend: a square, the account and its total.
+        let active = self
+            .expense_slice
+            .or(self.expense_active)
+            .filter(|i| *i < self.expenses.len());
+        // `Expenses.vue`'s legend: a square, the account and its total; hovering one
+        // shows it in the donut.
         let legend = div()
             .v_flex()
             .w_1_2()
             .gap_4()
             .justify_center()
-            .children(slices.iter().map(|(account, value, color)| {
-                div()
-                    .h_flex()
-                    .text_12()
-                    .child(div().size_3().flex_none().rounded(px(2.)).bg(*color))
-                    .child(div().ml_2().w(px(112.)).truncate().child(account.clone()))
-                    .child(div().ml_auto().flex_none().child(self.money(*value)))
-            }));
-        let center = div()
-            .absolute()
-            .inset_0()
-            .v_flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.money(total)),
-            )
-            .child(
-                div()
-                    .text_11()
-                    .text_color(hex_a1abb4())
-                    .child(t("Total Spending")),
+            .text_color(books::pick(gray(900), books::raw_gray(25)))
+            .children(
+                self.expenses
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (account, value))| {
+                        div()
+                            .id(("expense", i))
+                            .h_flex()
+                            .text_12()
+                            .child(
+                                div()
+                                    .size_3()
+                                    .flex_none()
+                                    .rounded(px(2.))
+                                    .bg(expense_color(i)),
+                            )
+                            .child(div().ml_2().w(px(112.)).truncate().child(account.clone()))
+                            .child(div().ml_auto().flex_none().child(self.money(*value)))
+                            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                if *hovered {
+                                    this.expense_active = Some(i);
+                                } else if this.expense_active == Some(i) {
+                                    this.expense_active = None;
+                                }
+                                cx.notify();
+                            }))
+                    }),
             );
+        // `DonutChart.vue`: the active slice's value and name in the middle, or the total.
+        let (value, label) = match active {
+            Some(i) => (
+                self.money(self.expenses[i].1),
+                latte_core::views::report::truncate(&self.expenses[i].0, 21),
+            ),
+            None => (self.money(total), t("Total Spending")),
+        };
+        let sectors = donut_sectors(&self.expenses.iter().map(|(_, v)| *v).collect::<Vec<_>>());
+        let bounds = self.donut_bounds.clone();
+        let paint_sectors = sectors.clone();
+        let donut = canvas(
+            move |b, _, _| bounds.set(Some(b)),
+            move |b, _, window, cx| {
+                paint_donut(b, &paint_sectors, active, &value, &label, window, cx)
+            },
+        )
+        .size_full();
+        let hit_bounds = self.donut_bounds.clone();
         section.child(
             div().mt_4().h_flex().items_center().child(legend).child(
-                div().w_1_2().h_flex().justify_center().child(
-                    div()
-                        .relative()
-                        .flex_none()
-                        .size(px(190.))
-                        .child(donut)
-                        .child(center),
-                ),
+                div()
+                    .id("donut")
+                    .w_1_2()
+                    .aspect_square()
+                    .child(donut)
+                    .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
+                        let Some(b) = hit_bounds.get() else {
+                            return;
+                        };
+                        let scale = b.size.width.as_f32() / 100.;
+                        let x = (e.position.x - b.origin.x).as_f32() / scale;
+                        let y = (e.position.y - b.origin.y).as_f32() / scale;
+                        let hit = donut_sector_at(x as f64, y as f64, &sectors);
+                        if hit.is_some() && this.expense_slice != hit {
+                            this.expense_slice = hit;
+                            cx.notify();
+                        }
+                    }))
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        // `@mouseleave="$emit('change', null)"`.
+                        if !hovered {
+                            this.expense_slice = None;
+                            cx.notify();
+                        }
+                    })),
             ),
         )
     }
@@ -616,7 +655,14 @@ fn fade(color: Hsla) -> Background {
 
 /// The top expenses' colours (`Expenses.vue`): pink 500 down to 100.
 fn expense_color(i: usize) -> Hsla {
-    books::color("pink", [500, 400, 300, 200, 100][i.min(4)])
+    let i = i.min(4);
+    if books::is_dark() {
+        // `darkshades`: pink 600 down to 200, the last at 80%.
+        let color = books::raw_color("pink", [600, 500, 400, 300, 200][i]);
+        if i == 4 { color.opacity(0.8) } else { color }
+    } else {
+        books::raw_color("pink", [500, 400, 300, 200, 100][i])
+    }
 }
 
 /// The smallest of 1, 2, 2.5 or 5 times a power of ten that is at least `value`.
@@ -739,5 +785,174 @@ impl Render for DashboardPage {
                     )
                     .child(divider()),
             )
+    }
+}
+
+/// `DonutChart.vue` with `Expenses.vue`'s props, in its 100-wide square: the centre at
+/// (53, 50), radius 36, the ring 10 thick and the active slice 14, clipped at 41.
+const DONUT_CX: f64 = 53.;
+const DONUT_CY: f64 = 50.;
+const DONUT_RADIUS: f64 = 36.;
+const DONUT_THICKNESS: f64 = 10.;
+
+/// `thetasAndStarts`: each slice with a value, as (index, sweep, start), from the left
+/// (`startAngle` π) clockwise.
+fn donut_sectors(values: &[f64]) -> Vec<(usize, f64, f64)> {
+    let total: f64 = values.iter().sum();
+    let mut start = 0.;
+    let mut sectors = Vec::new();
+    for (i, value) in values.iter().enumerate() {
+        if *value == 0. || total == 0. {
+            continue;
+        }
+        let theta = std::f64::consts::TAU * value / total;
+        sectors.push((i, theta, start));
+        start += theta;
+    }
+    sectors
+}
+
+/// The slice under a point of the square, if the point is on the ring.
+fn donut_sector_at(x: f64, y: f64, sectors: &[(usize, f64, f64)]) -> Option<usize> {
+    let (dx, dy) = (x - DONUT_CX, y - DONUT_CY);
+    let distance = dx.hypot(dy);
+    let (inner, outer) = (
+        DONUT_RADIUS - DONUT_THICKNESS / 2.,
+        DONUT_RADIUS + DONUT_THICKNESS / 2.,
+    );
+    if distance < inner || distance > outer {
+        return None;
+    }
+    let angle = (dy.atan2(dx) - std::f64::consts::PI).rem_euclid(std::f64::consts::TAU);
+    sectors
+        .iter()
+        .find(|(_, theta, start)| angle >= *start && angle < start + theta)
+        .map(|(i, ..)| *i)
+}
+
+/// Draws the donut, and in its middle the value and the name (`DonutChart.vue`).
+fn paint_donut(
+    bounds: Bounds<Pixels>,
+    sectors: &[(usize, f64, f64)],
+    active: Option<usize>,
+    value: &str,
+    label: &str,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let scale = bounds.size.width.as_f32() as f64 / 100.;
+    let at = |x: f64, y: f64| {
+        point(
+            bounds.origin.x + px((x * scale) as f32),
+            bounds.origin.y + px((y * scale) as f32),
+        )
+    };
+    let outer = DONUT_RADIUS + DONUT_THICKNESS / 2.;
+    for (i, theta, start) in sectors {
+        let thickness = DONUT_THICKNESS + if active == Some(*i) { 4. } else { 0. };
+        let inner = DONUT_RADIUS - thickness / 2.;
+        let steps = ((theta / (std::f64::consts::PI / 90.)).ceil() as usize).max(2);
+        let angle = |k: usize| std::f64::consts::PI + start + theta * k as f64 / steps as f64;
+        let mut points: Vec<Point<Pixels>> = (0..=steps)
+            .map(|k| {
+                at(
+                    DONUT_CX + outer * angle(k).cos(),
+                    DONUT_CY + outer * angle(k).sin(),
+                )
+            })
+            .collect();
+        points.extend((0..=steps).rev().map(|k| {
+            at(
+                DONUT_CX + inner * angle(k).cos(),
+                DONUT_CY + inner * angle(k).sin(),
+            )
+        }));
+        let mut path = PathBuilder::fill();
+        path.add_polygon(&points, true);
+        if let Ok(path) = path.build() {
+            window.paint_path(path, expense_color(*i));
+        }
+    }
+
+    // The value, bold, 6 high, and the name, 5 high, 8 below it.
+    let text = |text: &str, size: f64, weight: FontWeight, color: Hsla| {
+        let mut font = font("Inter");
+        font.weight = weight;
+        let run = TextRun {
+            len: text.len(),
+            font,
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let size = px((size * scale) as f32);
+        (
+            window.text_system().shape_line(
+                SharedString::from(text.to_owned()),
+                size,
+                &[run],
+                None,
+            ),
+            size,
+        )
+    };
+    let lines = [
+        (
+            text(
+                value,
+                6.,
+                FontWeight::BOLD,
+                books::pick(books::hex(0x415668), books::hex(0xFFFFFF)),
+            ),
+            DONUT_CY,
+        ),
+        (
+            text(label, 5., FontWeight::NORMAL, hex_a1abb4()),
+            DONUT_CY + 8.,
+        ),
+    ];
+    for ((line, size), baseline) in lines {
+        // The baseline at `y`, as SVG's `<text>` puts it.
+        let origin = at(0., baseline) - point(px(0.), size);
+        let origin = point(bounds.origin.x, origin.y);
+        let width = px((2. * DONUT_CX * scale) as f32);
+        line.paint(
+            origin,
+            size * 1.2,
+            TextAlign::Center,
+            Some(width),
+            window,
+            cx,
+        )
+        .ok();
+    }
+}
+
+#[cfg(test)]
+mod donut_tests {
+    use super::{DONUT_CX, DONUT_CY, donut_sector_at, donut_sectors};
+
+    #[test]
+    fn slices_start_at_the_left_and_go_clockwise() {
+        let sectors = donut_sectors(&[300., 0., 100.]);
+        // The empty one is left out.
+        assert_eq!(sectors.len(), 2);
+        assert_eq!(sectors[0].0, 0);
+        assert!((sectors[0].1 - std::f64::consts::TAU * 0.75).abs() < 1e-9);
+        assert_eq!(sectors[1].0, 2);
+        // Just right of the left edge, going clockwise (up on screen): the first slice.
+        assert_eq!(
+            donut_sector_at(DONUT_CX - 36., DONUT_CY - 1., &sectors),
+            Some(0)
+        );
+        // Just below the left edge: the last quarter, the third value.
+        assert_eq!(
+            donut_sector_at(DONUT_CX - 36., DONUT_CY + 1., &sectors),
+            Some(2)
+        );
+        // The hole and outside the ring are no slice.
+        assert_eq!(donut_sector_at(DONUT_CX, DONUT_CY, &sectors), None);
+        assert_eq!(donut_sector_at(DONUT_CX + 45., DONUT_CY, &sectors), None);
     }
 }

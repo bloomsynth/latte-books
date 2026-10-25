@@ -13,9 +13,9 @@ use gpui_kit::component::*;
 use gpui_kit::*;
 use latte_print::{PrintError, Printout};
 
-use crate::books::{self, Text as _, gray, white};
+use crate::books::{self, Text as _, gray};
 use crate::i18n::t;
-use crate::widgets::{dropdown_item, popover_panel};
+use crate::widgets::{Kind, Toast, dropdown_item, popover_panel, show_toast};
 
 /// A laid out printout: its PDF-ready document and its pages as images, with their
 /// sizes in points.
@@ -61,7 +61,8 @@ pub fn pages_view(pages: &[(Arc<Image>, (f64, f64))], scale: f32) -> Div {
                 .flex_none()
                 .w(px(*w as f32 * PX_PER_PT * scale))
                 .h(px(*h as f32 * PX_PER_PT * scale))
-                .bg(white())
+                // Paper is white in dark mode too.
+                .bg(books::hex(0xFFFFFF))
                 .border_1()
                 .border_color(gray(200))
                 .shadow(books::shadow_lg())
@@ -240,45 +241,50 @@ fn documents() -> PathBuf {
         .unwrap_or_default()
 }
 
-/// What Save as PDF or Print did, for a page to show.
-pub type Outcome = Result<String, String>;
-
-/// Save as PDF: asks where, writes the PDF, and reports back.
-pub fn save_pdf<T: 'static>(
-    pdf: Vec<u8>,
+/// Save as PDF (`print` false): asks where and writes the PDF; Print: writes it to the
+/// temp folder and opens it with the computer's PDF viewer, whose print dialog prints it.
+/// Either way a toast says how it went (`showExportInFolder`).
+pub fn output(
+    pdf: Result<Vec<u8>, String>,
+    print: bool,
     name: &str,
     window: &mut Window,
-    cx: &mut Context<T>,
-    done: impl FnOnce(&mut T, Outcome, &mut Context<T>) + 'static,
+    cx: &mut App,
 ) {
-    let file_name = format!("{}.pdf", sanitize(name));
-    let path = cx.prompt_for_new_path(&documents(), Some(&file_name));
-    cx.spawn_in(window, async move |this, cx| {
-        let Ok(Ok(Some(path))) = path.await else {
+    let pdf = match pdf {
+        Ok(pdf) => pdf,
+        Err(e) => {
+            show_toast(Toast::new(e, Kind::Error), window, cx);
             return;
+        }
+    };
+    let file_name = format!("{}.pdf", sanitize(name));
+    if print {
+        let dir = std::env::temp_dir().join("latte-books-print");
+        let path = dir.join(&file_name);
+        let toast = match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, pdf)) {
+            Ok(()) => {
+                cx.open_with_system(&path);
+                Toast::new(t("Opened in your PDF viewer to print"), Kind::Success).short()
+            }
+            Err(e) => Toast::new(format!("{}: {e}", t("Print Failed")), Kind::Error),
         };
-        let result = std::fs::write(&path, pdf)
-            .map(|()| format!("{}: {}", t("Save as PDF Successful"), path.display()))
-            .map_err(|e| format!("{}: {e}", t("Export Failed")));
-        this.update(cx, |this, cx| {
-            done(this, result, cx);
-            cx.notify();
+        show_toast(toast, window, cx);
+        return;
+    }
+    let path = cx.prompt_for_new_path(&documents(), Some(&file_name));
+    window
+        .spawn(cx, async move |cx| {
+            let Ok(Ok(Some(path))) = path.await else {
+                return;
+            };
+            let toast = match std::fs::write(&path, pdf) {
+                Ok(()) => Toast::new(t("Save as PDF Successful"), Kind::Success).open_folder(&path),
+                Err(e) => Toast::new(format!("{}: {e}", t("Export Failed")), Kind::Error),
+            };
+            cx.update(|window, cx| show_toast(toast, window, cx)).ok();
         })
-        .ok();
-    })
-    .detach();
-}
-
-/// Print: writes the PDF to the temp folder and opens it with the computer's PDF viewer,
-/// whose print dialog prints it.
-pub fn print_pdf(pdf: Vec<u8>, name: &str, cx: &App) -> Outcome {
-    let dir = std::env::temp_dir().join("latte-books-print");
-    let path = dir.join(format!("{}.pdf", sanitize(name)));
-    std::fs::create_dir_all(&dir)
-        .and_then(|()| std::fs::write(&path, pdf))
-        .map_err(|e| format!("{}: {e}", t("Print Failed")))?;
-    cx.open_with_system(&path);
-    Ok(t("Opened in your PDF viewer to print"))
+        .detach();
 }
 
 /// A file name from a document's name.

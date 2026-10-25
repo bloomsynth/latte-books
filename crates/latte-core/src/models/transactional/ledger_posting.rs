@@ -1,8 +1,4 @@
 // Port of models/Transactional/LedgerPosting.ts @ v0.36.0.
-//
-// Deviation: the totals in "Total Debit: … must be equal to Total Credit: …" are rounded
-// to the display precision, without the locale's digit grouping or the currency symbol
-// that `fyo.format` adds. Formatting isn't ported yet.
 
 use indexmap::IndexMap;
 use jiff::Timestamp;
@@ -169,8 +165,8 @@ impl LedgerPosting {
 
         Err(Error::Validation(format!(
             "Total Debit: {} must be equal to Total Credit: {}",
-            debit.round(None),
-            credit.round(None)
+            crate::fyo::format::currency(fyo, &debit),
+            crate::fyo::format::currency(fyo, &credit)
         )))
     }
 

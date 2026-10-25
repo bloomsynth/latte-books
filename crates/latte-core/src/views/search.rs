@@ -2,12 +2,13 @@
 //! `fuzzyMatch` of `src/utils/index.ts` @ v0.36.0.
 //!
 //! Differences from Books:
-//! - No "Recent" group; Books keeps it in localStorage.
 //! - Every search starts from scratch; Books narrows the previous results as letters are
 //!   typed (`_intermediate`), which gives the same items.
 //! - The index is built once, by `Searcher::new`; Books rebuilds a schema's keywords when
 //!   one of its documents is saved or deleted. Make a new `Searcher` to pick changes up.
-//! - Only the group filters are exposed; the per-schema filters aren't.
+//! - A recent document opens the document. Books keeps its schema's label and opens
+//!   `/list/<label>`, which is no list; and a recent item picked again keeps what it opens,
+//!   where Books then keeps only its label.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +24,7 @@ use crate::{Error, Fyo};
 /// `Number.MAX_SAFE_INTEGER`: the distance of a non-match.
 const NO_MATCH: f64 = 9_007_199_254_740_991.0;
 
-/// `SearchGroup`, without Recent.
+/// `SearchGroup`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SearchGroup {
     Docs,
@@ -31,16 +32,18 @@ pub enum SearchGroup {
     List,
     Report,
     Page,
+    Recent,
 }
 
 impl SearchGroup {
-    /// `searchGroups`: the order of the filter buttons.
-    pub const ALL: [SearchGroup; 5] = [
+    /// `searchGroups`: the order of the filter buttons, and of their Ctrl+1 to Ctrl+6.
+    pub const ALL: [SearchGroup; 6] = [
         SearchGroup::Docs,
         SearchGroup::List,
         SearchGroup::Create,
         SearchGroup::Report,
         SearchGroup::Page,
+        SearchGroup::Recent,
     ];
 
     /// `getGroupLabelMap`.
@@ -51,6 +54,7 @@ impl SearchGroup {
             Self::List => "List",
             Self::Report => "Report",
             Self::Page => "Page",
+            Self::Recent => "Recent",
         }
     }
 
@@ -62,6 +66,7 @@ impl SearchGroup {
             Self::List => "teal",
             Self::Report => "yellow",
             Self::Page => "orange",
+            Self::Recent => "purple",
         }
     }
 
@@ -72,7 +77,12 @@ impl SearchGroup {
             Self::List => 2,
             Self::Report => 3,
             Self::Page => 4,
+            Self::Recent => 5,
         }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|g| g.label() == label)
     }
 }
 
@@ -100,10 +110,24 @@ pub struct SearchItem {
     pub target: SearchTarget,
 }
 
+/// `StoredRecentItem`: a picked item, kept by its label and group, and for a document its
+/// schema and name.
+#[derive(Debug, Clone, PartialEq)]
+struct RecentItem {
+    label: String,
+    group: SearchGroup,
+    doc: Option<(String, String)>,
+    timestamp: i64,
+}
+
+/// `maxRecentItems`.
+const MAX_RECENT_ITEMS: usize = 10;
+
 /// `Searchable`.
 struct Searchable {
     schema_name: String,
     is_child: bool,
+    is_submittable: bool,
 }
 
 /// `Keyword`.
@@ -115,6 +139,23 @@ struct Keyword {
     priority: i64,
 }
 
+/// A schema filter of More Filters: the schema, its label, and whether it is searched.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SchemaFilter {
+    pub schema_name: String,
+    pub label: String,
+    pub on: bool,
+}
+
+/// `SearchFilters`: what [`Searcher::filters`] keeps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchFilters {
+    group_filters: [bool; 6],
+    schema_filters: Vec<(String, bool)>,
+    skip_tables: bool,
+    skip_transactions: bool,
+}
+
 /// `Search`.
 pub struct Searcher {
     searchables: Vec<Searchable>,
@@ -123,9 +164,15 @@ pub struct Searcher {
     schema_labels: Vec<(String, String)>,
     non_doc_items: Vec<SearchItem>,
     /// `filters.groupFilters`, by `SearchGroup::index`.
-    group_filters: [bool; 5],
+    group_filters: [bool; 6],
+    /// `filters.schemaFilters`, by searchable.
+    schema_filters: Vec<bool>,
     /// `filters.skipTables`.
     skip_tables: bool,
+    /// `filters.skipTransactions`.
+    skip_transactions: bool,
+    /// What was picked, newest first (`searchRecents`).
+    recents: Vec<RecentItem>,
 }
 
 impl Searcher {
@@ -136,16 +183,22 @@ impl Searcher {
             keywords: Vec::new(),
             schema_labels: Vec::new(),
             non_doc_items: non_doc_search_list(fyo),
-            group_filters: [true; 5],
+            group_filters: [true; 6],
+            schema_filters: Vec::new(),
             skip_tables: false,
+            skip_transactions: false,
+            recents: Vec::new(),
         };
         searcher.set_searchables(fyo);
         searcher.update_keywords(fyo)?;
+        searcher.schema_filters = vec![true; searcher.searchables.len()];
         searcher.set_filter_defaults();
         Ok(searcher)
     }
 
-    /// `search(input)`: Docs first by keyword priority groups, then the non-doc items, each sorted by fuzzy distance; with an empty input only the non-doc items show (as Books).
+    /// `search(input)`: the recent items while the input is empty or starts with "#" or
+    /// "recent", then Docs by keyword priority, then the non-doc items, each sorted by
+    /// fuzzy distance; with an empty input no Docs show (as Books).
     pub fn search(&self, input: &str) -> Vec<SearchItem> {
         let grouped = self.grouped_keywords();
         let mut keys: Vec<i64> = grouped.keys().copied().collect();
@@ -155,6 +208,12 @@ impl Searcher {
         keys.sort_by(|a, b| b.cmp(a));
 
         let mut items = Vec::new();
+        let show_recent = input.is_empty()
+            || input.starts_with('#')
+            || input.to_lowercase().starts_with("recent");
+        if show_recent && self.group_on(SearchGroup::Recent) {
+            items.extend(self.recent_items(&recent_search_term(input)));
+        }
         for key in keys {
             if let Some(keywords) = grouped.get(&key) {
                 self.push_doc_search_items(keywords, &mut items, input);
@@ -175,6 +234,232 @@ impl Searcher {
         self.group_filters[group.index()]
     }
 
+    /// Whether child tables are skipped (`filters.skipTables`).
+    pub fn skip_tables(&self) -> bool {
+        self.skip_tables
+    }
+
+    /// Whether submittable schemas are skipped (`filters.skipTransactions`).
+    pub fn skip_transactions(&self) -> bool {
+        self.skip_transactions
+    }
+
+    /// `set('skipTables', …)`: every child table's schema filter follows it.
+    pub fn set_skip_tables(&mut self, skip: bool) {
+        for (i, searchable) in self.searchables.iter().enumerate() {
+            if searchable.is_child {
+                self.schema_filters[i] = !skip;
+            }
+        }
+        self.skip_tables = skip;
+    }
+
+    /// `set('skipTransactions', …)`: every submittable schema's filter follows it.
+    pub fn set_skip_transactions(&mut self, skip: bool) {
+        for (i, searchable) in self.searchables.iter().enumerate() {
+            if searchable.is_submittable {
+                self.schema_filters[i] = !skip;
+            }
+        }
+        self.skip_transactions = skip;
+    }
+
+    /// `set(schemaName, …)`: a schema filter; Skip Child Tables and Skip Transactions are
+    /// on when every schema they cover is off (the `skipT*` getters).
+    pub fn set_schema(&mut self, schema_name: &str, on: bool) {
+        let Some(i) = self
+            .searchables
+            .iter()
+            .position(|s| s.schema_name == schema_name)
+        else {
+            return;
+        };
+        self.schema_filters[i] = on;
+        let all_off = |pick: fn(&Searchable) -> bool| {
+            self.searchables
+                .iter()
+                .zip(&self.schema_filters)
+                .filter(|(s, _)| pick(s))
+                .all(|(_, on)| !on)
+        };
+        self.skip_tables = all_off(|s| s.is_child);
+        self.skip_transactions = all_off(|s| s.is_submittable);
+    }
+
+    /// `schemaFilters` of `SearchBar.vue`: submittable schemas first, then the others,
+    /// then child tables.
+    pub fn schema_filters(&self) -> Vec<SchemaFilter> {
+        let mut filters: Vec<(usize, SchemaFilter)> = self
+            .searchables
+            .iter()
+            .zip(&self.schema_filters)
+            .map(|(s, on)| {
+                let index = if s.is_submittable {
+                    0
+                } else if s.is_child {
+                    2
+                } else {
+                    1
+                };
+                let label = self.schema_label(&s.schema_name);
+                let filter = SchemaFilter {
+                    schema_name: s.schema_name.clone(),
+                    label,
+                    on: *on,
+                };
+                (index, filter)
+            })
+            .collect();
+        filters.sort_by_key(|(index, _)| *index);
+        filters.into_iter().map(|(_, f)| f).collect()
+    }
+
+    /// The filters, to be kept while the search is closed: Books keeps one `Search` while
+    /// a company is open.
+    pub fn filters(&self) -> SearchFilters {
+        SearchFilters {
+            group_filters: self.group_filters,
+            schema_filters: self
+                .searchables
+                .iter()
+                .zip(&self.schema_filters)
+                .map(|(s, on)| (s.schema_name.clone(), *on))
+                .collect(),
+            skip_tables: self.skip_tables,
+            skip_transactions: self.skip_transactions,
+        }
+    }
+
+    /// Sets the filters kept by [`Searcher::filters`].
+    pub fn set_filters(&mut self, filters: &SearchFilters) {
+        self.group_filters = filters.group_filters;
+        for (i, searchable) in self.searchables.iter().enumerate() {
+            if let Some((_, on)) = filters
+                .schema_filters
+                .iter()
+                .find(|(name, _)| *name == searchable.schema_name)
+            {
+                self.schema_filters[i] = *on;
+            }
+        }
+        self.skip_tables = filters.skip_tables;
+        self.skip_transactions = filters.skip_transactions;
+    }
+
+    fn schema_label(&self, schema_name: &str) -> String {
+        self.schema_labels
+            .iter()
+            .find(|(name, _)| name == schema_name)
+            .map_or_else(|| schema_name.to_owned(), |(_, label)| label.clone())
+    }
+
+    /// `addToRecent`: puts a picked item first in the recent items, once by its label,
+    /// keeping ten.
+    pub fn add_to_recent(&mut self, item: &SearchItem, timestamp: i64) {
+        let recent = if item.group == SearchGroup::Recent {
+            match self.recents.iter().find(|r| r.label == item.label) {
+                Some(recent) => RecentItem {
+                    timestamp,
+                    ..recent.clone()
+                },
+                None => return,
+            }
+        } else {
+            let doc = match (&item.group, &item.target) {
+                (SearchGroup::Docs, SearchTarget::Route(Route::Form { schema, name })) => {
+                    name.clone().map(|name| (schema.clone(), name))
+                }
+                _ => None,
+            };
+            RecentItem {
+                label: item.label.clone(),
+                group: item.group,
+                doc,
+                timestamp,
+            }
+        };
+        self.recents.retain(|r| r.label != recent.label);
+        self.recents.insert(0, recent);
+        self.recents.truncate(MAX_RECENT_ITEMS);
+    }
+
+    /// `getRecentItems`: the recent items whose label or group has the term, as Recent.
+    fn recent_items(&self, term: &str) -> Vec<SearchItem> {
+        let term = term.to_lowercase();
+        self.recents
+            .iter()
+            .filter(|r| {
+                term.is_empty()
+                    || r.label.to_lowercase().contains(&term)
+                    || r.group.label().to_lowercase().contains(&term)
+            })
+            .filter_map(|r| {
+                let target = match &r.doc {
+                    Some((schema, name)) => SearchTarget::Route(Route::Form {
+                        schema: schema.clone(),
+                        name: Some(name.clone()),
+                    }),
+                    None => self
+                        .non_doc_items
+                        .iter()
+                        .find(|i| i.group == r.group && i.label == r.label)?
+                        .target
+                        .clone(),
+                };
+                Some(SearchItem {
+                    label: r.label.clone(),
+                    group: SearchGroup::Recent,
+                    schema_label: None,
+                    more: Vec::new(),
+                    target,
+                })
+            })
+            .collect()
+    }
+
+    /// The recent items as Books stores them (`searchRecents`), as JSON.
+    pub fn recents_json(&self) -> String {
+        let items: Vec<serde_json::Value> = self
+            .recents
+            .iter()
+            .map(|r| {
+                let mut item = serde_json::json!({
+                    "label": r.label,
+                    "group": r.group.label(),
+                    "timestamp": r.timestamp,
+                });
+                if let Some((schema, name)) = &r.doc {
+                    item["schemaName"] = schema.clone().into();
+                    item["name"] = name.clone().into();
+                }
+                item
+            })
+            .collect();
+        serde_json::Value::Array(items).to_string()
+    }
+
+    /// Reads the recent items back from [`Searcher::recents_json`]'s JSON; what can't be
+    /// read is left out.
+    pub fn set_recents_json(&mut self, json: &str) {
+        let Ok(serde_json::Value::Array(items)) = serde_json::from_str(json) else {
+            return;
+        };
+        self.recents = items
+            .iter()
+            .filter_map(|item| {
+                let text = |key: &str| item.get(key)?.as_str().map(str::to_owned);
+                let doc = text("schemaName").zip(text("name"));
+                Some(RecentItem {
+                    label: text("label")?,
+                    group: SearchGroup::from_label(&text("group")?)?,
+                    doc,
+                    timestamp: item.get("timestamp")?.as_i64()?,
+                })
+            })
+            .take(MAX_RECENT_ITEMS)
+            .collect();
+    }
+
     /// `_setSearchables`: the schemas with keyword fields.
     fn set_searchables(&mut self, fyo: &Fyo) {
         for schema_name in fyo.db.schema_map().keys() {
@@ -187,6 +472,7 @@ impl Searcher {
             self.searchables.push(Searchable {
                 schema_name: schema_name.clone(),
                 is_child: schema.is_child,
+                is_submittable: schema.is_submittable,
             });
             self.schema_labels
                 .push((schema_name.clone(), schema.label.clone()));
@@ -301,7 +587,7 @@ impl Searcher {
             .map(|(_, keywords)| keywords.len())
             .sum();
         if total_child_keywords > 2_000 {
-            self.skip_tables = true;
+            self.set_skip_tables(true);
         }
     }
 
@@ -318,7 +604,18 @@ impl Searcher {
             return grouped;
         }
         for (schema_name, keywords) in &self.keywords {
-            if self.skip_tables && self.is_child(schema_name) {
+            let Some(i) = self
+                .searchables
+                .iter()
+                .position(|s| s.schema_name == *schema_name)
+            else {
+                continue;
+            };
+            let searchable = &self.searchables[i];
+            if !self.schema_filters[i]
+                || (searchable.is_child && self.skip_tables)
+                || (searchable.is_submittable && self.skip_transactions)
+            {
                 continue;
             }
             for keyword in keywords {
@@ -398,6 +695,24 @@ fn sorted(matches: impl Iterator<Item = (SearchItem, f64)>) -> Vec<SearchItem> {
     let mut matches: Vec<(SearchItem, f64)> = matches.collect();
     matches.sort_by(|a, b| a.1.total_cmp(&b.1));
     matches.into_iter().map(|(item, _)| item).collect()
+}
+
+/// `input.replace(/^#|recent/gi, '').trim()`: what the recent items are searched for.
+fn recent_search_term(input: &str) -> String {
+    let input = input.strip_prefix('#').unwrap_or(input);
+    let mut out = String::new();
+    let mut rest = input;
+    while !rest.is_empty() {
+        let lower = rest.get(..6).map(str::to_lowercase);
+        if lower.as_deref() == Some("recent") {
+            rest = &rest[6..];
+        } else {
+            let c = rest.chars().next().unwrap_or_default();
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out.trim().to_owned()
 }
 
 /// `priorityMap`.
@@ -738,5 +1053,144 @@ mod tests {
             .position(|i| i.schema_label.as_deref() == Some("Item"))
             .unwrap();
         assert!(item < row);
+    }
+
+    #[test]
+    fn recent_items_come_first_while_the_input_asks_for_them() {
+        let file = TempFile::new("search recent");
+        let fyo = indian_company(&file);
+        let mut searcher = Searcher::new(&fyo).unwrap();
+        assert!(
+            searcher
+                .search("")
+                .iter()
+                .all(|i| i.group != SearchGroup::Recent)
+        );
+
+        let import = searcher.search("Import")[0].clone();
+        searcher.add_to_recent(&import, 1);
+        let customers = searcher.search("Customers")[0].clone();
+        searcher.add_to_recent(&customers, 2);
+        let doc = SearchItem {
+            label: "SINV-1001".into(),
+            group: SearchGroup::Docs,
+            schema_label: Some("Sales Invoice".into()),
+            more: Vec::new(),
+            target: SearchTarget::Route(Route::Form {
+                schema: "SalesInvoice".into(),
+                name: Some("SINV-1001".into()),
+            }),
+        };
+        searcher.add_to_recent(&doc, 3);
+        // Picked again, an item moves to the top once.
+        searcher.add_to_recent(&import, 4);
+
+        let items = searcher.search("");
+        let recent: Vec<&str> = items
+            .iter()
+            .take_while(|i| i.group == SearchGroup::Recent)
+            .map(|i| i.label.as_str())
+            .collect();
+        assert_eq!(recent, ["Import Wizard", "SINV-1001", "Customers"]);
+        assert_eq!(items[0].target, import.target);
+        // A recent document opens the document.
+        assert_eq!(items[1].target, doc.target);
+
+        // "#" and "recent" search the recent items by label or group.
+        let labels = |input: &str| -> Vec<String> {
+            searcher
+                .search(input)
+                .into_iter()
+                .filter(|i| i.group == SearchGroup::Recent)
+                .map(|i| i.label)
+                .collect()
+        };
+        assert_eq!(labels("#sinv"), ["SINV-1001"]);
+        assert_eq!(labels("Recent list"), ["Customers"]);
+        assert!(labels("Import").is_empty());
+
+        // Kept as JSON, as Books keeps them in localStorage.
+        let json = searcher.recents_json();
+        let mut other = Searcher::new(&fyo).unwrap();
+        other.set_recents_json(&json);
+        assert_eq!(other.search("")[..3], items[..3]);
+
+        searcher.set_group(SearchGroup::Recent, false);
+        assert!(
+            searcher
+                .search("")
+                .iter()
+                .all(|i| i.group != SearchGroup::Recent)
+        );
+    }
+
+    #[test]
+    fn more_filters_skip_tables_transactions_and_schemas() {
+        let file = TempFile::new("search filters");
+        let mut fyo = indian_company(&file);
+        let values = map([("name", text("Widget")), ("rate", DocValue::Number(100.0))]);
+        fyo.get_new_doc("Item", values)
+            .unwrap()
+            .sync(&mut fyo)
+            .unwrap();
+        let values = map([("name", text("Acme")), ("role", text("Customer"))]);
+        fyo.get_new_doc("Party", values)
+            .unwrap()
+            .sync(&mut fyo)
+            .unwrap();
+        let values = map([("party", text("Acme")), ("account", text("Debtors"))]);
+        let mut invoice = fyo.get_new_doc("SalesInvoice", values).unwrap();
+        let row = map([
+            ("item", text("Widget")),
+            ("quantity", DocValue::Number(1.0)),
+        ]);
+        invoice.append(&mut fyo, "items", row).unwrap();
+        invoice.sync(&mut fyo).unwrap();
+
+        let mut searcher = Searcher::new(&fyo).unwrap();
+        let schemas = |searcher: &Searcher, input: &str| -> Vec<String> {
+            searcher
+                .search(input)
+                .into_iter()
+                .filter_map(|i| i.schema_label)
+                .collect()
+        };
+        assert!(schemas(&searcher, "Widget").contains(&"Sales Invoice Item".to_owned()));
+
+        // Submittable schemas first, child tables last.
+        let filters = searcher.schema_filters();
+        assert!(filters.iter().all(|f| f.on));
+        let first_child = filters
+            .iter()
+            .position(|f| f.label == "Sales Invoice Item")
+            .unwrap();
+        let sales_invoice = filters
+            .iter()
+            .position(|f| f.label == "Sales Invoice")
+            .unwrap();
+        let item = filters.iter().position(|f| f.label == "Item").unwrap();
+        assert!(sales_invoice < item && item < first_child);
+
+        searcher.set_skip_tables(true);
+        assert!(!schemas(&searcher, "Widget").contains(&"Sales Invoice Item".to_owned()));
+        assert!(searcher.schema_filters().iter().any(|f| !f.on));
+
+        searcher.set_skip_transactions(true);
+        assert!(!schemas(&searcher, "Acme").contains(&"Sales Invoice".to_owned()));
+        assert!(schemas(&searcher, "Acme").contains(&"Party".to_owned()));
+
+        // A transaction turned back on clears Skip Transactions.
+        searcher.set_schema("SalesInvoice", true);
+        assert!(!searcher.skip_transactions());
+        assert!(searcher.skip_tables());
+        searcher.set_schema("Party", false);
+        assert!(!schemas(&searcher, "Acme").contains(&"Party".to_owned()));
+    }
+
+    #[test]
+    fn the_recent_term_drops_hash_and_recent() {
+        assert_eq!(recent_search_term("#inv"), "inv");
+        assert_eq!(recent_search_term("Recent sales RECENT"), "sales");
+        assert_eq!(recent_search_term(""), "");
     }
 }

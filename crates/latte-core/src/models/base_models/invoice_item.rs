@@ -518,7 +518,7 @@ impl Model for InvoiceItem {
                 }
                 Err(Error::Validation(format!(
                     "Rate ({}) cannot be less zero.",
-                    rate.round(None)
+                    crate::fyo::format::currency(ctx.fyo, rate)
                 )))
             }
             "itemDiscountAmount" => {
@@ -530,8 +530,8 @@ impl Model for InvoiceItem {
                 }
                 Err(Error::Validation(format!(
                     "Discount Amount ({}) cannot be greated than Amount ({}).",
-                    discount_amount.round(None),
-                    amount.round(None)
+                    crate::fyo::format::currency(ctx.fyo, discount_amount),
+                    crate::fyo::format::currency(ctx.fyo, &amount)
                 )))
             }
             "itemDiscountPercent" => {

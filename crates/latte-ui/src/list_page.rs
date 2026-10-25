@@ -1,11 +1,16 @@
 //! A list of documents: `src/pages/ListView/ListView.vue` and `List.vue` @ v0.36.0.
 //!
 //! The header holds Books' Export Wizard, Filter menu (`FilterDropdown.vue`) and New. A list opened for
-//! some documents only, such as a party's invoices, starts with those filters.
+//! some documents only, such as a party's invoices, starts with those filters. Ctrl+N
+//! (⌘N) makes a new entry and Ctrl+E (⌘E) opens the Export Wizard. The Item list's
+//! Select picks items with checkboxes, and its Create makes a Sales Quote, Sales Invoice
+//! or Purchase Invoice with them.
 
 use crate::export_wizard::{ExportClosed, ExportWizard};
 use crate::filter_dropdown::{FilterDropdown, FiltersChanged};
-use crate::widgets::{Button, Kind as ToastKind, modal, toast};
+use crate::widgets::{
+    Button, Kind as ToastKind, Toast, check_box, dropdown_item, modal, popover_panel, show_toast,
+};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -31,8 +36,12 @@ pub struct ListPage {
     filter: Entity<FilterDropdown>,
     /// The Export Wizard, while open.
     export: Option<(Entity<ExportWizard>, Subscription)>,
-    /// What worked, in a toast.
-    info: Option<String>,
+    /// The Item list's Select: whether on, the items picked, and whether Create's menu is
+    /// open (`isSelectionMode`, `selectedItems`, `showDropdown`).
+    selecting: bool,
+    selected: Vec<String>,
+    show_create: bool,
+    focus: FocusHandle,
     columns: Vec<ListColumn>,
     rows: Vec<ListRow>,
     /// `Paginator.vue`: the page shown, from 1, and the rows on a page.
@@ -77,7 +86,10 @@ impl ListPage {
             conditions,
             filter,
             export: None,
-            info: None,
+            selecting: false,
+            selected: Vec::new(),
+            show_create: false,
+            focus: cx.focus_handle(),
             columns,
             rows: Vec::new(),
             page: 1,
@@ -143,11 +155,21 @@ impl ListPage {
         let filters = self.query_filter();
         let (schema, title) = (self.schema.clone(), self.title.clone());
         let wizard = cx.new(|cx| ExportWizard::new(session, &schema, &title, filters, window, cx));
-        let subscription = cx.subscribe(&wizard, |this, _, event: &ExportClosed, cx| {
-            this.export = None;
-            this.info = event.0.clone();
-            cx.notify();
-        });
+        let subscription = cx.subscribe_in(
+            &wizard,
+            window,
+            |this, _, event: &ExportClosed, window, cx| {
+                this.export = None;
+                // `showExportInFolder`.
+                if let Some(path) = &event.0 {
+                    let toast =
+                        Toast::new(t("Export Successful"), ToastKind::Success).open_folder(path);
+                    show_toast(toast, window, cx);
+                }
+                this.focus.focus(window, cx);
+                cx.notify();
+            },
+        );
         self.export = Some((wizard, subscription));
         cx.notify();
     }
@@ -166,6 +188,114 @@ impl ListPage {
                 cx.notify();
             }
         }
+    }
+
+    /// `toggleSelectionMode`.
+    fn toggle_selecting(&mut self, cx: &mut Context<Self>) {
+        self.selecting = !self.selecting;
+        if !self.selecting {
+            self.show_create = false;
+            self.selected.clear();
+        }
+        cx.notify();
+    }
+
+    /// `toggleItemSelection`.
+    fn toggle_selected(&mut self, name: &str, cx: &mut Context<Self>) {
+        match self.selected.iter().position(|n| n == name) {
+            Some(i) => {
+                self.selected.remove(i);
+            }
+            None => self.selected.push(name.to_owned()),
+        }
+        cx.notify();
+    }
+
+    /// `toggleSelectAll`: every row of the list, not only the page's.
+    fn toggle_select_all(&mut self, cx: &mut Context<Self>) {
+        let all = !self.rows.is_empty() && self.selected.len() == self.rows.len();
+        self.selected = if all {
+            Vec::new()
+        } else {
+            self.rows.iter().map(|r| r.name.clone()).collect()
+        };
+        cx.notify();
+    }
+
+    /// `createInvoice`: a new document with a row for each selected item.
+    fn create_with_items(&mut self, schema: &str, cx: &mut Context<Self>) {
+        let doc = {
+            let mut s = self.session.borrow_mut();
+            list::new_doc_with_items(&mut s.fyo, schema, &self.selected)
+        };
+        match doc {
+            Ok(doc) => {
+                self.selected.clear();
+                self.selecting = false;
+                self.show_create = false;
+                cx.emit(Navigate(Nav::Doc(doc)));
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        cx.notify();
+    }
+
+    /// The Item list's Select, or once items are picked, Create and its menu.
+    fn render_select(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.schema != "Item" {
+            return None;
+        }
+        if !self.selecting || self.selected.is_empty() {
+            return Some(
+                Button::new("select")
+                    .label(t("Select"))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_selecting(cx)))
+                    .into_any_element(),
+            );
+        }
+        let menu = self.show_create.then(|| {
+            popover_panel()
+                .absolute()
+                .top_full()
+                .mt_1()
+                .w(px(160.))
+                .rounded(books::RADIUS)
+                .border_color(gray(300))
+                .children(
+                    list::ITEM_CREATE_OPTIONS
+                        .into_iter()
+                        .map(|(schema, label)| {
+                            dropdown_item(SharedString::from(format!("create-{schema}")), label)
+                                .px_4()
+                                .py_2()
+                                .rounded_none()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.create_with_items(schema, cx)
+                                }))
+                        }),
+                )
+        });
+        Some(
+            div()
+                .relative()
+                .child(
+                    Button::new("create")
+                        .label("Create")
+                        .w(px(160.))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_create = !this.show_create;
+                            cx.notify();
+                        })),
+                )
+                .children(menu.map(deferred))
+                .into_any_element(),
+        )
+    }
+}
+
+impl Focusable for ListPage {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
     }
 }
 
@@ -308,6 +438,7 @@ impl Render for ListPage {
             div()
                 .h_flex()
                 .gap_2()
+                .children(self.render_select(cx))
                 .child(
                     Button::new("export")
                         .label(t("Export"))
@@ -323,6 +454,8 @@ impl Render for ListPage {
         );
         let columns = self.columns.clone();
         let n = columns.len();
+        let selecting = self.selecting;
+        let all_selected = !self.rows.is_empty() && self.selected.len() == self.rows.len();
         let column_header = div()
             .h_flex()
             .w_full()
@@ -331,7 +464,21 @@ impl Render for ListPage {
             .border_b_1()
             .border_color(gray(200))
             .text_color(gray(700))
-            .child(number_cell().child("#"))
+            .map(|d| {
+                if selecting {
+                    d.child(
+                        number_cell().child(
+                            div()
+                                .id("select-all")
+                                .cursor_pointer()
+                                .child(check_box(all_selected))
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx))),
+                        ),
+                    )
+                } else {
+                    d.child(number_cell().child("#"))
+                }
+            })
             .child(
                 div().flex_1().h_flex().gap_4().children(
                     columns
@@ -360,7 +507,10 @@ impl Render for ListPage {
             let start = (self.page - 1) * self.count;
             let end = (start + self.count).min(self.rows.len());
             let rows: Vec<ListRow> = self.rows[start..end].to_vec();
+            let selected = self.selected.clone();
             let schema = self.schema.clone();
+            // `hover:bg-gray-50 dark:hover:bg-gray-850`.
+            let hover = books::pick(gray(50), books::raw_gray(850));
             uniform_list(
                 "rows",
                 rows.len(),
@@ -372,6 +522,8 @@ impl Render for ListPage {
                                 schema: schema.clone(),
                                 name: Some(row.name.clone()),
                             };
+                            let name = row.name.clone();
+                            let checked = selected.contains(&row.name);
                             div()
                                 .id(i)
                                 .h_flex()
@@ -379,8 +531,26 @@ impl Render for ListPage {
                                 .h_12()
                                 .border_b_1()
                                 .border_color(gray(200))
-                                .hover(|d| d.bg(gray(50)))
-                                .child(number_cell().child(format!("{}", start + i + 1)))
+                                .hover(|d| d.bg(hover))
+                                .map(|d| {
+                                    if selecting {
+                                        d.child(
+                                            number_cell().child(
+                                                div()
+                                                    .id(("select", i))
+                                                    .cursor_pointer()
+                                                    .child(check_box(checked))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.toggle_selected(&name, cx)
+                                                        },
+                                                    )),
+                                            ),
+                                        )
+                                    } else {
+                                        d.child(number_cell().child(format!("{}", start + i + 1)))
+                                    }
+                                })
                                 .child(
                                     div()
                                         .id(("cells", i))
@@ -389,10 +559,12 @@ impl Render for ListPage {
                                         .h_flex()
                                         .gap_4()
                                         .cursor_pointer()
-                                        .text_color(gray(900))
-                                        .on_click(cx.listener(move |_, _, _, cx| {
-                                            cx.emit(Navigate(Nav::Route(route.clone())))
-                                        }))
+                                        .text_color(books::pick(gray(900), books::raw_gray(300)))
+                                        .when(!selecting, |d| {
+                                            d.on_click(cx.listener(move |_, _, _, cx| {
+                                                cx.emit(Navigate(Nav::Route(route.clone())))
+                                            }))
+                                        })
                                         .children(
                                             row.cells.iter().zip(columns.iter()).enumerate().map(
                                                 |(c, (cell, column))| {
@@ -430,6 +602,20 @@ impl Render for ListPage {
             .v_flex()
             .size_full()
             .text_13()
+            .track_focus(&self.focus)
+            // `ListView.vue`'s shortcuts: Ctrl+N (⌘N) a new entry, Ctrl+E (⌘E) Export.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let k = &event.keystroke;
+                if !(k.modifiers.control || k.modifiers.platform) || k.modifiers.shift {
+                    return;
+                }
+                match k.key.as_str() {
+                    "n" => this.new_doc(cx),
+                    "e" if this.export.is_none() => this.open_export(window, cx),
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
             .child(header)
             .children(self.error.clone().map(|e| error_message(e, cx)))
             .child(column_header)
@@ -440,19 +626,9 @@ impl Render for ListPage {
             .children(self.export.as_ref().map(|(wizard, _)| {
                 modal(
                     wizard.clone(),
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
                         this.export = None;
-                        cx.notify();
-                    }),
-                    window,
-                )
-            }))
-            .children(self.info.clone().map(|message| {
-                toast(
-                    message,
-                    ToastKind::Success,
-                    cx.listener(|this, _, _, cx| {
-                        this.info = None;
+                        this.focus.focus(window, cx);
                         cx.notify();
                     }),
                     window,

@@ -20,10 +20,7 @@ use crate::i18n::t;
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::print_parts::{self, Laid};
 use crate::session::Shared;
-use crate::widgets::{
-    Button, Kind as ToastKind, check_box, error_message, field_label, page_header, small_input,
-    toast,
-};
+use crate::widgets::{Button, check_box, error_message, field_label, page_header, small_input};
 
 /// A report as its page last showed it, for its Print View.
 #[derive(Clone)]
@@ -54,7 +51,6 @@ pub struct ReportPrintPage {
     printout: Option<latte_print::Printout>,
     pages: Vec<(Arc<Image>, (f64, f64))>,
     error: Option<String>,
-    info: Option<String>,
     generation: usize,
     _subscriptions: Vec<Subscription>,
 }
@@ -140,7 +136,6 @@ impl ReportPrintPage {
             printout: None,
             pages: Vec::new(),
             error: None,
-            info: None,
             generation: 0,
             _subscriptions: subscriptions,
         };
@@ -259,31 +254,12 @@ impl ReportPrintPage {
         let Some(printout) = &self.printout else {
             return;
         };
-        let pdf = match printout.pdf() {
-            Ok(pdf) => pdf,
-            Err(e) => {
-                self.error = Some(e);
-                cx.notify();
-                return;
-            }
-        };
         let name = {
             let s = self.session.borrow();
             let today = jiff::Zoned::now().date();
             format!("{} - {}", t(&self.report.title), s.formatter.date(today))
         };
-        if print {
-            match print_parts::print_pdf(pdf, &name, cx) {
-                Ok(m) => self.info = Some(m),
-                Err(e) => self.error = Some(e),
-            }
-            cx.notify();
-            return;
-        }
-        print_parts::save_pdf(pdf, &name, window, cx, |this, outcome, _| match outcome {
-            Ok(m) => this.info = Some(m),
-            Err(e) => this.error = Some(e),
-        });
+        print_parts::output(printout.pdf(), print, &name, window, cx);
     }
 }
 
@@ -405,17 +381,6 @@ impl Render for ReportPrintPage {
                             .children(columns),
                     ),
             );
-        let toast = self.info.clone().map(|message| {
-            toast(
-                message,
-                ToastKind::Success,
-                cx.listener(|this, _, _, cx| {
-                    this.info = None;
-                    cx.notify();
-                }),
-                window,
-            )
-        });
         div()
             .v_flex()
             .size_full()
@@ -440,6 +405,5 @@ impl Render for ReportPrintPage {
                     )
                     .child(panel),
             )
-            .children(toast)
     }
 }

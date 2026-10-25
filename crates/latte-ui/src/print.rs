@@ -24,7 +24,7 @@ use crate::books::{Text as _, gray};
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::print_parts::{self, Laid, MenuEntry};
 use crate::session::Shared;
-use crate::widgets::{Button, Kind as ToastKind, error_message, page_header, toast};
+use crate::widgets::{Button, error_message, page_header};
 use crate::{Nav, Navigate, i18n};
 use latte_core::views::sidebar::Route;
 
@@ -45,7 +45,6 @@ pub struct PrintPage {
     errors: Vec<PrintError>,
     /// A message under the header, such as a failed conversion.
     error: Option<String>,
-    info: Option<String>,
     /// The "…" menu is open.
     menu: bool,
     /// Which layout is the latest, so an older one finishing late is dropped.
@@ -100,7 +99,6 @@ impl PrintPage {
             pages: Vec::new(),
             errors: Vec::new(),
             error: None,
-            info: None,
             menu: false,
             generation: 0,
             _subscription: subscription,
@@ -188,35 +186,9 @@ impl PrintPage {
     }
 
     fn save_pdf(&mut self, print: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(printout) = &self.printout else {
-            return;
-        };
-        let pdf = match printout.pdf() {
-            Ok(pdf) => pdf,
-            Err(e) => {
-                self.error = Some(e);
-                cx.notify();
-                return;
-            }
-        };
-        if print {
-            match print_parts::print_pdf(pdf, &self.name, cx) {
-                Ok(message) => self.info = Some(message),
-                Err(e) => self.error = Some(e),
-            }
-            cx.notify();
-            return;
+        if let Some(printout) = &self.printout {
+            print_parts::output(printout.pdf(), print, &self.name, window, cx);
         }
-        print_parts::save_pdf(
-            pdf,
-            &self.name,
-            window,
-            cx,
-            |this, outcome, _| match outcome {
-                Ok(message) => this.info = Some(message),
-                Err(e) => this.error = Some(e),
-            },
-        );
     }
 
     /// Convert to Typst: a custom Typst copy of a Books HTML template, saved and opened
@@ -456,17 +428,6 @@ impl Render for PrintPage {
             } else {
                 print_parts::pages_view(&self.pages, scale).into_any_element()
             };
-        let toast = self.info.clone().map(|message| {
-            toast(
-                message,
-                ToastKind::Success,
-                cx.listener(|this, _, _, cx| {
-                    this.info = None;
-                    cx.notify();
-                }),
-                window,
-            )
-        });
         div()
             .v_flex()
             .size_full()
@@ -486,7 +447,6 @@ impl Render for PrintPage {
                     )
                     .child(body),
             )
-            .children(toast)
     }
 }
 

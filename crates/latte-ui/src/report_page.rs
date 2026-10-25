@@ -335,9 +335,14 @@ impl ReportPage {
                 return;
             };
             let result = std::fs::write(&path, csv);
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 match result {
-                    Ok(()) => this.info = Some(format!("Export Successful: {}", path.display())),
+                    Ok(()) => crate::widgets::show_toast(
+                        crate::widgets::Toast::new(t("Export Successful"), ToastKind::Success)
+                            .open_folder(&path),
+                        window,
+                        cx,
+                    ),
                     Err(e) => this.error = Some(e.to_string()),
                 }
                 cx.notify();

@@ -6,12 +6,13 @@
 //!
 //! Differences from Books:
 //! - Saved settings take effect at once, said in a toast; Books asks to reload the window.
+//!   Ctrl+S (⌘S) saves, as in Books.
 //! - There is no ERPNext Sync tab.
 
 use std::collections::HashMap;
 
 use crate::books::{self, Text as _, black, gray, white};
-use crate::widgets::{Button, DialogButton, Kind as DialogKind, dialog, toast};
+use crate::widgets::{Button, DialogButton, Kind as DialogKind, Toast, dialog, show_toast};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -38,7 +39,7 @@ pub struct SettingsPage {
     tab: &'static str,
     forms: HashMap<&'static str, Entity<FormPage>>,
     error: Option<String>,
-    info: Option<String>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -57,7 +58,7 @@ impl SettingsPage {
             tab: TABS[0].0,
             forms: HashMap::new(),
             error: None,
-            info: None,
+            focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         };
         let tab = TABS
@@ -115,12 +116,18 @@ impl SettingsPage {
             });
         }
         self.session.borrow_mut().refresh_formatter();
+        // Dark mode, as Books shows it once the window is reloaded.
+        let dark = self.session.borrow().dark_mode();
+        books::set_dark(dark, cx);
         if errors.is_empty() {
             self.error = None;
-            self.info = Some("Settings saved".to_owned());
+            show_toast(
+                Toast::new(t("Settings saved"), DialogKind::Success).short(),
+                window,
+                cx,
+            );
         } else {
             self.error = Some(errors.join("\n"));
-            self.info = None;
         }
         cx.notify();
     }
@@ -226,17 +233,6 @@ impl Render for SettingsPage {
                 window,
             )
         });
-        let toast = self.info.clone().map(|message| {
-            toast(
-                message,
-                DialogKind::Success,
-                cx.listener(|this, _, _, cx| {
-                    this.info = None;
-                    cx.notify();
-                }),
-                window,
-            )
-        });
         div()
             .v_flex()
             .size_full()
@@ -252,6 +248,22 @@ impl Render for SettingsPage {
                     .child(card),
             )
             .children(dialog)
-            .children(toast)
+            .track_focus(&self.focus)
+            // `Settings.vue`: Ctrl+S (⌘S) saves, when there is something to save.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let k = &event.keystroke;
+                if k.key == "s" && (k.modifiers.control || k.modifiers.platform) {
+                    if this.can_save(cx) {
+                        this.save(window, cx);
+                    }
+                    cx.stop_propagation();
+                }
+            }))
+    }
+}
+
+impl Focusable for SettingsPage {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
     }
 }

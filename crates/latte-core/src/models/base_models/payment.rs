@@ -1,8 +1,6 @@
 // Port of models/baseModels/Payment/Payment.ts @ v0.36.0.
 //
 // Deviations:
-// - Amounts in messages are rounded to the display precision, without the locale's digit
-//   grouping or the currency symbol that `fyo.format` adds. Formatting isn't ported yet.
 // - When the amount is more than what is outstanding, Books puts back the amount the form
 //   opened with (`initialAmount`) before refusing it. Here the amount is left as it was, as
 //   `set` refuses a value before assigning it.
@@ -492,8 +490,8 @@ fn validate_total_reference_amount(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
         return Ok(());
     }
 
-    let payment = amount.round(None);
-    let ref_amount = reference_amount_total.round(None);
+    let payment = crate::fyo::format::currency(fyo, &amount);
+    let ref_amount = crate::fyo::format::currency(fyo, &reference_amount_total);
     Err(Error::Validation(format!(
         "Amount: {payment} is less than the total amount allocated to references: \
          {ref_amount}."
@@ -528,13 +526,13 @@ fn validate_references(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
     if !amount.is_positive() {
         return Err(Error::Validation(format!(
             "Payment amount: {} should be greater than 0.",
-            amount.round(None)
+            crate::fyo::format::currency(fyo, &amount)
         )));
     }
     Err(Error::Validation(format!(
         "Payment amount: {} should be less than Outstanding amount: {}.",
-        amount.round(None),
-        outstanding_amount.round(None)
+        crate::fyo::format::currency(fyo, &amount),
+        crate::fyo::format::currency(fyo, &outstanding_amount)
     )))
 }
 
@@ -550,7 +548,7 @@ fn validate_write_off(doc: &Doc, fyo: &Fyo) -> Result<(), Error> {
     if writeoff.gt(&amount)? {
         return Err(Error::Validation(format!(
             "Write Off cannot exceed the payment amount {}.",
-            amount.round(None)
+            crate::fyo::format::currency(fyo, &amount)
         )));
     }
     Ok(())
@@ -756,13 +754,13 @@ impl Model for Payment {
         if value.gt(&total_amount)? {
             return Err(Error::Validation(format!(
                 "Payment amount cannot exceed {}.",
-                total_amount.round(None)
+                crate::fyo::format::currency(fyo, &total_amount)
             )));
         }
         if value.is_zero() {
             return Err(Error::Validation(format!(
                 "Payment amount cannot be {}.",
-                value.round(None)
+                crate::fyo::format::currency(fyo, value)
             )));
         }
         Ok(())

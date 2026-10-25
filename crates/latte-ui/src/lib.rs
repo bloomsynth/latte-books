@@ -5,6 +5,7 @@
 
 mod app;
 mod assistants_page;
+mod attach_image;
 mod books;
 mod coa;
 mod dashboard;
@@ -18,6 +19,7 @@ mod import_wizard;
 mod link;
 mod list_page;
 mod placeholder;
+mod pos_link;
 mod pos_page;
 mod pos_parts;
 mod print;
@@ -29,6 +31,7 @@ mod selector;
 mod session;
 mod settings;
 mod setup_wizard;
+mod shortcuts;
 mod template_builder;
 mod widgets;
 

@@ -6,7 +6,6 @@
 //!
 //! Differences from Books:
 //! - Dates are typed as YYYY-MM-DD.
-//! - There is no logo; it can be added in Print settings.
 //! - When a file of that name exists, a new file with the time in its name is made. Books
 //!   asks whether to overwrite the existing file.
 
@@ -24,6 +23,7 @@ use crate::i18n::t;
 use jiff::civil::Date;
 use latte_core::setup::{self, COA_LIST, SetupWizardOptions};
 
+use crate::attach_image;
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session;
 use crate::widgets::{error_message, field_label};
@@ -49,6 +49,8 @@ pub struct SetupWizard {
     start: Entity<InputState>,
     end: Entity<InputState>,
     error: Option<String>,
+    /// The company logo picked, and its picture.
+    logo: Option<(String, std::sync::Arc<Image>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -152,6 +154,7 @@ impl SetupWizard {
             start,
             end,
             error: None,
+            logo: None,
             _subscriptions: subscriptions,
         }
     }
@@ -204,7 +207,44 @@ impl SetupWizard {
         start.and(end).map(|_| ())
     }
 
+    /// The logo's upload, or its clear when there is one (`AttachImage.vue`).
+    fn pick_logo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.logo.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t("Select Image").into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let url = attach_image::data_url(&path);
+            this.update(cx, |this, cx| {
+                match url.and_then(|url| {
+                    let image = attach_image::image_from_data_url(&url)
+                        .ok_or_else(|| format!("{} can't be read", path.display()))?;
+                    Ok((url, std::sync::Arc::new(image)))
+                }) {
+                    Ok(logo) => this.logo = Some(logo),
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn submit(&mut self, cx: &mut Context<Self>) {
+        self.options.logo = self.logo.as_ref().map(|(url, _)| url.clone());
         let text = |fieldname: &str| self.texts[fieldname].read(cx).value().trim().to_owned();
         self.options.company_name = text("companyName");
         self.options.fullname = text("fullname");
@@ -361,7 +401,14 @@ impl Render for SetupWizard {
                 }))
                 .child(div().grid().grid_cols(2).gap_4().gap_x_8().children(fields))
         };
+        // `logo` first, as `CommonFormSection.vue` gives an AttachImage two rows.
+        let logo = attach_image::attach_image(
+            "logo",
+            self.logo.as_ref().map(|(_, image)| image.clone()),
+            cx.listener(|this, _, window, cx| this.pick_logo(window, cx)),
+        );
         let default = vec![
+            div().row_span(2).mb_auto().child(logo).into_any_element(),
             field("companyName", window, cx),
             field("fullname", window, cx),
             field("email", window, cx),

@@ -34,8 +34,8 @@ use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::print_parts::{self, Laid, MenuEntry};
 use crate::session::Shared;
 use crate::widgets::{
-    Button, DialogButton, Kind as DialogKind, control_frame, dialog, field_label, modal,
-    page_header_with, toast,
+    Button, DialogButton, Kind as DialogKind, Kind as ToastKind, Toast, control_frame, dialog,
+    field_label, modal, page_header_with, show_toast,
 };
 use crate::{Nav, Navigate};
 
@@ -80,7 +80,6 @@ pub struct TemplateBuilder {
     pages: Vec<(Arc<Image>, (f64, f64))>,
     errors: Vec<PrintError>,
     error: Option<String>,
-    info: Option<String>,
     menu: bool,
     overlay: Option<Overlay>,
     generation: usize,
@@ -157,9 +156,10 @@ impl TemplateBuilder {
                     }
                 }
                 // Ctrl+Enter, which the editor takes for itself.
-                InputEvent::Blur | InputEvent::PressEnter { secondary: true, .. } => {
-                    this.apply_template(cx)
-                }
+                InputEvent::Blur
+                | InputEvent::PressEnter {
+                    secondary: true, ..
+                } => this.apply_template(cx),
                 _ => {}
             },
         )];
@@ -250,7 +250,6 @@ impl TemplateBuilder {
             pages: Vec::new(),
             errors: Vec::new(),
             error: None,
-            info: None,
             menu: false,
             overlay: None,
             generation: 0,
@@ -513,8 +512,11 @@ impl TemplateBuilder {
             return;
         }
         if self.display_doc.is_none() {
-            self.info = Some(t("Please set a Display Doc"));
-            cx.notify();
+            show_toast(
+                Toast::new(t("Please set a Display Doc"), ToastKind::Warning).short(),
+                window,
+                cx,
+            );
             return;
         }
         match self.edit_mode.take() {
@@ -538,30 +540,10 @@ impl TemplateBuilder {
     }
 
     fn save_pdf(&mut self, print: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(printout) = &self.printout else {
-            return;
-        };
-        let pdf = match printout.pdf() {
-            Ok(pdf) => pdf,
-            Err(e) => {
-                self.error = Some(e);
-                cx.notify();
-                return;
-            }
-        };
-        let name = self.doc.name().unwrap_or_default().to_owned();
-        if print {
-            match print_parts::print_pdf(pdf, &name, cx) {
-                Ok(m) => self.info = Some(m),
-                Err(e) => self.error = Some(e),
-            }
-            cx.notify();
-            return;
+        if let Some(printout) = &self.printout {
+            let name = self.doc.name().unwrap_or_default().to_owned();
+            print_parts::output(printout.pdf(), print, &name, window, cx);
         }
-        print_parts::save_pdf(pdf, &name, window, cx, |this, outcome, _| match outcome {
-            Ok(m) => this.info = Some(m),
-            Err(e) => this.error = Some(e),
-        });
     }
 
     /// Select Template File: a `.typ` file's text becomes the template.
@@ -617,13 +599,19 @@ impl TemplateBuilder {
         let name = self.doc.name().unwrap_or_default().to_owned();
         let template = self.editor.read(cx).value().to_string();
         if name.is_empty() {
-            self.info = Some(t("Print Template Name not set"));
-            cx.notify();
+            show_toast(
+                Toast::new(t("Print Template Name not set"), ToastKind::Warning),
+                window,
+                cx,
+            );
             return;
         }
         if template.is_empty() {
-            self.info = Some(t("Print Template is empty"));
-            cx.notify();
+            show_toast(
+                Toast::new(t("Print Template is empty"), ToastKind::Warning),
+                window,
+                cx,
+            );
             return;
         }
         let extension = if templates::is_html(&template) {
@@ -636,22 +624,17 @@ impl TemplateBuilder {
             .map(|home| std::path::PathBuf::from(home).join("Documents"))
             .unwrap_or_default();
         let path = cx.prompt_for_new_path(&dir, Some(&format!("{name}.{extension}")));
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn_in(window, async move |_, cx| {
             let Ok(Ok(Some(path))) = path.await else {
                 return;
             };
-            let result = std::fs::write(&path, template);
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => {
-                        this.info =
-                            Some(format!("{}: {}", t("Template file saved"), path.display()))
-                    }
-                    Err(e) => this.error = Some(e.to_string()),
+            let toast = match std::fs::write(&path, template) {
+                Ok(()) => {
+                    Toast::new(t("Template file saved"), ToastKind::Success).open_folder(&path)
                 }
-                cx.notify();
-            })
-            .ok();
+                Err(e) => Toast::new(e.to_string(), ToastKind::Error),
+            };
+            cx.update(|window, cx| show_toast(toast, window, cx)).ok();
         })
         .detach();
     }
@@ -1424,17 +1407,6 @@ impl Render for TemplateBuilder {
             .child(hints);
 
         let overlay = self.render_overlay(window, cx);
-        let toast = self.info.clone().map(|message| {
-            toast(
-                message,
-                crate::widgets::Kind::Success,
-                cx.listener(|this, _, _, cx| {
-                    this.info = None;
-                    cx.notify();
-                }),
-                window,
-            )
-        });
         let error = self.error.clone().map(|e| {
             dialog(
                 t("Error"),
@@ -1484,7 +1456,6 @@ impl Render for TemplateBuilder {
                     )
                     .child(panel),
             )
-            .children(toast)
             .children(error)
             .children(overlay)
     }
