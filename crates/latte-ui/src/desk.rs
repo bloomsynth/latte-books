@@ -4,10 +4,17 @@
 //! Each page asks to go somewhere with a [`Navigate`] event; the desk makes the new page
 //! and keeps a history for Back and Forward.
 //!
+//! Books' shortcuts work here: Ctrl+K (⌘K) searches, Shift+Backspace goes back, Shift+H
+//! shows or hides the sidebar and F1 opens the documentation of the page shown; the
+//! sidebar's Shortcuts lists them all.
+//!
 //! Not in Books: every two seconds the desk looks for changes another device, such as an AI
 //! assistant, wrote to the file, and shows the page again when it may show them.
+//!
+//! Differences from Books: Shift+Backspace and Shift+H do nothing while typing in a field;
+//! Books' Shift+Backspace goes back even then.
 
-use crate::books::{self, Text as _, black, gray, white};
+use crate::books::{self, Text as _, black, gray, pick, raw_gray, white};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -30,8 +37,14 @@ use crate::report_page::ReportPage;
 use crate::search_bar::{SearchBar, SearchEvent};
 use crate::session::Shared;
 use crate::settings::SettingsPage;
+use crate::shortcuts::ShortcutsHelper;
 use crate::widgets::{error_message, modal};
 use crate::{Nav, Navigate};
+
+/// Whether a text field has the keyboard, so a plain key is typing.
+pub fn typing(window: &Window) -> bool {
+    window.context_stack().iter().any(|c| c.contains("Input"))
+}
 
 /// The user asked to open another company file.
 pub struct ChangeFile;
@@ -50,12 +63,17 @@ pub struct Desk {
     sidebar_hidden: bool,
     /// The search window, while open (`SearchBar.vue`).
     search: Option<(Entity<SearchBar>, Subscription)>,
+    /// The Shortcuts window, while open (`ShortcutsHelper.vue`).
+    shortcuts: Option<Entity<ShortcutsHelper>>,
     focus: FocusHandle,
+    /// Where the keyboard goes for the page's own shortcuts, for the pages with some.
+    page_focus: Option<FocusHandle>,
     page: AnyView,
     error: Option<String>,
     /// The last change in the file's change log that the page shows.
     last_change: i64,
     _subscription: Option<Subscription>,
+    _focus_lost: Option<Subscription>,
 }
 
 impl EventEmitter<ChangeFile> for Desk {}
@@ -83,14 +101,21 @@ impl Desk {
             forward: Vec::new(),
             sidebar_hidden: false,
             search: None,
+            shortcuts: None,
             focus: cx.focus_handle(),
+            page_focus: None,
             page: cx.new(|_| Placeholder::new("", "")).into(),
             error: None,
             last_change,
             _subscription: None,
+            _focus_lost: None,
         };
         desk.open(Nav::Route(route), false, window, cx);
-        desk.focus.focus(window, cx);
+        desk.restore_focus(window, cx);
+        // When what had the keyboard goes, such as a closed dialog, the page takes it back,
+        // so the shortcuts keep working.
+        desk._focus_lost =
+            Some(cx.on_focus_lost(window, |this, window, cx| this.restore_focus(window, cx)));
         cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -187,6 +212,20 @@ impl Desk {
             |this, _, event: &Navigate, window, cx| this.open(event.0.clone(), true, window, cx),
         ));
         self.page = page.into();
+        self.page_focus = None;
+    }
+
+    /// Gives the keyboard to the page, for its shortcuts, or to the desk.
+    fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.page_focus {
+            Some(focus) => focus.focus(window, cx),
+            None => self.focus.focus(window, cx),
+        }
+    }
+
+    /// `openDocumentation`: the documentation of the page shown (`docsPathRef`).
+    fn open_docs(&self, cx: &mut App) {
+        cx.open_url(&latte_core::views::docs::docs_url(&self.route));
     }
 
     /// Shows a route or a new document. With `remember`, Back returns to this page.
@@ -229,7 +268,8 @@ impl Desk {
                             cx,
                         )
                     });
-                    self.watch(page, window, cx);
+                    self.watch(page.clone(), window, cx);
+                    self.page_focus = Some(page.focus_handle(cx));
                     Ok(())
                 }
                 Route::Form { schema, name } => {
@@ -289,7 +329,8 @@ impl Desk {
                 }
                 Route::ImportWizard => {
                     let page = cx.new(|cx| ImportWizard::new(session, window, cx));
-                    self.watch(page, window, cx);
+                    self.watch(page.clone(), window, cx);
+                    self.page_focus = Some(page.focus_handle(cx));
                     Ok(())
                 }
                 Route::AiAssistants => {
@@ -304,7 +345,8 @@ impl Desk {
                 }
                 Route::Settings { tab } => {
                     let page = cx.new(|cx| SettingsPage::new(session, tab.as_deref(), window, cx));
-                    self.watch(page, window, cx);
+                    self.watch(page.clone(), window, cx);
+                    self.page_focus = Some(page.focus_handle(cx));
                     Ok(())
                 }
                 Route::Print { schema, name } => {
@@ -329,6 +371,7 @@ impl Desk {
                     route => self.highlight = route.clone(),
                 }
                 self.route = route;
+                self.restore_focus(window, cx);
             }
             Err(e) => self.error = Some(e),
         }
@@ -353,13 +396,16 @@ impl Desk {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let company = self.session.borrow().company_name();
+        // `hover:bg-gray-100 dark:hover:bg-gray-875`, and the current entry's
+        // `border-gray-800 dark:border-gray-100`.
+        let hover = pick(raw_gray(100), raw_gray(875));
+        let mark = pick(raw_gray(800), raw_gray(100));
         let mut children: Vec<AnyElement> = Vec::new();
         for (g, group) in self.groups.iter().enumerate() {
             let open = self.group_is_open(group);
             // `isGroupActive(group) && !group.items`: the row itself is the page.
             let marked = open && group.items.is_empty();
             let route = group.route.clone();
-            let state = if open { "active" } else { "inactive" };
             children.push(
                 div()
                     .id(("group", g))
@@ -367,26 +413,24 @@ impl Desk {
                     .h_10()
                     .px_4()
                     .cursor_pointer()
-                    .hover(|d| d.bg(gray(100)))
+                    .hover(|d| d.bg(hover))
                     .when(marked, |d| {
-                        d.bg(gray(100))
-                            .border_l_4()
-                            .border_color(gray(800))
-                            .pl(px(12.))
+                        d.bg(hover).border_l_4().border_color(mark).pl(px(12.))
                     })
                     .child(
-                        img(SharedString::from(format!(
-                            "books/sidebar/{}-{state}.svg",
-                            group.icon
-                        )))
-                        .size_5()
-                        .flex_none(),
+                        img(books::sidebar_icon(group.icon, open))
+                            .size_5()
+                            .flex_none(),
                     )
                     .child(
                         div()
                             .ml_2()
                             .text_14()
-                            .text_color(if marked { gray(900) } else { gray(700) })
+                            .text_color(if marked {
+                                pick(raw_gray(900), raw_gray(25))
+                            } else {
+                                pick(raw_gray(700), raw_gray(300))
+                            })
                             .child(t(&group.label)),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -408,15 +452,17 @@ impl Desk {
                         .pl_10()
                         .text_13()
                         .cursor_pointer()
-                        .hover(|d| d.bg(gray(100)))
+                        .hover(|d| d.bg(hover))
                         .when(active, |d| {
-                            d.bg(gray(100))
-                                .text_color(gray(900))
+                            d.bg(hover)
+                                .text_color(pick(raw_gray(900), raw_gray(100)))
                                 .border_l_4()
-                                .border_color(gray(800))
+                                .border_color(mark)
                                 .pl(px(36.))
                         })
-                        .when(!active, |d| d.text_color(gray(700)))
+                        .when(!active, |d| {
+                            d.text_color(pick(raw_gray(700), raw_gray(400)))
+                        })
                         .child(t(&item.label))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open(Nav::Route(route.clone()), true, window, cx)
@@ -425,19 +471,24 @@ impl Desk {
                 );
             }
         }
+        // `text-gray-600 dark:text-gray-500 hover:text-gray-800 dark:hover:text-gray-400`.
+        let (link_color, link_hover) = (
+            pick(raw_gray(600), raw_gray(500)),
+            pick(raw_gray(800), raw_gray(400)),
+        );
         let link = |id: &'static str, icon: &'static str, label: &str| {
             div()
                 .id(id)
                 .h_flex()
                 .gap_1()
                 .text_12()
-                .text_color(gray(600))
+                .text_color(link_color)
                 .cursor_pointer()
-                .hover(|d| d.text_color(gray(800)))
+                .hover(|d| d.text_color(link_hover))
                 .group(id)
                 .child(
-                    books::icon(icon, px(16.), gray(600))
-                        .group_hover(id, |s| s.text_color(gray(800))),
+                    books::icon(icon, px(16.), link_color)
+                        .group_hover(id, |s| s.text_color(link_hover)),
                 )
                 .child(t(label))
         };
@@ -449,7 +500,7 @@ impl Desk {
             .flex_none()
             .py_2()
             .justify_between()
-            .bg(gray(25))
+            .bg(pick(raw_gray(25), raw_gray(900)))
             .border_r_1()
             .border_color(gray(200))
             .child(
@@ -463,7 +514,7 @@ impl Desk {
                             .mt_2()
                             .mb_4()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(black())
+                            .text_color(pick(black(), raw_gray(200)))
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .child(company),
@@ -483,16 +534,26 @@ impl Desk {
                     .gap_2()
                     .py_2()
                     .px_4()
-                    .child(link("help", "help-circle", "Help").on_click(|_, _, cx| {
-                        cx.open_url("https://github.com/bloomsynth/latte-books#readme")
-                    }))
+                    .child(
+                        link("help", "help-circle", "Help")
+                            .on_click(cx.listener(|this, _, _, cx| this.open_docs(cx))),
+                    )
+                    .child(
+                        link("shortcuts", "command", "Shortcuts").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.shortcuts = Some(cx.new(|_| ShortcutsHelper::new()));
+                                cx.notify();
+                            },
+                        )),
+                    )
                     .child(
                         link("change-db", "database", "Change DB")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(ChangeFile))),
                     )
                     .child(
                         link("report-issue", "flag", "Report Issue").on_click(|_, _, cx| {
-                            cx.open_url("https://github.com/bloomsynth/latte-books/issues/new")
+                            let info = crate::widgets::report_info();
+                            cx.open_url(&latte_core::views::report::issue_url(None, &info))
                         }),
                     ),
             )
@@ -505,10 +566,9 @@ impl Desk {
                     .m_4()
                     .p_1()
                     .rounded(books::RADIUS)
-                    .text_color(gray(600))
                     .cursor_pointer()
-                    .hover(|d| d.bg(gray(100)))
-                    .child(books::icon("chevrons-left", px(16.), gray(600)))
+                    .hover(|d| d.bg(hover))
+                    .child(books::icon("chevrons-left", px(16.), link_color))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.sidebar_hidden = true;
                         cx.notify();
@@ -526,6 +586,17 @@ pub struct NavState {
 }
 
 impl Global for NavState {}
+
+/// Opens a route from outside a page, such as a toast's action: Books' "View Accounting
+/// Entries" after a submit (`getSubmitSuccessToastAction`) opens the General Ledger so.
+#[allow(dead_code)]
+pub fn navigate(route: Route, window: &mut Window, cx: &mut App) {
+    if let Some(desk) = cx.try_global::<NavState>().and_then(|n| n.desk.upgrade()) {
+        desk.update(cx, |desk, cx| {
+            desk.open(Nav::Route(route), true, window, cx)
+        });
+    }
+}
 
 impl Desk {
     pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -556,7 +627,7 @@ impl Desk {
                         }
                     }
                 }
-                this.focus.focus(window, cx);
+                this.restore_focus(window, cx);
                 cx.notify();
             });
         self.search = Some((bar, subscription));
@@ -584,23 +655,46 @@ impl Render for Desk {
             .h_flex()
             .relative()
             .track_focus(&self.focus)
-            // Ctrl+K, ⌘K on a Mac, opens the search (`SearchBar.vue`'s shortcut).
+            // The global shortcuts (`ShortcutsHelper.vue`'s Global group).
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let k = &event.keystroke;
-                if k.key == "k"
-                    && (k.modifiers.control || k.modifiers.platform)
-                    && this.search.is_none()
-                {
+                let pmod = k.modifiers.control || k.modifiers.platform;
+                let plain_shift = k.modifiers.shift && !pmod && !k.modifiers.alt;
+                let open_modal = this.search.is_some() || this.shortcuts.is_some();
+                if k.key == "k" && pmod && !open_modal {
+                    // `SearchBar.vue`: Ctrl+K, ⌘K on a Mac.
                     this.open_search(window, cx);
-                    cx.stop_propagation();
+                } else if k.key == "backspace" && plain_shift && !typing(window) && !open_modal {
+                    // `PageHeaderNavGroup.vue`: Shift+Backspace goes back.
+                    this.back(window, cx);
+                } else if k.key == "h" && plain_shift && !typing(window) && !open_modal {
+                    // `Sidebar.vue`: Shift+H, unless typing.
+                    this.sidebar_hidden = !this.sidebar_hidden;
+                    cx.notify();
+                } else if k.key == "f1" {
+                    this.open_docs(cx);
+                } else {
+                    return;
                 }
+                cx.stop_propagation();
             }))
             .children(self.search.as_ref().map(|(bar, _)| {
                 modal(
                     bar.clone(),
                     cx.listener(|this, _, window, cx| {
                         this.search = None;
-                        this.focus.focus(window, cx);
+                        this.restore_focus(window, cx);
+                        cx.notify();
+                    }),
+                    window,
+                )
+            }))
+            .children(self.shortcuts.as_ref().map(|helper| {
+                modal(
+                    helper.clone(),
+                    cx.listener(|this, _, window, cx| {
+                        this.shortcuts = None;
+                        this.restore_focus(window, cx);
                         cx.notify();
                     }),
                     window,

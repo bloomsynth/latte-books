@@ -56,7 +56,7 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | CSV export with display precision 0 | Cuts the last digit off every amount | Amounts exported whole | Books bug |
 | Report totals | Summed as floats | Summed as money | No drift on long ledgers; what is shown is the same |
 | Report refresh | Reports watch the ledger and refresh themselves | The app runs a report again | Simpler; the same rows |
-| Search | Recent items, and More Filters (skip child tables or transactions, by document type) | Neither; the search index is made each time the search opens | Not ported yet |
+| Search's recent documents | Kept by their schema's label; picking one opens `/list/<label>`, which is no list. A recent item picked again keeps only its label and opens nothing | A recent document opens the document; a recent item picked again keeps what it opens | Books bug |
 | Link fields | The dropdown ends with "Create", which opens a quick entry form for a new document; the chevron shows a quick view on hover | No Create entry or quick view | Not ported yet |
 | Linked entries | "View linked entries" lists the documents linked to this one, beside the form | Not offered | Not ported yet |
 | Print View | Print opens the system dialog; the "…" menu also has New Template, the template and Duplicate Template | Save as PDF only; the menu has Print Settings | No template editor; print the saved PDF |
@@ -78,10 +78,11 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | Shipment and receipt returns | Post the negative amount on the swapped sides; count draft and cancelled returns; let a return take back more than was shipped; copy the Returned flag and the invoice link; return serial numbers already returned | Reverse the posting; the same return rules as invoices; leave out the invoice link and returned serial numbers | Books bugs |
 | A return invoice's shipment or receipt | Always looks for a sales invoice's shipment, and fails when there's none | Made against its own invoice's shipment or receipt | Books bug |
 | Stock Ledger and Stock Balance To Date | Entries on the To Date are left out | Included | Books bug |
-| Inventory not ported yet | The barcode scanner (`addItem`) and the inventory list filters | Not ported yet | Phase 4 |
+| Inventory not ported yet | The barcode scanner (`addItem`) | Not ported yet | Phase 4 |
 | Data import columns | A file's columns take the fields the template had in those places, even past the end of the file | Columns past the end of the file are for no field | Books bug |
 | Data import missing links | Named with the schema being imported: "(Sales Invoice, Acme)" | Named with the schema linked to: "(Party, Acme)" | Books bug |
-| Import Wizard | Cells are edited in place; Submit is asked in a dialog; the column picker is a dialog | A clicked cell is edited in a box above the table; "Submit entries?" is a checkbox; the column picker is on the page | Simpler in GPUI; the same import |
+| Import Wizard cells | Edited in place with the field's own control, such as a checkbox or a date picker; Fix Failed puts the columns back in the template's order | Edited in place as text; Fix Failed keeps the columns as they were | Simpler in GPUI; the same values are imported |
+| Import Wizard rows added | "1 rows added.", "2 row added." | "1 row added.", "2 rows added." | Books bug (it tests for 2 rows) |
 | Dashboard period start | The time of day it is now, so the first day's earlier entries are left out | The start of the first day | Books bug |
 | POS shift closing | Posts the difference between Cash and the write-off account, wrong way round, and leaves it on the counter | Counter cleared to Cash; the difference between the counter and the write-off account | Books bug |
 | POS stock check | Stops at the first untracked item | Checks every tracked item | Books bug |
@@ -94,10 +95,13 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | POS paying a submitted sale | Submits it again, shows the error, then pays | Pays it | Books bug |
 | POS not ported yet | The Modern UI, item groups, keyboard shortcuts, returns, coupons, loyalty points, price lists, and editing a row's rate or discount at the till | Not ported yet | The Modern UI, and returns, coupons and loyalty at the till, come after 1.0 |
 | Get Started "Create Purchase Invoice" | Ticked once there is a sales invoice | Ticked once there is a purchase invoice | Books bug |
-| Create Demo progress | A full-window loader | A message and bar in the company list | Simpler in GPUI |
 | Create Demo fiscal year | 1 April to 1 April | 1 April to 31 March | Books bug |
 | Create Demo items | An invoice can list an item twice | Each item once | Books bug |
 | Create Demo write-offs | None (it sets a field Payment doesn't have) | One sale in twenty paid with 15% written off | Books bug |
-| Amounts in messages | "Total Debit: ₹ 1,250.00 …", in the locale's format with the currency symbol | "Total Debit: 1250.00 …" | Number formatting isn't ported yet |
+| Dark mode | Each component has its own `dark:` shades, and the change shows once the window is reloaded | Every screen maps each light gray to the dark shade Books pairs it with most; the sidebar, page headers, buttons, dialogs, menus, toasts, search, lists and dashboard use their components' own. Saving the setting changes the look at once | One palette for every screen; Settings take effect without a reload |
+| Top Expenses legend | Its colour squares are blank: the colours are given as an object Vue reads as class names | Coloured as the donut's slices | Books bug |
+| Shortcuts while typing | Shift+Backspace goes back even while typing in a field | Shift+Backspace and Shift+H do nothing while typing in a field | A capital H or a Shift+Backspace in a field shouldn't leave the page |
+| Report and Report Issue | Open a new issue on frappe/books with the error, the version, platform, path, language, country and the settings' on/off values | Open one on Latte Books' repository with the error, version, platform and language | Latte's issues are its own |
+| Shortcuts window | "Applicable anywhere in Frappe Books" | "Applicable anywhere in Latte Books" | The app's name |
 | Changes from another device | Shown when a page is opened again | Every two seconds the app looks for changes another device, such as an AI assistant, wrote, and shows the page again; a form shows them only when they are to its document and it has no changes of its own; the till, Settings and the import wizard aren't shown again | Dime (PLAN.md): an assistant works in the file while the app is open |
 | AI assistants | — | "Set up AI assistants" connects Claude Desktop, Claude Code, Codex or Cursor, which work in the books through `latte-mcp` with the same checks as the app | Dime (PLAN.md); Books doesn't touch the assistants' files |

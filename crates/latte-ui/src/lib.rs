@@ -5,6 +5,7 @@
 
 mod app;
 mod assistants_page;
+mod attach_image;
 mod books;
 mod coa;
 mod dashboard;
@@ -27,6 +28,7 @@ mod selector;
 mod session;
 mod settings;
 mod setup_wizard;
+mod shortcuts;
 mod widgets;
 
 use gpui_kit::*;

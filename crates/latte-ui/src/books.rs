@@ -5,25 +5,78 @@
 //! rem stays at 16px, as in a browser, so GPUI's spacing (`p_4` is 1rem) is Tailwind's.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
+
+/// Whether the app is drawn dark (SystemSettings' `darkMode`, `src/utils/theme.ts`).
+static DARK: AtomicBool = AtomicBool::new(false);
+
+/// Whether Books' `dark:` colours are in use.
+pub fn is_dark() -> bool {
+    DARK.load(Ordering::Relaxed)
+}
+
+/// `light` normally, `dark` in dark mode: a Books class and its `dark:` variant.
+pub fn pick(light: Hsla, dark: Hsla) -> Hsla {
+    if is_dark() { dark } else { light }
+}
 
 /// A colour from `colors.json`, as `0xRRGGBB`.
 pub fn hex(rgb: u32) -> Hsla {
     gpui_kit::rgb(rgb).into()
 }
 
-/// `colors.black`: Books' text and primary button colour.
+/// `colors.black`: Books' text and primary button colour; `dark:text-white`.
 pub fn black() -> Hsla {
-    hex(0x1E293B)
+    pick(hex(0x1E293B), hex(0xFFFFFF))
 }
 
+/// White: a page's background, `dark:bg-gray-875`.
 pub fn white() -> Hsla {
-    hex(0xFFFFFF)
+    pick(hex(0xFFFFFF), raw_gray(875))
 }
 
+/// What floats over a page (`Modal.vue`, `Dialog.vue`, `Popover.vue`, `Toast.vue`,
+/// `Dropdown.vue`): white, `dark:bg-gray-850`.
+pub fn surface() -> Hsla {
+    pick(hex(0xFFFFFF), raw_gray(850))
+}
+
+/// The `dark:` shade Books most often pairs with a light gray across its components:
+/// `bg-gray-25 dark:bg-gray-875`, `bg-gray-50 dark:bg-gray-850`,
+/// `border-gray-200 dark:border-gray-800`, `text-gray-600 dark:text-gray-400`,
+/// `text-gray-900 dark:text-gray-100` and so on.
+pub fn dark_gray_shade(shade: u16) -> u16 {
+    match shade {
+        25 => 875,
+        50 => 850,
+        100 => 890,
+        200 => 800,
+        300 => 700,
+        400 => 600,
+        500 => 500,
+        600 => 400,
+        700 => 300,
+        800 => 200,
+        850 | 900 => 100,
+        875 => 50,
+        _ => 25,
+    }
+}
+
+/// A gray, in its `dark:` shade in dark mode, so every screen follows the theme.
 pub fn gray(shade: u16) -> Hsla {
+    if is_dark() {
+        raw_gray(dark_gray_shade(shade))
+    } else {
+        raw_gray(shade)
+    }
+}
+
+/// A gray of `colors.json` as it is, whatever the mode.
+pub fn raw_gray(shade: u16) -> Hsla {
     hex(match shade {
         25 => 0xFBFBFB,
         50 => 0xF8F8F8,
@@ -42,8 +95,32 @@ pub fn gray(shade: u16) -> Hsla {
     })
 }
 
-/// A shade of one of Books' named colours (`getValidColor`); unknown names are gray.
+/// A shade of one of Books' named colours (`getValidColor`); unknown names are gray. In
+/// dark mode the pale backgrounds and deep text shades swap ends (`getBgColorClass`'s
+/// `dark:bg-*-800`, `getTextColorClass`'s `dark:text-*-200`), and 300 and 400 become 600
+/// (`getColorClass`'s `darkvalue`).
 pub fn color(name: &str, shade: u16) -> Hsla {
+    raw_color(
+        name,
+        if is_dark() {
+            dark_color_shade(shade)
+        } else {
+            shade
+        },
+    )
+}
+
+/// The `dark:` shade of a named colour's shade, as [`color`] picks it.
+pub fn dark_color_shade(shade: u16) -> u16 {
+    match shade {
+        300 | 400 => 600,
+        s if s <= 200 || s >= 700 => 1000 - s.min(900),
+        s => s,
+    }
+}
+
+/// A named colour's shade as it is, whatever the mode.
+pub fn raw_color(name: &str, shade: u16) -> Hsla {
     let shades: [u32; 9] = match name {
         "red" => [
             0xFFF0F0, 0xFCD7D7, 0xF9C6C6, 0xEB9091, 0xE03636, 0xCC2929, 0xB52A2A, 0x941F1F,
@@ -81,7 +158,7 @@ pub fn color(name: &str, shade: u16) -> Hsla {
             0xFEEEF8, 0xF8E2F0, 0xF2D4E6, 0xE9C4DA, 0xDF9EB8, 0xCF3A96, 0x9C2671, 0x801458,
             0x570F3E,
         ],
-        _ => return gray(shade),
+        _ => return raw_gray(shade),
     };
     let i = (shade / 100).clamp(1, 9) as usize - 1;
     hex(shades[i])
@@ -176,7 +253,27 @@ pub fn init(cx: &mut App) {
     cx.text_system()
         .add_fonts(FONTS.iter().map(|f| Cow::Borrowed(*f)).collect())
         .ok();
-    Theme::change(ThemeMode::Light, None, cx);
+    apply_theme(cx);
+}
+
+/// `setDarkMode`: draws the app light or dark from now on.
+pub fn set_dark(dark: bool, cx: &mut App) {
+    if dark == is_dark() {
+        return;
+    }
+    DARK.store(dark, Ordering::Relaxed);
+    apply_theme(cx);
+    cx.refresh_windows();
+}
+
+/// gpui-kit's theme in Books' colours for the mode.
+fn apply_theme(cx: &mut App) {
+    let mode = if is_dark() {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    Theme::change(mode, None, cx);
     let theme = Theme::global_mut(cx);
     theme.font_family = "Inter".into();
     theme.font_size = px(16.);
@@ -196,15 +293,15 @@ pub fn init(cx: &mut App) {
     c.muted_foreground = gray(600);
     c.accent = gray(100);
     c.accent_foreground = gray(900);
-    c.primary = black();
-    c.primary_hover = black();
-    c.primary_active = black();
-    c.primary_foreground = white();
+    c.primary = pick(black(), raw_gray(300));
+    c.primary_hover = c.primary;
+    c.primary_active = c.primary;
+    c.primary_foreground = pick(hex(0xFFFFFF), hex(0x1E293B));
     c.secondary = gray(200);
     c.secondary_hover = gray(200);
     c.secondary_active = gray(300);
     c.secondary_foreground = gray(700);
-    c.popover = white();
+    c.popover = surface();
     c.popover_foreground = gray(900);
     c.list = white();
     c.list_hover = gray(100);
@@ -225,15 +322,15 @@ pub fn init(cx: &mut App) {
     c.tab_active_foreground = gray(900);
     c.tab_foreground = gray(700);
     c.scrollbar = white().opacity(0.);
-    c.scrollbar_thumb = gray(100);
-    c.scrollbar_thumb_hover = gray(200);
-    c.sidebar = gray(25);
+    c.scrollbar_thumb = pick(raw_gray(100), raw_gray(850));
+    c.scrollbar_thumb_hover = pick(raw_gray(200), raw_gray(800));
+    c.sidebar = pick(raw_gray(25), raw_gray(900));
     c.sidebar_border = gray(200);
     c.sidebar_foreground = gray(700);
     c.danger = color("red", 500);
-    c.danger_foreground = white();
+    c.danger_foreground = hex(0xFFFFFF);
     c.success = color("green", 600);
-    c.success_foreground = white();
+    c.success_foreground = hex(0xFFFFFF);
     c.warning = color("orange", 500);
     c.info = color("blue", 500);
     c.red = color("red", 500);
@@ -242,7 +339,7 @@ pub fn init(cx: &mut App) {
     c.blue = color("blue", 500);
     c.cyan = color("teal", 500);
     c.switch = gray(300);
-    c.progress_bar = black();
+    c.progress_bar = gray(800);
     c.skeleton = gray(100);
 }
 
@@ -423,8 +520,77 @@ static OWN: &[(&str, &[u8])] = &[
     feather!("x-circle"),
 ];
 
+/// A sidebar group's icon (`Icon.vue`), in the grays `Icons/base.vue` gives it for the
+/// mode.
+pub fn sidebar_icon(name: &str, active: bool) -> SharedString {
+    let state = if active { "active" } else { "inactive" };
+    let dir = if is_dark() { "sidebar-dark" } else { "sidebar" };
+    SharedString::from(format!("books/{dir}/{name}-{state}.svg"))
+}
+
+/// `Icons/base.vue`'s dark grays in place of its light ones: `lightColor` 600 or 400
+/// becomes 500 or 700, `darkColor` 800 or 600 becomes 200 or 500, and `bgColor` 100
+/// becomes 900.
+fn dark_sidebar_svg(svg: &[u8], active: bool) -> Vec<u8> {
+    let svg = String::from_utf8_lossy(svg);
+    let swaps: &[(&str, &str)] = if active {
+        &[
+            ("#383838", "#EDEDED"),
+            ("#7C7C7C", "#999999"),
+            ("#F3F3F3", "#171717"),
+        ]
+    } else {
+        &[
+            ("#7C7C7C", "#999999"),
+            ("#C7C7C7", "#525252"),
+            ("#F3F3F3", "#171717"),
+        ]
+    };
+    let mut out = svg.into_owned();
+    // Through a placeholder, so one swap's result isn't swapped again.
+    for (i, (from, _)) in swaps.iter().enumerate() {
+        out = out.replace(from, &format!("@{i}@"));
+    }
+    for (i, (_, to)) in swaps.iter().enumerate() {
+        out = out.replace(&format!("@{i}@"), to);
+    }
+    out.into_bytes()
+}
+
+/// One of Books' two-gray icons in the grays it has in the mode: the chart of accounts'
+/// (`ChartOfAccounts.vue`'s `lightColor` and `darkColor`, 400 and 700, or 600 and 400 in
+/// dark mode). `path` is the light icon's.
+pub fn themed_icon(path: &str) -> SharedString {
+    match path.strip_prefix("books/") {
+        Some(rest) if is_dark() => SharedString::from(format!("books/dark/{rest}")),
+        _ => SharedString::from(path.to_owned()),
+    }
+}
+
+/// The chart of accounts' icons with `ChartOfAccounts.vue`'s dark grays.
+fn dark_coa_svg(svg: &[u8]) -> Vec<u8> {
+    String::from_utf8_lossy(svg)
+        .replace("#C7C7C7", "@light@")
+        .replace("#525252", "#C7C7C7")
+        .replace("@light@", "#7C7C7C")
+        .into_bytes()
+}
+
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(rest) = path.strip_prefix("books/dark/coa/") {
+            let light = format!("books/coa/{rest}");
+            if let Some((_, bytes)) = OWN.iter().find(|(p, _)| *p == light) {
+                return Ok(Some(Cow::Owned(dark_coa_svg(bytes))));
+            }
+        }
+        if let Some(rest) = path.strip_prefix("books/sidebar-dark/") {
+            let light = format!("books/sidebar/{rest}");
+            if let Some((_, bytes)) = OWN.iter().find(|(p, _)| *p == light) {
+                let active = rest.ends_with("-active.svg");
+                return Ok(Some(Cow::Owned(dark_sidebar_svg(bytes, active))));
+            }
+        }
         if let Some((_, bytes)) = OWN.iter().find(|(p, _)| *p == path) {
             return Ok(Some(Cow::Borrowed(*bytes)));
         }

@@ -131,7 +131,7 @@ impl GetStartedPage {
                         div()
                             .mt_2()
                             .text_12()
-                            .text_color(gray(800))
+                            .text_color(crate::books::pick(gray(800), crate::books::raw_gray(400)))
                             .child(t(card.description)),
                     ),
             )
