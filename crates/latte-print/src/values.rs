@@ -123,6 +123,14 @@ pub fn print_values(
         Some(&ACCOUNTING_SETTINGS_FIELDS),
         0,
     )?);
+    // A field the company's schemas don't have, such as GSTIN outside India, is
+    // `undefined` in Books, which the templates read as empty.
+    for fieldname in PRINT_SETTINGS_FIELDS
+        .iter()
+        .chain(ACCOUNTING_SETTINGS_FIELDS.iter())
+    {
+        print.entry((*fieldname).to_owned()).or_insert(Value::Null);
+    }
 
     if schema_name.ends_with("Invoice") || schema_name.ends_with("Quote") {
         let discount = if doc.schema().field("enableDiscounting").is_some() {

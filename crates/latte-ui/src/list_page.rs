@@ -4,7 +4,8 @@
 //! - A search box finds documents by name or title, in place of Books' filter builder.
 
 use crate::widgets::Button;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use crate::widgets::small_input;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -242,7 +243,7 @@ impl Render for ListPage {
             div()
                 .h_flex()
                 .gap_2()
-                .child(div().w(px(200.)).child(Input::new(&self.search).small()))
+                .child(div().w(px(200.)).child(small_input(&self.search)))
                 .child(
                     Button::new("new")
                         .primary()

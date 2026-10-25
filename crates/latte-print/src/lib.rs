@@ -293,4 +293,19 @@ mod tests {
         let printout = render(Kind::BusinessPayment, &values, None).unwrap();
         assert_eq!(printout.page_count(), 1);
     }
+
+    /// Outside India the company has no GSTIN field, which the values give as null.
+    #[test]
+    fn a_company_without_gstin_prints() {
+        let mut values = values();
+        values["print"]["gstin"] = serde_json::Value::Null;
+        for kind in [
+            Kind::Basic,
+            Kind::Business,
+            Kind::Minimal,
+            Kind::BusinessPayment,
+        ] {
+            render(kind, &values, None).unwrap_or_else(|e| panic!("{kind:?}: {e}"));
+        }
+    }
 }

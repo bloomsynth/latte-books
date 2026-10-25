@@ -12,8 +12,10 @@
 
 use std::collections::HashMap;
 
+use crate::books::Text as _;
 use crate::widgets::Button;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use crate::widgets::small_input;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -853,7 +855,7 @@ impl PosPage {
                 div()
                     .h_flex()
                     .gap_2()
-                    .text_sm()
+                    .text_12()
                     .text_color(theme.muted_foreground)
                     .child(div().w(px(160.)).child(t("Denomination")))
                     .child(div().w(px(100.)).child(t("Count"))),
@@ -862,12 +864,8 @@ impl PosPage {
                 div()
                     .h_flex()
                     .gap_2()
-                    .child(
-                        div()
-                            .w(px(160.))
-                            .child(Input::new(&row.denomination).small()),
-                    )
-                    .child(div().w(px(100.)).child(Input::new(&row.count).small()))
+                    .child(div().w(px(160.)).child(small_input(&row.denomination)))
+                    .child(div().w(px(100.)).child(small_input(&row.count)))
             }))
             .child(
                 div().child(
@@ -918,7 +916,7 @@ impl PosPage {
                 div()
                     .h_flex()
                     .gap_4()
-                    .text_sm()
+                    .text_12()
                     .text_color(theme.muted_foreground)
                     .child(div().w(px(120.)).child(t("Payment Method")))
                     .child(div().w(px(140.)).child(if opening {
@@ -937,7 +935,7 @@ impl PosPage {
                     .h_flex()
                     .gap_4()
                     .child(div().w(px(120.)).child(method.clone()))
-                    .child(div().w(px(140.)).child(Input::new(state).small()));
+                    .child(div().w(px(140.)).child(small_input(state)));
                 if !opening {
                     let expected = panel.expected.get(method);
                     let typed = self
@@ -1007,7 +1005,7 @@ impl PosPage {
             .overflow_y_scroll()
             .child(
                 div()
-                    .text_lg()
+                    .text_14()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(title),
             )
@@ -1056,11 +1054,11 @@ impl PosPage {
                         .truncate()
                         .child(item.name.clone()),
                 )
-                .child(div().text_sm().child(rate))
+                .child(div().text_12().child(rate))
                 .when(show_stock, |d| {
                     d.child(
                         div()
-                            .text_xs()
+                            .text_11()
                             .text_color(if available > 0.0 {
                                 theme.muted_foreground
                             } else {
@@ -1107,7 +1105,7 @@ impl PosPage {
             .flex_1()
             .gap_3()
             .p_4()
-            .child(Input::new(&self.search).small())
+            .child(small_input(&self.search))
             .children(batches)
             .child(
                 div()
@@ -1230,7 +1228,7 @@ impl PosPage {
                         .child(div().truncate().child(format!("{item}{batch}")))
                         .child(
                             div()
-                                .text_xs()
+                                .text_11()
                                 .text_color(theme.muted_foreground)
                                 .child(self.money(row.get("rate"))),
                         ),
@@ -1282,7 +1280,7 @@ impl PosPage {
             .v_flex()
             .gap_1()
             .pt_2()
-            .text_sm()
+            .text_12()
             .child(line(t("Total Quantity"), number_text(quantity)))
             .child(line(t("Net Total"), self.money(sale.get("netTotal"))))
             .child(line(
@@ -1297,7 +1295,7 @@ impl PosPage {
                 div()
                     .h_flex()
                     .justify_between()
-                    .text_base()
+                    .text_13()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t("Grand Total"))
                     .child(self.money(sale.get("grandTotal"))),
@@ -1419,17 +1417,17 @@ impl PosPage {
                 }),
             ))
             .child(field_label(t("Amount Paid"), true, cx))
-            .child(Input::new(&panel.amount).small())
+            .child(small_input(&panel.amount))
             .children(change.map(|c| {
                 div()
-                    .text_sm()
+                    .text_12()
                     .child(format!("{} {}", t("Change"), self.currency(&c)))
             }))
             .when(!is_cash, |d| {
                 d.child(field_label(t("Ref. / Cheque No."), true, cx))
-                    .child(Input::new(&panel.reference).small())
+                    .child(small_input(&panel.reference))
                     .child(field_label(t("Clearance Date"), true, cx))
-                    .child(Input::new(&panel.clearance).small())
+                    .child(small_input(&panel.clearance))
             })
             .children(panel.serial_numbers.iter().map(|(item, state)| {
                 div()
@@ -1440,7 +1438,7 @@ impl PosPage {
                         true,
                         cx,
                     ))
-                    .child(Input::new(state).small())
+                    .child(small_input(state))
             }))
             .child(
                 div()

@@ -10,9 +10,10 @@
 //! - Whether to submit what is imported is a checkbox; Books asks once the import starts.
 //! - The columns to pick are listed on the page; Books shows them in a dialog.
 
-use crate::widgets::Button;
-use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use crate::books::{Text as _, gray};
+use crate::widgets::small_input;
+use crate::widgets::{Button, check_box};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -23,7 +24,7 @@ use crate::Navigate;
 use crate::i18n::t;
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::Shared;
-use crate::widgets::{error_message, field_label, info_message, page_header};
+use crate::widgets::{error_message, info_message, page_header};
 
 const COLUMN_WIDTH: f32 = 160.;
 
@@ -68,7 +69,7 @@ impl ImportWizard {
                 })
                 .collect()
         };
-        let type_input = cx.new(|cx| LinkInput::new(options, t("Import Type"), window, cx));
+        let type_input = cx.new(|cx| LinkInput::new(options, t("Import Type"), window, cx).small());
         let cell_input = cx.new(|cx| InputState::new(window, cx).placeholder(t("No Value")));
         let subscriptions = vec![
             cx.subscribe_in(
@@ -448,15 +449,20 @@ impl ImportWizard {
                     .border_color(theme.border)
                     .children(fields.into_iter().map(|(key, label, checked, required)| {
                         let id = SharedString::from(format!("pick-{key}"));
-                        div().w(px(220.)).child(
-                            Checkbox::new(ElementId::Name(id))
-                                .checked(checked)
-                                .disabled(required)
-                                .label(label)
-                                .on_click(cx.listener(move |this, checked: &bool, window, cx| {
-                                    this.toggle_picked(&key, *checked, window, cx)
-                                })),
-                        )
+                        div()
+                            .id(ElementId::Name(id))
+                            .w(px(220.))
+                            .h_flex()
+                            .gap_3()
+                            .when(!required, |d| d.cursor_pointer())
+                            .when(required, |d| d.opacity(0.6))
+                            .child(check_box(checked))
+                            .child(div().text_13().text_color(gray(600)).child(label))
+                            .when(!required, |d| {
+                                d.on_click(cx.listener(move |this, _, window, cx| {
+                                    this.toggle_picked(&key, !checked, window, cx)
+                                }))
+                            })
                     })),
             );
         }
@@ -488,7 +494,7 @@ impl ImportWizard {
                         .flex_none()
                         .h_flex()
                         .gap_1()
-                        .text_xs()
+                        .text_11()
                         .text_color(theme.muted_foreground)
                         .child(
                             Button::new(("remove-row", r))
@@ -583,7 +589,7 @@ impl ImportWizard {
         if !outcome.success.is_empty() {
             panel = panel.child(
                 div()
-                    .text_sm()
+                    .text_12()
                     .text_color(theme.muted_foreground)
                     .child(outcome.success.join(", ")),
             );
@@ -599,7 +605,7 @@ impl ImportWizard {
                     outcome
                         .failed
                         .iter()
-                        .map(|(name, e)| div().text_sm().child(format!("{name}: {e}"))),
+                        .map(|(name, e)| div().text_12().child(format!("{name}: {e}"))),
                 );
         }
         Some(panel)
@@ -624,39 +630,44 @@ impl Render for ImportWizard {
                 .as_ref()
                 .is_some_and(|i| i.is_submittable(&s.fyo))
         };
+        // `ImportWizard.vue`'s header: Add Row and Save Template as icons, then Select
+        // File or Import Data.
         let header = page_header(t("Import Wizard"), cx).child(
             div()
                 .h_flex()
                 .gap_2()
                 .when(has_type, |d| {
                     d.child(
-                        Button::new("save-template")
-                            .small()
-                            .label(t("Save Template"))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.save_template(window, cx)),
-                            ),
+                        Button::new("header-add-row")
+                            .icon("plus")
+                            .tooltip(t("Add Row"))
+                            .on_click(cx.listener(|this, _, _, cx| this.add_row(cx))),
                     )
                     .child(
-                        Button::new("select-file")
-                            .small()
-                            .label(if self.file_name.is_some() {
-                                t("Change File")
-                            } else {
-                                t("Select File")
-                            })
+                        Button::new("save-template")
+                            .icon("download")
+                            .tooltip(t("Save Template"))
                             .on_click(
-                                cx.listener(|this, _, window, cx| this.select_file(window, cx)),
+                                cx.listener(|this, _, window, cx| this.save_template(window, cx)),
                             ),
                     )
                 })
                 .when(has_rows, |d| {
                     d.child(
                         Button::new("import")
-                            .small()
                             .primary()
                             .label(t("Import Data"))
                             .on_click(cx.listener(|this, _, _, cx| this.import(cx))),
+                    )
+                })
+                .when(has_type && !has_rows, |d| {
+                    d.child(
+                        Button::new("select-file")
+                            .primary()
+                            .label(t("Select File"))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.select_file(window, cx)),
+                            ),
                     )
                 }),
         );
@@ -689,45 +700,43 @@ impl Render for ImportWizard {
                     .child(
                         div()
                             .h_flex()
-                            .items_end()
-                            .gap_4()
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .gap_1()
-                                    .w(px(240.))
-                                    .child(field_label(t("Import Type"), true, cx))
-                                    .child(self.type_input.clone()),
-                            )
-                            .children(
-                                self.file_name.clone().map(|name| {
-                                    div().text_color(theme.muted_foreground).child(name)
-                                }),
-                            )
+                            .gap_2()
+                            .child(div().w(px(160.)).child(self.type_input.clone()))
+                            .child(div().ml_2().text_13().map(|d| {
+                                match &self.file_name {
+                                    Some(name) => d
+                                        .text_color(gray(900))
+                                        .child(format!("{} {name}", t("Selected")))
+                                        .children(summary.clone().map(|s| format!(" {s}"))),
+                                    None if has_type => {
+                                        d.text_color(gray(700)).children(summary.clone())
+                                    }
+                                    None => d.text_color(gray(700)).child(t("Set an Import Type")),
+                                }
+                            }))
                             .when(submittable, |d| {
                                 d.child(
-                                    Checkbox::new("submit-on-import")
-                                        .checked(self.submit)
-                                        .label(t("Submit entries?"))
-                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                            this.submit = *checked;
+                                    div()
+                                        .id("submit-on-import")
+                                        .ml_auto()
+                                        .h_flex()
+                                        .gap_3()
+                                        .cursor_pointer()
+                                        .child(check_box(self.submit))
+                                        .child(
+                                            div()
+                                                .text_13()
+                                                .text_color(gray(600))
+                                                .child(t("Submit entries?")),
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.submit = !this.submit;
                                             cx.notify();
                                         })),
                                 )
                             }),
                     )
-                    .when(!has_type, |d| {
-                        d.child(
-                            div()
-                                .text_color(theme.muted_foreground)
-                                .child(t("Set an Import Type")),
-                        )
-                    })
                     .child(self.render_picker(cx))
-                    .children(
-                        summary
-                            .map(|s| div().text_sm().text_color(theme.muted_foreground).child(s)),
-                    )
                     .when(self.selected.is_some(), |d| {
                         let (r, c) = self.selected.unwrap_or_default();
                         let column = self
@@ -747,15 +756,11 @@ impl Render for ImportWizard {
                                 .gap_2()
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_12()
                                         .text_color(theme.muted_foreground)
                                         .child(format!("{} {}, {column}", t("Row"), r + 1)),
                                 )
-                                .child(
-                                    div()
-                                        .w(px(320.))
-                                        .child(Input::new(&self.cell_input).small()),
-                                ),
+                                .child(div().w(px(320.)).child(small_input(&self.cell_input))),
                         )
                     }),
             )

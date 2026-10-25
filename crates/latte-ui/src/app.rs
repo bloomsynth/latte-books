@@ -135,7 +135,8 @@ impl Render for LatteApp {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .text_sm()
+            // The browser's 16px, which Books' unstyled text keeps.
+            .text_size(px(16.))
             .child(screen)
     }
 }

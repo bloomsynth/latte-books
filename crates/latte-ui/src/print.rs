@@ -5,18 +5,20 @@
 //! Differences from Books:
 //! - "Save as PDF" is the only way out; Books also opens the system print dialog. Print
 //!   the saved PDF instead.
-//! - There is no template editor; the templates are Typst ports of Books' own.
+//! - There is no template editor; the templates are Typst ports of Books' own, so the
+//!   "…" menu offers only Print Settings.
 
 use std::sync::Arc;
 
-use crate::widgets::Button;
+use crate::books::{Text as _, gray};
+use crate::widgets::{Button, Kind as ToastKind, dropdown_item, popover_panel, toast};
 use gpui_kit::component::*;
 use gpui_kit::*;
 use latte_print::{Printout, Template};
 
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::Shared;
-use crate::widgets::{error_message, info_message, page_header};
+use crate::widgets::{error_message, page_header};
 use crate::{Nav, Navigate, i18n};
 use latte_core::views::sidebar::Route;
 
@@ -39,6 +41,8 @@ pub struct PrintPage {
     pages: Vec<Arc<Image>>,
     error: Option<String>,
     info: Option<String>,
+    /// The "…" menu is open.
+    menu: bool,
     _subscription: Subscription,
 }
 
@@ -66,7 +70,7 @@ impl PrintPage {
                 label: t.name.clone().into(),
             })
             .collect();
-        let picker = cx.new(|cx| LinkInput::new(options, "Template", window, cx));
+        let picker = cx.new(|cx| LinkInput::new(options, "Template Name", window, cx).small());
         let current = template
             .as_ref()
             .map(|t| SharedString::from(t.name.clone()));
@@ -90,6 +94,7 @@ impl PrintPage {
             pages: Vec::new(),
             error: None,
             info: None,
+            menu: false,
             _subscription: subscription,
         };
         page.render_document(cx);
@@ -159,7 +164,9 @@ impl PrintPage {
             let result = std::fs::write(&path, pdf);
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(()) => this.info = Some(format!("Saved {}", path.display())),
+                    Ok(()) => {
+                        this.info = Some(format!("Save as PDF Successful: {}", path.display()))
+                    }
                     Err(e) => this.error = Some(e.to_string()),
                 }
                 cx.notify();
@@ -171,29 +178,53 @@ impl PrintPage {
 }
 
 impl Render for PrintPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let back = Route::Form {
-            schema: self.schema.clone(),
-            name: Some(self.name.clone()),
-        };
-        let header = page_header(format!("{} - {}", i18n::t("Print"), self.name), cx).child(
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // `PrintView.vue`'s actions: here, Print Settings.
+        let menu = self.menu.then(|| {
+            deferred(
+                anchored().anchor(Anchor::TopRight).snap_to_window().child(
+                    popover_panel()
+                        .id("print-menu")
+                        .occlude()
+                        .mt_2()
+                        .min_w(px(160.))
+                        .p_1()
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.menu = false;
+                            cx.notify();
+                        }))
+                        .child(
+                            dropdown_item("print-settings", i18n::t("Print Settings")).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.menu = false;
+                                    cx.emit(Navigate(Nav::Route(Route::Settings {
+                                        tab: Some("PrintSettings".to_owned()),
+                                    })))
+                                }),
+                            ),
+                        ),
+                ),
+            )
+            .with_priority(1)
+        });
+        let header = page_header(i18n::t("Print View"), cx).child(
             div()
                 .h_flex()
                 .gap_2()
-                .child(div().w(px(260.)).child(self.picker.clone()))
+                .child(div().w(px(160.)).child(self.picker.clone()))
                 .child(
-                    Button::new("back-to-doc")
-                        .small()
-                        .ghost()
-                        .label(i18n::t("Open Document"))
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(Navigate(Nav::Route(back.clone())))
-                        })),
+                    div()
+                        .relative()
+                        .child(Button::new("print-more").icon("more-horizontal").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.menu = !this.menu;
+                                cx.notify();
+                            }),
+                        ))
+                        .children(menu),
                 )
                 .child(
                     Button::new("save-pdf")
-                        .small()
                         .primary()
                         .label(i18n::t("Save as PDF"))
                         .disabled(self.printout.is_none())
@@ -208,23 +239,35 @@ impl Render for PrintPage {
                 .h(px(842.0 * PREVIEW_SCALE as f32 / 1.5))
                 .bg(gpui_kit::white())
                 .border_1()
-                .border_color(theme.border)
+                .border_color(gray(200))
                 .shadow_md()
                 .child(img(page.clone()).size_full())
+        });
+        let toast = self.info.clone().map(|message| {
+            toast(
+                message,
+                ToastKind::Success,
+                cx.listener(|this, _, _, cx| {
+                    this.info = None;
+                    cx.notify();
+                }),
+                window,
+            )
         });
         div()
             .v_flex()
             .size_full()
+            .bg(gray(25))
+            .text_13()
             .child(header)
             .children(self.error.clone().map(|e| error_message(e, cx)))
-            .children(self.info.clone().map(|i| info_message(i, cx)))
             .child(
                 div()
                     .id("pages")
                     .flex_1()
                     .overflow_y_scroll()
-                    .bg(theme.muted)
-                    .child(div().v_flex().items_center().gap_4().py_6().children(pages)),
+                    .child(div().v_flex().items_center().gap_4().p_4().children(pages)),
             )
+            .children(toast)
     }
 }

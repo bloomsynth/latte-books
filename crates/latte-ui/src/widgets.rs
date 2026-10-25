@@ -530,3 +530,15 @@ pub fn toast(
     )
     .with_priority(1)
 }
+
+/// A text input in Books' small bordered frame (`Base.vue`, `size="small"`).
+pub fn small_input(state: &Entity<gpui_kit::component::input::InputState>) -> Div {
+    use gpui_kit::component::input::Input;
+    control_frame(false, false).min_h(px(30.)).child(
+        Input::new(state)
+            .appearance(false)
+            .h(px(28.))
+            .px_2()
+            .text_13(),
+    )
+}
