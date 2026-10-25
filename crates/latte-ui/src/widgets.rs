@@ -809,8 +809,14 @@ fn toast_card(id: impl Into<ElementId>, toast: &Toast, close: Action) -> Statefu
             div()
                 .id((id.clone(), "message"))
                 .flex_1()
+                .min_w_0()
                 .when(action.is_some(), |d| d.cursor_pointer())
-                .child(div().text_13().child(toast.message.clone()))
+                .child(
+                    div()
+                        .text_13()
+                        .whitespace_normal()
+                        .child(toast.message.clone()),
+                )
                 .children(action.as_ref().map(|(label, _)| {
                     div()
                         .text_12()
