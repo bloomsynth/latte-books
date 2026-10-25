@@ -17,8 +17,8 @@ use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::Shared;
 use crate::widgets::{Button, check_box, control_frame};
 
-/// The wizard was closed, with what to say if it exported.
-pub struct ExportClosed(pub Option<String>);
+/// The wizard was closed, with the file it exported to, if it did.
+pub struct ExportClosed(pub Option<std::path::PathBuf>);
 
 pub struct ExportWizard {
     session: Shared,
@@ -177,11 +177,7 @@ impl ExportWizard {
             };
             let result = std::fs::write(&path, data);
             this.update(cx, |this, cx| match result {
-                Ok(()) => cx.emit(ExportClosed(Some(format!(
-                    "{}: {}",
-                    t("Export Successful"),
-                    path.display()
-                )))),
+                Ok(()) => cx.emit(ExportClosed(Some(path.clone()))),
                 Err(e) => {
                     this.error = Some(e.to_string());
                     cx.notify();

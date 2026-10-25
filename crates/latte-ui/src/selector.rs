@@ -1,7 +1,8 @@
 //! Choosing a company file: `src/pages/DatabaseSelector.vue` @ v0.36.0.
 //!
 //! Differences from Books:
-//! - Create Demo shows its progress in the selector instead of a full-window loader.
+//! - An error opening a file is said in Books' dialog, whose Report opens an issue on Latte
+//!   Books' repository.
 //! - A file's × takes it off the list and leaves it on the disk. Books deletes the file.
 //! - Changing the language rebuilds the screen; Books reloads the window.
 
@@ -19,7 +20,7 @@ use latte_core::dummy::setup_dummy_instance;
 
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::{self, RecentFile};
-use crate::widgets::error_message;
+use crate::widgets::{error_dialog, loading};
 
 pub enum Selected {
     Open(PathBuf),
@@ -307,11 +308,11 @@ fn action_icon(color: &str, icon: &str, size: f32) -> Div {
         .bg(books::color(color, 500))
         .h_flex()
         .justify_center()
-        .child(books::icon(icon, px(size), white()))
+        .child(books::icon(icon, px(size), books::hex(0xFFFFFF)))
 }
 
 impl Render for Selector {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.creating_demo.is_some();
         let action = |id: &'static str, icon: Div, title: &str, detail: &str| {
             div()
@@ -371,7 +372,6 @@ impl Render for Selector {
                             ))),
                     )
                     .child(hr())
-                    .children(self.error.clone().map(|e| error_message(e, cx)))
                     .child(
                         action(
                             "new-company",
@@ -406,30 +406,14 @@ impl Render for Selector {
                         )
                     })
                     .child(hr())
-                    .child(match &self.creating_demo {
-                        // `Loading`.
-                        Some((message, percent)) => div()
-                            .id("files")
-                            .v_flex()
-                            .p_4()
-                            .gap_2()
-                            .child(div().text_12().child(t(message)))
-                            .child(
-                                div().h(px(6.)).w_full().rounded_full().bg(gray(100)).child(
-                                    div()
-                                        .h_full()
-                                        .rounded_full()
-                                        .bg(gray(800))
-                                        .w(relative(percent.clamp(0.0, 1.0) as f32)),
-                                ),
-                            ),
-                        None => div()
+                    .child(
+                        div()
                             .id("files")
                             .v_flex()
                             .max_h(px(340.))
                             .overflow_y_scroll()
                             .children(rows),
-                    })
+                    )
                     .when(has_files, |d| d.child(hr()))
                     // The language and Create Demo, at the foot of the card.
                     .child(
@@ -469,6 +453,26 @@ impl Render for Selector {
                             }),
                     ),
             )
+            // `Loading` with `full-width` while the demo is made.
+            .children(
+                self.creating_demo
+                    .as_ref()
+                    .map(|(message, percent)| loading(t(message), *percent, window)),
+            )
+            .children(self.error.clone().map(|e| {
+                let this = cx.entity().downgrade();
+                error_dialog(
+                    &e,
+                    std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                        this.update(cx, |this, cx| {
+                            this.error = None;
+                            cx.notify();
+                        })
+                        .ok();
+                    }),
+                    window,
+                )
+            }))
     }
 }
 
