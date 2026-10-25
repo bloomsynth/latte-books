@@ -401,7 +401,11 @@ impl Render for ReportPrintPage {
                             .overflow_scroll()
                             .p_4()
                             .bg(gray(25))
-                            .child(print_parts::pages_view(&self.pages, scale)),
+                            .child(print_parts::pages_view(
+                                &self.pages,
+                                self.printout.as_ref().map_or(0, |p| p.page_count()),
+                                scale,
+                            )),
                     )
                     .child(panel),
             )

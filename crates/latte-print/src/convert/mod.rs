@@ -1137,7 +1137,12 @@ impl WidthExpr {
         match self {
             Self::Fixed(e) => e.clone(),
             Self::Of(e) => {
-                let e = &e.replace("HEIGHT", height);
+                let e = &if height == "auto" {
+                    // In the flow a block is as high as its content: no height.
+                    drop_height(e)
+                } else {
+                    e.replace("HEIGHT", height)
+                };
                 let width = match (&style.max_width, width) {
                     (Some(max), "wfull") => {
                         return format!(
@@ -1151,6 +1156,31 @@ impl WidthExpr {
             }
         }
     }
+}
+
+/// `e` without its `height: HEIGHT` arguments, which a block in the flow doesn't need.
+fn drop_height(e: &str) -> String {
+    let mut out = e.replace(", height: HEIGHT", "");
+    while let Some(start) = out.find(", height: css-inner(HEIGHT, ") {
+        let rest = &out[start + 2..];
+        let mut depth = 0;
+        let mut end = rest.len();
+        for (i, c) in rest.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.replace_range(start..start + 2 + end, "");
+    }
+    out.replace("HEIGHT", "auto")
 }
 
 /// A flex or grid item's body: a function of its width. Its blocks fill it (`wfull`),

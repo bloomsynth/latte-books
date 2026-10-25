@@ -108,6 +108,23 @@ impl ReportPage {
             _subscriptions: Vec::new(),
         };
         page.focus.focus(window, cx);
+        // Ctrl+P (⌘P) opens the Print View while the report is shown, wherever the
+        // focus is, as Books' `pmod+P` does.
+        let entity = cx.entity().downgrade();
+        page._subscriptions
+            .push(cx.intercept_keystrokes(move |event, _, cx| {
+                let k = &event.keystroke;
+                if k.key != "p"
+                    || !(k.modifiers.control || k.modifiers.platform)
+                    || k.modifiers.shift
+                {
+                    return;
+                }
+                if let Some(this) = entity.upgrade() {
+                    this.update(cx, |this, cx| this.open_print_view(cx));
+                    cx.stop_propagation();
+                }
+            }));
         // The first run sets the default filters, which the controls then show.
         page.run(window, cx);
         for filter in &filters {
@@ -800,14 +817,6 @@ impl Render for ReportPage {
             .size_full()
             .text_color(gray(900))
             .track_focus(&self.focus)
-            // Ctrl+P (⌘P) opens the Print View, as Books' report shortcut does.
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                let k = &event.keystroke;
-                if k.key == "p" && (k.modifiers.control || k.modifiers.platform) {
-                    this.open_print_view(cx);
-                    cx.stop_propagation();
-                }
-            }))
             .child(header)
             .children(self.error.clone().map(|e| error_message(e, cx)))
             .when(!self.filters.is_empty(), |d| {

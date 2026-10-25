@@ -137,7 +137,10 @@ impl TemplateBuilder {
                 DocValue::Text(templates::BASE_TEMPLATE.to_owned()),
             );
         }
-        let custom = PrintTemplate::from_doc(&doc).is_custom;
+        let custom = {
+            let template = PrintTemplate::from_doc(&doc);
+            template.is_custom && !template.is_html()
+        };
         let source = text(&doc, "template");
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
@@ -230,6 +233,21 @@ impl TemplateBuilder {
                 }
             },
         ));
+        let entity = cx.entity().downgrade();
+        subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
+            let Some(this) = entity.upgrade() else {
+                return;
+            };
+            if !this.read(cx).focus.contains_focused(window, cx) {
+                return;
+            }
+            let handled = this.update(cx, |this, cx| {
+                this.on_keystroke(&event.keystroke, window, cx)
+            });
+            if handled {
+                cx.stop_propagation();
+            }
+        }));
         let mut builder = Self {
             session,
             doc,
@@ -265,8 +283,11 @@ impl TemplateBuilder {
         builder
     }
 
+    /// Whether the template can be edited: a custom Typst one. A Books HTML template is
+    /// kept as it is for Books; it is converted instead.
     fn is_custom(&self) -> bool {
-        PrintTemplate::from_doc(&self.doc).is_custom
+        let template = PrintTemplate::from_doc(&self.doc);
+        template.is_custom && !template.is_html()
     }
 
     fn template(&self) -> PrintTemplate {
@@ -862,10 +883,11 @@ impl TemplateBuilder {
         entries
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let k = &event.keystroke;
-        if !(k.modifiers.control || k.modifiers.platform) {
-            return;
+    /// The Template Builder's shortcuts. They are taken before the editor's own keys
+    /// (the editor's Ctrl+H is find and replace).
+    fn on_keystroke(&mut self, k: &Keystroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !(k.modifiers.control || k.modifiers.platform) || k.modifiers.alt {
+            return false;
         }
         match k.key.as_str() {
             "enter" => self.apply_template(cx),
@@ -877,9 +899,9 @@ impl TemplateBuilder {
             "=" | "+" => self.set_scale(self.scale + 0.1, window, cx),
             "-" => self.set_scale(self.scale - 0.1, window, cx),
             "s" => self.save(window, cx),
-            _ => return,
+            _ => return false,
         }
-        cx.stop_propagation();
+        true
     }
 
     /// `helperMessage`.
@@ -1208,7 +1230,7 @@ impl Render for TemplateBuilder {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header = self.render_header(cx);
         let template = self.template();
-        let custom = template.is_custom;
+        let custom = self.is_custom();
         let source = template.template.clone();
         let width = template.size().0 as f32;
 
@@ -1235,13 +1257,17 @@ impl Render for TemplateBuilder {
                         .mx_auto()
                         .border_1()
                         .border_color(gray(200))
-                        .child(print_parts::errors_view(&self.errors, &source)),
+                        .child(print_parts::errors_view(&self.errors, &source, cx)),
                 )
                 .into_any_element()
         } else {
             div()
                 .p_4()
-                .child(print_parts::pages_view(&self.pages, self.scale))
+                .child(print_parts::pages_view(
+                    &self.pages,
+                    self.printout.as_ref().map_or(0, |p| p.page_count()),
+                    self.scale,
+                ))
                 .into_any_element()
         };
 
@@ -1430,7 +1456,6 @@ impl Render for TemplateBuilder {
             .v_flex()
             .size_full()
             .text_13()
-            .capture_key_down(cx.listener(Self::on_key))
             .child(header)
             .child(
                 div()

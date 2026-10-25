@@ -310,6 +310,11 @@ impl Printout {
 
     /// Each page as a PNG image, `pixel_per_pt` pixels to a point.
     pub fn png_pages(&self, pixel_per_pt: f64) -> Result<Vec<Vec<u8>>, String> {
+        self.png_pages_up_to(pixel_per_pt, usize::MAX)
+    }
+
+    /// The first `count` pages as PNG images.
+    pub fn png_pages_up_to(&self, pixel_per_pt: f64, count: usize) -> Result<Vec<Vec<u8>>, String> {
         let options = typst_render::RenderOptions {
             pixel_per_pt: Scalar::new(pixel_per_pt),
             ..Default::default()
@@ -317,6 +322,7 @@ impl Printout {
         self.document
             .pages()
             .iter()
+            .take(count)
             .map(|page| {
                 typst_render::render(page, &options)
                     .encode_png()

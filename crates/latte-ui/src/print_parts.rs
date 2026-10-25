@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use latte_print::{PrintError, Printout};
 
@@ -24,8 +25,11 @@ pub struct Laid {
     pub pages: Vec<(Arc<Image>, (f64, f64))>,
 }
 
-/// Pixels per point of the page images: sharp at 2× zoom.
-const PIXELS_PER_PT: f64 = 2.0;
+/// Pixels per point of the page images: sharp up to 1:1 on a 1× screen.
+const PIXELS_PER_PT: f64 = 1.5;
+
+/// The pages shown at most; a longer printout is all in its PDF.
+pub const PREVIEW_PAGES: usize = 30;
 
 /// Lays out a printout away from the window and its pages as images.
 pub fn lay_out(
@@ -35,7 +39,7 @@ pub fn lay_out(
     cx.background_executor().spawn(async move {
         let printout = job()?;
         let pngs = printout
-            .png_pages(PIXELS_PER_PT)
+            .png_pages_up_to(PIXELS_PER_PT, PREVIEW_PAGES)
             .map_err(|e| vec![PrintError::new(e)])?;
         let pages = pngs
             .into_iter()
@@ -51,7 +55,8 @@ const PX_PER_PT: f32 = 96.0 / 72.0;
 
 /// The pages, one under another, `scale` times their size: `ScaledContainer.vue` with
 /// `mx-auto shadow-lg border`.
-pub fn pages_view(pages: &[(Arc<Image>, (f64, f64))], scale: f32) -> Div {
+pub fn pages_view(pages: &[(Arc<Image>, (f64, f64))], total: usize, scale: f32) -> Div {
+    let more = total.saturating_sub(pages.len());
     div()
         .v_flex()
         .items_center()
@@ -68,6 +73,12 @@ pub fn pages_view(pages: &[(Arc<Image>, (f64, f64))], scale: f32) -> Div {
                 .shadow(books::shadow_lg())
                 .child(img(image.clone()).size_full())
         }))
+        .when(more > 0, |d| {
+            d.child(div().text_12().text_color(gray(700)).child(crate::i18n::tr(
+                "${0} more pages are in the PDF.",
+                &[&more.to_string()],
+            )))
+        })
 }
 
 /// The scale at which a page `width_cm` wide fits `available` pixels, no more than 1:
@@ -82,7 +93,9 @@ pub fn fit_scale(width_cm: f64, available: f32) -> f32 {
 
 /// `PrintContainer.vue`'s error: a red panel with the title, each message with where it
 /// is in the template, and the lines around it.
-pub fn errors_view(errors: &[PrintError], source: &str) -> Div {
+pub fn errors_view(errors: &[PrintError], source: &str, cx: &App) -> Div {
+    use gpui_kit::component::ActiveTheme as _;
+    let mono = cx.theme().mono_font_family.clone();
     let lines: Vec<&str> = source.lines().collect();
     div()
         .v_flex()
@@ -138,7 +151,7 @@ pub fn errors_view(errors: &[PrintError], source: &str) -> Div {
                 }))
                 .children(frame.map(|frame| {
                     div()
-                        .font_family("monospace")
+                        .font_family(mono.clone())
                         .text_14()
                         .text_color(gray(700))
                         .whitespace_nowrap()

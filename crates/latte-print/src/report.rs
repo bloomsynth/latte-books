@@ -52,11 +52,24 @@ const SOURCE: &str = r##"
   inset: px(8),
   text(size: px(12), weight: if r == 0 { "semibold" } else { "regular" }, value),
 )
-#grid(
-  columns: (auto,) * n,
+// `repeat(n, minmax(0, auto))`: each column as wide as its widest cell, and what is
+// left of the page shared out between them, as a CSS grid stretches auto tracks.
+#layout(size => context {
+  let natural = range(n).map(c => {
+    calc.max(
+      measure(text(size: px(12), weight: "semibold", data.columns.at(c).label)).width,
+      // The first rows are enough to size a column, and keep a long ledger quick.
+      ..data.rows.slice(0, calc.min(100, data.rows.len())).map(row => measure(text(size: px(12), row.at(c, default: ""))).width),
+    ) + px(16) + 1pt
+  })
+  let free = size.width - natural.sum(default: 0pt)
+  let columns = if free > 0pt and n > 0 { natural.map(w => w + free / n) } else { (auto,) * n }
+  grid(
+  columns: columns,
   ..data.columns.enumerate().map(((c, col)) => cell(c, 0, col.label)),
   ..data.rows.enumerate().map(((r, row)) => row.enumerate().map(((c, v)) => cell(c, r + 1, v))).flatten(),
-)
+  )
+})
 #block(width: 100%, inset: px(8), stroke: (top: border), align(right, text(size: px(11), data.printed)))
 "##;
 

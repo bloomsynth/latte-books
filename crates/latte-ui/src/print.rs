@@ -423,10 +423,15 @@ impl Render for PrintPage {
                     .mx_auto()
                     .border_1()
                     .border_color(gray(200))
-                    .child(print_parts::errors_view(&self.errors, source))
+                    .child(print_parts::errors_view(&self.errors, source, cx))
                     .into_any_element()
             } else {
-                print_parts::pages_view(&self.pages, scale).into_any_element()
+                print_parts::pages_view(
+                    &self.pages,
+                    self.printout.as_ref().map_or(0, |p| p.page_count()),
+                    scale,
+                )
+                .into_any_element()
             };
         div()
             .v_flex()
