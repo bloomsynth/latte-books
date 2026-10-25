@@ -103,14 +103,22 @@ fn references_outstanding(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
 
 /// `_getAccountsMap`: the bank, cash, payable and receivable accounts, as
 /// `(name, accountType)`.
+///
+/// Deviation: Books lists group accounts too, newest first. A group is made just before
+/// its accounts, so on a fast computer it can share their `created` time and come first,
+/// and a new payment then defaults to Cash In Hand or Bank Accounts, a group its account
+/// fields don't offer. Here groups are left out, as those fields' filters leave them out.
 fn get_accounts(fyo: &Fyo) -> Result<Vec<(String, String)>, Error> {
     let types = ["Bank", "Cash", "Payable", "Receivable"];
     let options = GetAllOptions {
         fields: Some(vec!["name".to_owned(), "accountType".to_owned()]),
-        filters: QueryFilter::from([(
-            "accountType".to_owned(),
-            Filter::list("in", types.into_iter().map(FilterValue::from).collect()),
-        )]),
+        filters: QueryFilter::from([
+            (
+                "accountType".to_owned(),
+                Filter::list("in", types.into_iter().map(FilterValue::from).collect()),
+            ),
+            ("isGroup".to_owned(), Filter::from(false)),
+        ]),
         ..GetAllOptions::default()
     };
     Ok(fyo

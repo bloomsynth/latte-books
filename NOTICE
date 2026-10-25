@@ -37,6 +37,14 @@ library Frappe Books uses, under this licence:
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
 
+crates/latte-app/installer.nsi, the Windows installer's template, is changed from
+cargo-packager's (https://github.com/crabnebula-dev/cargo-packager), under the same MIT
+License as above with this copyright:
+
+    Copyright (c) 2023 - Present CrabNebula Ltd.
+    Copyright (c) 2019 - 2023 Tauri Programme within The Commons Conservancy
+    Copyright (c) 2017 - 2019 Cargo-Bundle developers
+
 Latte Books is not affiliated with, endorsed by or sponsored by Frappe Technologies
 Pvt. Ltd. "Frappe" and "Frappe Books" are trademarks of their owner and are used here
 only to describe where this project comes from.
