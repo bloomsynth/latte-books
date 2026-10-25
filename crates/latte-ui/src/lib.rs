@@ -9,6 +9,7 @@ mod books;
 mod coa;
 mod dashboard;
 mod desk;
+mod filter_dropdown;
 mod form;
 mod get_started;
 mod i18n;

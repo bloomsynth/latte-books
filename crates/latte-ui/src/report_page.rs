@@ -80,10 +80,15 @@ impl ReportPage {
 
     pub fn new(
         session: Shared,
-        report: Box<dyn Report>,
+        mut report: Box<dyn Report>,
+        preset: &[(String, String)],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // `defaultFilters`: the filters the report was opened with.
+        for (fieldname, value) in preset {
+            report.set(fieldname, FilterValue::Text(value.clone()));
+        }
         let filters = report.filters(&session.borrow().fyo);
         let mut page = Self {
             session,

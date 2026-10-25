@@ -4,8 +4,7 @@
 //!
 //! As in Books, each chart has its own period, and the header's period sets them all;
 //! picking another period on a chart leaves the header at "Set Period".
-//!
-//! Differences from Books: the Paid and Unpaid amounts don't open the invoice list yet.
+//! The Paid and Unpaid amounts open those invoices.
 
 use gpui_kit::component::chart::{AreaChart, BarChart, PieChart};
 use gpui_kit::component::*;
@@ -15,11 +14,12 @@ use latte_core::dashboard::{self, CashflowMonth, Period, Unpaid};
 
 use gpui_kit::prelude::FluentBuilder as _;
 
-use crate::Navigate;
 use crate::books::{self, Text as _, gray, white};
 use crate::i18n::t;
 use crate::session::Shared;
 use crate::widgets::{dropdown_item, error_message, page_header, popover_panel};
+use crate::{Nav, Navigate};
+use latte_core::views::sidebar::Route;
 
 /// A dashboard widget, each with its own period (`BaseDashboardChart.vue`).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -367,8 +367,30 @@ impl DashboardPage {
         } else {
             0.0
         };
-        let amount = |value: f64, label: &str| {
+        let header = self.section_header(title, widget, cx);
+        let amount = |value: f64, label: &'static str, count: usize| {
+            let schema_label = if schema_name == "SalesInvoice" {
+                "Sales Invoice"
+            } else {
+                "Purchase Invoice"
+            };
+            // `routeToInvoices`: the paid or unpaid invoices of the kind.
+            let (operator, title) = if label == "Paid" {
+                ("=", format!("{} {schema_label}", t("Paid")))
+            } else {
+                ("!=", format!("{} {schema_label}", t("Unpaid")))
+            };
             div()
+                .id(SharedString::from(format!("{schema_name}-{label}")))
+                .when(count > 0, |d| {
+                    d.cursor_pointer().on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(Navigate(Nav::Route(Route::filtered_list(
+                            schema_name,
+                            &title,
+                            &[("outstandingAmount", operator, "0")],
+                        ))))
+                    }))
+                })
                 .text_12()
                 .font_weight(FontWeight::MEDIUM)
                 .when(!has_data, |d| {
@@ -385,6 +407,8 @@ impl DashboardPage {
                 )
                 .h_flex()
         };
+        let paid = amount(unpaid.paid, "Paid", unpaid.paid_count);
+        let unpaid_amount = amount(unpaid.unpaid, "Unpaid", unpaid.unpaid_count);
         let hovered = self.hovered == Some(schema_name);
         let counts = (hovered && has_data).then(|| {
             div()
@@ -431,14 +455,14 @@ impl DashboardPage {
             .v_flex()
             .flex_1()
             .p_4()
-            .child(self.section_header(title, widget, cx))
+            .child(header)
             .child(
                 div()
                     .mt_4()
                     .h_flex()
                     .justify_between()
-                    .child(amount(unpaid.paid, "Paid"))
-                    .child(amount(unpaid.unpaid, "Unpaid")),
+                    .child(paid)
+                    .child(unpaid_amount),
             )
             .child(
                 div()

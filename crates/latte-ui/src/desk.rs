@@ -208,9 +208,18 @@ impl Desk {
                     schema,
                     title,
                     filters,
+                    conditions,
                 } => {
                     let page = cx.new(|cx| {
-                        ListPage::new(session, &schema, &t(&title), filters.as_deref(), window, cx)
+                        ListPage::new(
+                            session,
+                            &schema,
+                            &t(&title),
+                            filters.as_deref(),
+                            conditions,
+                            window,
+                            cx,
+                        )
                     });
                     self.watch(page, window, cx);
                     Ok(())
@@ -228,7 +237,22 @@ impl Desk {
                 }
                 Route::Report(name) => match ReportPage::build(&name) {
                     Some(report) => {
-                        let page = cx.new(|cx| ReportPage::new(session, report, window, cx));
+                        let page = cx.new(|cx| ReportPage::new(session, report, &[], window, cx));
+                        self.watch(page, window, cx);
+                        Ok(())
+                    }
+                    None => {
+                        let page = cx.new(|_| {
+                            Placeholder::new(&name, "This report isn't in Latte Books yet.")
+                        });
+                        self.watch(page, window, cx);
+                        Ok(())
+                    }
+                },
+                Route::FilteredReport { name, filters } => match ReportPage::build(&name) {
+                    Some(report) => {
+                        let page =
+                            cx.new(|cx| ReportPage::new(session, report, &filters, window, cx));
                         self.watch(page, window, cx);
                         Ok(())
                     }
@@ -291,6 +315,9 @@ impl Desk {
                 match &route {
                     Route::Form { .. } | Route::Print { .. } => {}
                     Route::Settings { .. } => self.highlight = Route::Settings { tab: None },
+                    Route::FilteredReport { name, .. } => {
+                        self.highlight = Route::Report(name.clone())
+                    }
                     route => self.highlight = route.clone(),
                 }
                 self.route = route;

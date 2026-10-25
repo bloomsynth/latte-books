@@ -1,17 +1,17 @@
 //! A list of documents: `src/pages/ListView/ListView.vue` and `List.vue` @ v0.36.0.
 //!
-//! Differences from Books:
-//! - A search box finds documents by name or title, in place of Books' filter builder.
+//! The header holds Books' Filter menu (`FilterDropdown.vue`) and New. A list opened for
+//! some documents only, such as a party's invoices, starts with those filters.
 
+use crate::filter_dropdown::{FilterDropdown, FiltersChanged};
 use crate::widgets::Button;
-use crate::widgets::small_input;
-use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use latte_core::views::list::{self, ListCell, ListColumn, ListRow};
 use latte_core::views::sidebar::Route;
-use latte_db::QueryFilter;
+use latte_db::{Filter, FilterValue, QueryFilter};
+use latte_schema::FieldType;
 
 use crate::books::{self, Text as _, gray, white};
 use crate::i18n::t;
@@ -25,9 +25,11 @@ pub struct ListPage {
     title: String,
     filters_name: Option<String>,
     filters: QueryFilter,
+    /// The Filter menu's filters, on top of `filters`.
+    conditions: Vec<(String, String, String)>,
+    filter: Entity<FilterDropdown>,
     columns: Vec<ListColumn>,
     rows: Vec<ListRow>,
-    search: Entity<InputState>,
     /// `Paginator.vue`: the page shown, from 1, and the rows on a page.
     page: usize,
     count: usize,
@@ -43,16 +45,22 @@ impl ListPage {
         schema: &str,
         title: &str,
         filters_name: Option<&str>,
+        conditions: Vec<(String, String, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
-        let subscription =
-            cx.subscribe_in(&search, window, |this, _, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.load(cx);
-                }
-            });
+        let fields = session
+            .borrow()
+            .fyo
+            .schema(schema)
+            .map(|schema| schema.fields.clone())
+            .unwrap_or_default();
+        let filter = cx.new(|cx| FilterDropdown::new(&fields, &conditions, window, cx));
+        let subscription = cx.subscribe(&filter, |this, _, event: &FiltersChanged, cx| {
+            this.conditions = event.0.clone();
+            this.page = 1;
+            this.load(cx);
+        });
         let columns = list::columns(&session.borrow().fyo, schema);
         let filters = filters_name.map(list::route_filters).unwrap_or_default();
         let mut page = Self {
@@ -61,9 +69,10 @@ impl ListPage {
             title: title.to_owned(),
             filters_name: filters_name.map(str::to_owned),
             filters,
+            conditions,
+            filter,
             columns,
             rows: Vec::new(),
-            search,
             page: 1,
             count: COUNTS[0] as usize,
             error: None,
@@ -73,10 +82,45 @@ impl ListPage {
         page
     }
 
-    fn load(&mut self, cx: &mut Context<Self>) {
-        let search = self.search.read(cx).value().to_string();
+    /// The route's filters and the Filter menu's, as a query filter.
+    fn query_filter(&self) -> QueryFilter {
         let s = self.session.borrow();
-        match list::rows(&s.fyo, &s.formatter, &self.schema, &self.filters, &search) {
+        let schema = s.fyo.schema(&self.schema);
+        let mut filters = self.filters.clone();
+        for (field, operator, value) in &self.conditions {
+            let fieldtype = schema
+                .and_then(|schema| schema.field(field))
+                .and_then(|f| f.fieldtype);
+            // Money is stored as text with every digit of its precision, which a
+            // filter on it is given in too (`fyo.pesa(0).store`).
+            let value = match (fieldtype, value.parse::<f64>()) {
+                (Some(FieldType::Currency), Ok(n)) => match s.fyo.pesa().from_f64(n) {
+                    Ok(money) => FilterValue::Text(money.store()),
+                    Err(_) => FilterValue::Text(value.clone()),
+                },
+                (Some(FieldType::Int | FieldType::Float), Ok(n)) => FilterValue::Number(n),
+                _ => FilterValue::Text(value.clone()),
+            };
+            let filter = match operator.as_str() {
+                "is null" => Filter::Equals(FilterValue::Null),
+                "is not null" => Filter::op("!=", FilterValue::Null),
+                operator => Filter::op(operator, value),
+            };
+            // A number series filters the names (`emitFilterChange`).
+            let field = if field == "numberSeries" {
+                "name"
+            } else {
+                field
+            };
+            filters.insert(field.to_owned(), filter);
+        }
+        filters
+    }
+
+    fn load(&mut self, cx: &mut Context<Self>) {
+        let filters = self.query_filter();
+        let s = self.session.borrow();
+        match list::rows(&s.fyo, &s.formatter, &self.schema, &filters, "") {
             Ok(rows) => {
                 self.rows = rows;
                 self.page = self.page.clamp(1, self.page_count().max(1));
@@ -240,16 +284,12 @@ impl ListPage {
 impl Render for ListPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header = page_header(self.title.clone(), cx).child(
-            div()
-                .h_flex()
-                .gap_2()
-                .child(div().w(px(200.)).child(small_input(&self.search)))
-                .child(
-                    Button::new("new")
-                        .primary()
-                        .icon("plus")
-                        .on_click(cx.listener(|this, _, _, cx| this.new_doc(cx))),
-                ),
+            div().h_flex().gap_2().child(self.filter.clone()).child(
+                Button::new("new")
+                    .primary()
+                    .icon("plus")
+                    .on_click(cx.listener(|this, _, _, cx| this.new_doc(cx))),
+            ),
         );
         let columns = self.columns.clone();
         let n = columns.len();

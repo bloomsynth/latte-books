@@ -14,7 +14,7 @@
 //! - A child row is edited only in its table's columns; Books also opens a row form with
 //!   the row's other fields.
 //! - Attachments are shown but can't be changed yet.
-//! - No "View linked entries" panel, and the View actions aren't there yet.
+//! - No "View linked entries" panel.
 
 use std::collections::HashMap;
 
@@ -811,6 +811,31 @@ impl FormPage {
                 || single_is_truthy(&s.fyo, "InventorySettings", "enableStockReturns")
         };
         let create = |label: &str, run: ActionFn| Action::new(CREATE, label, run);
+        // `getLedgerLinkAction`: the document's ledger entries, once submitted.
+        let ledger = |stock: bool| {
+            let (label, report) = if stock {
+                ("Stock Entries", "stock-ledger")
+            } else {
+                ("Accounting Entries", "general-ledger")
+            };
+            let filters = vec![
+                ("referenceType".to_owned(), schema.clone()),
+                (
+                    "referenceName".to_owned(),
+                    doc.name().unwrap_or_default().to_owned(),
+                ),
+            ];
+            Action::new(
+                VIEW,
+                label,
+                Rc::new(move |_, _, cx| {
+                    cx.emit(Navigate(Nav::Route(Route::FilteredReport {
+                        name: report.to_owned(),
+                        filters: filters.clone(),
+                    })))
+                }),
+            )
+        };
 
         if is_invoice && submitted {
             // `getMakePaymentAction`.
@@ -838,6 +863,7 @@ impl FormPage {
                     }),
                 ));
             }
+            actions.push(ledger(false));
             if returns_on && !is_return {
                 actions.push(create(
                     "Return",
@@ -858,12 +884,20 @@ impl FormPage {
                     Rc::new(|this, _, cx| this.open_made(stock_transfer::get_invoice, cx)),
                 ));
             }
+            actions.push(ledger(false));
+            actions.push(ledger(true));
             if returns_on && !is_return {
                 actions.push(create(
                     "Return",
                     Rc::new(|this, _, cx| this.open_made(stock_transfer::get_return_doc, cx)),
                 ));
             }
+        }
+        if matches!(schema.as_str(), "JournalEntry" | "Payment") && submitted {
+            actions.push(ledger(false));
+        }
+        if schema == "StockMovement" && submitted {
+            actions.push(ledger(true));
         }
         // `getLeadActions`.
         if schema == "Lead" && !doc.not_inserted() {
@@ -893,11 +927,30 @@ impl FormPage {
                 Some(DocValue::Text(role)) => role.clone(),
                 _ => String::new(),
             };
+            let party = doc.name().unwrap_or_default().to_owned();
+            // "View Sales" and "View Purchases": the invoices of the party.
+            let view = |schema: &'static str, title: &'static str| {
+                let party = party.clone();
+                Rc::new(
+                    move |_: &mut FormPage, _: &mut Window, cx: &mut Context<FormPage>| {
+                        cx.emit(Navigate(Nav::Route(Route::filtered_list(
+                            schema,
+                            title,
+                            &[("party", "=", &party)],
+                        ))))
+                    },
+                ) as ActionFn
+            };
             if role != "Customer" {
                 actions.push(Action::new(
                     "",
                     "Create Purchase",
                     Rc::new(|this, _, cx| this.open_party_invoice("PurchaseInvoice", cx)),
+                ));
+                actions.push(Action::new(
+                    "",
+                    "View Purchases",
+                    view("PurchaseInvoice", "Purchase Invoices"),
                 ));
             }
             if role != "Supplier" {
@@ -905,6 +958,11 @@ impl FormPage {
                     "",
                     "Create Sale",
                     Rc::new(|this, _, cx| this.open_party_invoice("SalesInvoice", cx)),
+                ));
+                actions.push(Action::new(
+                    "",
+                    "View Sales",
+                    view("SalesInvoice", "Sales Invoices"),
                 ));
             }
         }
@@ -969,6 +1027,23 @@ impl FormPage {
                 Rc::new(|this, _, cx| {
                     this.pending = Some(Pending::Cancel);
                     cx.notify();
+                }),
+            ));
+        }
+        // `getViewActions`: a party's General Ledger.
+        if schema == "Party" && doc.inserted() {
+            let filters = vec![(
+                "party".to_owned(),
+                doc.name().unwrap_or_default().to_owned(),
+            )];
+            actions.push(Action::new(
+                VIEW,
+                "General Ledger",
+                Rc::new(move |_, _, cx| {
+                    cx.emit(Navigate(Nav::Route(Route::FilteredReport {
+                        name: "general-ledger".to_owned(),
+                        filters: filters.clone(),
+                    })))
                 }),
             ));
         }
@@ -1735,6 +1810,7 @@ impl FormPage {
 type ActionFn = Rc<dyn Fn(&mut FormPage, &mut Window, &mut Context<FormPage>)>;
 
 const CREATE: &str = "Create";
+const VIEW: &str = "View";
 
 struct Action {
     group: &'static str,
