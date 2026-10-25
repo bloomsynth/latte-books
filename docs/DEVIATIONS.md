@@ -78,7 +78,7 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | Data import missing links | Named with the schema being imported: "(Sales Invoice, Acme)" | Named with the schema linked to: "(Party, Acme)" | Books bug |
 | Import Wizard | Cells are edited in place; Submit is asked in a dialog; the column picker is a dialog | A clicked cell is edited in a box above the table; "Submit entries?" is a checkbox; the column picker is on the page | Simpler in GPUI; the same import |
 | Dashboard period start | The time of day it is now, so the first day's earlier entries are left out | The start of the first day | Books bug |
-| Dashboard charts | A period picker on each chart; line, bar and donut charts | One period picker for the page; plain bars | GPUI has no charts; the same numbers |
+| Dashboard period picker | A period picker on each chart | One period picker for the page, in the header | Simpler; the same numbers |
 | POS shift closing | Posts the difference between Cash and the write-off account, wrong way round, and leaves it on the counter | Counter cleared to Cash; the difference between the counter and the write-off account | Books bug |
 | POS stock check | Stops at the first untracked item | Checks every tracked item | Books bug |
 | POS discounts shown | Only percents above 1 | Any percent above 0 | Books bug |

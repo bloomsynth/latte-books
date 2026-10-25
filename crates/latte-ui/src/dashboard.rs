@@ -5,11 +5,9 @@
 //! Differences from Books:
 //! - The period is picked in the header for the whole page; Books also has a picker on
 //!   each chart.
-//! - The charts are plain bars: Cashflow shows each month's in and out side by side,
-//!   Profit and Loss each month's profit (or loss, in red), and Expenses the top five as
-//!   bars rather than a donut.
 
 use gpui_kit::component::button::*;
+use gpui_kit::component::chart::{AreaChart, BarChart, PieChart};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
@@ -133,78 +131,45 @@ impl DashboardPage {
             .child(t(text))
     }
 
-    /// Bars for each month, side by side when there are two series.
-    fn month_bars(months: &[(String, Vec<(f64, Hsla)>)], cx: &App) -> Div {
-        let theme = cx.theme();
-        let max = months
-            .iter()
-            .flat_map(|(_, bars)| bars.iter().map(|(v, _)| v.abs()))
-            .fold(0.0_f64, f64::max)
-            .max(1.0);
-        div()
-            .h_flex()
-            .items_end()
-            .gap_2()
-            .h(px(160.))
-            .children(months.iter().map(|(month, bars)| {
-                div()
-                    .v_flex()
-                    .flex_1()
-                    .h_full()
-                    .gap_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .h_flex()
-                            .items_end()
-                            .justify_center()
-                            .gap_0p5()
-                            .children(bars.iter().map(|(value, color)| {
-                                let height = (value.abs() / max * 130.0) as f32;
-                                div()
-                                    .w(px(10.))
-                                    .h(px(height.max(1.0)))
-                                    .rounded_sm()
-                                    .bg(*color)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .justify_center()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(month_label(month)),
-                    )
-            }))
-    }
-
     fn render_cashflow(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
         let section = Self::section("Cashflow", cx);
         if !self.has_cashflow {
             return section.child(Self::empty("No transactions yet", cx));
         }
-        let months: Vec<_> = self
+        let (inflow, outflow): (Hsla, Hsla) = (INFLOW.into(), OUTFLOW.into());
+        let money = self.money_fn();
+        // Four round steps up to the largest month, so the axis reads 0, 20K, 40K….
+        let top = self
             .cashflow
             .iter()
-            .map(|m| {
-                (
-                    m.yearmonth.clone(),
-                    vec![(m.inflow, theme.blue), (m.outflow, theme.red.opacity(0.6))],
-                )
-            })
-            .collect();
+            .map(|m| m.inflow.max(m.outflow))
+            .fold(0.0, f64::max);
+        let step = round_step(top / 4.);
+        let chart = AreaChart::new(self.cashflow.clone())
+            .x(|m: &CashflowMonth| SharedString::from(month_label(&m.yearmonth)))
+            .y(|m: &CashflowMonth| m.inflow)
+            .stroke(inflow)
+            .fill(fade(inflow))
+            .natural()
+            .y(|m: &CashflowMonth| m.outflow)
+            .stroke(outflow)
+            .fill(fade(outflow))
+            .natural()
+            .y_domain(0., step * 4.)
+            .y_padding(0., 0.)
+            .y_axis(true)
+            .y_tick_format(short_number)
+            .tooltip_value(move |_, _, value| SharedString::from(money(value)));
         section
             .child(
                 div()
                     .h_flex()
                     .gap_4()
                     .text_sm()
-                    .child(legend(t("Inflow"), theme.blue))
-                    .child(legend(t("Outflow"), theme.red.opacity(0.6))),
+                    .child(legend(t("Inflow"), inflow))
+                    .child(legend(t("Outflow"), outflow)),
             )
-            .child(Self::month_bars(&months, cx))
+            .child(div().h(px(220.)).child(chart))
     }
 
     fn render_unpaid(
@@ -279,20 +244,27 @@ impl DashboardPage {
     }
 
     fn render_profit(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
         let section = Self::section("Profit and Loss", cx);
         if !self.has_profit {
             return section.child(Self::empty("No transactions yet", cx));
         }
-        let months: Vec<_> = self
-            .profit
-            .iter()
-            .map(|(month, value)| {
-                let color = if *value < 0.0 { theme.red } else { theme.green };
-                (month.clone(), vec![(*value, color)])
+        let money = self.money_fn();
+        let chart = BarChart::new(self.profit.clone())
+            .band(|(month, _): &(String, f64)| SharedString::from(month_label(month)))
+            .value(|(_, value): &(String, f64)| *value)
+            .fill(|(_, value): &(String, f64), _, _, _| {
+                let color: Hsla = if *value < 0.0 { OUTFLOW } else { INFLOW }.into();
+                color
             })
-            .collect();
-        section.child(Self::month_bars(&months, cx))
+            // The value axis spans the data's own range, so its ticks fall on odd
+            // amounts; the grid and the tooltips are enough.
+            .grid(true)
+            .tick_margin(2)
+            .max_band_width(px(18.))
+            .corner_radii(px(3.))
+            .min_length(2.)
+            .tooltip_value(move |_, value| SharedString::from(money(value)));
+        section.child(div().h(px(220.)).child(chart))
     }
 
     fn render_expenses(&self, cx: &mut Context<Self>) -> Div {
@@ -301,60 +273,131 @@ impl DashboardPage {
         if self.expenses.is_empty() {
             return section.child(Self::empty("No expenses in this period", cx));
         }
-        let max = self
+        let total: f64 = self.expenses.iter().map(|(_, v)| *v).sum();
+        let slices: Vec<(String, f64, Hsla)> = self
             .expenses
             .iter()
-            .map(|(_, v)| *v)
-            .fold(0.0, f64::max)
-            .max(1.0);
-        let total: f64 = self.expenses.iter().map(|(_, v)| *v).sum();
-        let colors = [
-            theme.blue,
-            theme.cyan,
-            theme.green,
-            theme.yellow,
-            theme.magenta,
-        ];
-        section
-            .children(
-                self.expenses
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (account, value))| {
-                        div()
-                            .v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .justify_between()
-                                    .text_sm()
-                                    .child(account.clone())
-                                    .child(self.money(*value)),
-                            )
-                            .child(
-                                div()
-                                    .h(px(8.))
-                                    .w_full()
-                                    .rounded_full()
-                                    .bg(theme.muted)
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(relative((value / max) as f32))
-                                            .rounded_full()
-                                            .bg(colors[i % colors.len()]),
-                                    ),
-                            )
-                    }),
+            .enumerate()
+            .map(|(i, (account, value))| (account.clone(), *value, expense_color(i)))
+            .collect();
+        let money = self.money_fn();
+        let donut = PieChart::new(slices.clone())
+            .value(|(_, value, _): &(String, f64, Hsla)| *value as f32)
+            .color(|(_, _, color): &(String, f64, Hsla)| *color)
+            .inner_radius(62.)
+            .outer_radius(88.)
+            .pad_angle(0.02)
+            .tooltip_name(|(account, _, _): &(String, f64, Hsla)| account.clone().into())
+            .tooltip_value(move |_, value, _| SharedString::from(money(f64::from(value))));
+        let legend = div().v_flex().flex_1().gap_3().children(slices.iter().map(
+            |(account, value, color)| {
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .text_sm()
+                    .child(div().size(px(10.)).flex_none().rounded_full().bg(*color))
+                    .child(div().flex_1().truncate().child(account.clone()))
+                    .child(div().flex_none().child(self.money(*value)))
+            },
+        ));
+        let center = div()
+            .absolute()
+            .inset_0()
+            .v_flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.money(total)),
             )
             .child(
                 div()
-                    .text_sm()
+                    .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(format!("{} {}", t("Total Spending"), self.money(total))),
-            )
+                    .child(t("Total Spending")),
+            );
+        section.child(
+            div().h_flex().gap_6().items_center().child(legend).child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .size(px(190.))
+                    .child(donut)
+                    .child(center),
+            ),
+        )
     }
+
+    /// Formats an amount as money, for the charts' tooltips.
+    fn money_fn(&self) -> impl Fn(f64) -> String + 'static {
+        let session = self.session.clone();
+        move |value| {
+            let s = session.borrow();
+            match s.fyo.pesa().from_f64(value) {
+                Ok(money) => s.formatter.currency(&money),
+                Err(_) => value.to_string(),
+            }
+        }
+    }
+}
+
+/// Books' chart colours: blue for money in and profit, pink for money out and loss.
+const INFLOW: Rgba = Rgba {
+    r: 0.231,
+    g: 0.510,
+    b: 0.965,
+    a: 1.0,
+};
+const OUTFLOW: Rgba = Rgba {
+    r: 0.882,
+    g: 0.506,
+    b: 0.659,
+    a: 1.0,
+};
+
+/// A colour fading to clear downwards, under a line in an area chart.
+fn fade(color: Hsla) -> Background {
+    linear_gradient(
+        180.,
+        linear_color_stop(color.opacity(0.35), 0.),
+        linear_color_stop(color.opacity(0.), 1.),
+    )
+}
+
+/// The top expenses' colours: Books' pink, lighter for each smaller one.
+fn expense_color(i: usize) -> Hsla {
+    let pink: Hsla = OUTFLOW.into();
+    pink.opacity([1.0, 0.75, 0.55, 0.38, 0.24][i.min(4)])
+}
+
+/// The smallest of 1, 2, 2.5 or 5 times a power of ten that is at least `value`.
+fn round_step(value: f64) -> f64 {
+    if value <= 0. {
+        return 1.;
+    }
+    let power = 10f64.powf(value.log10().floor());
+    [1., 2., 2.5, 5., 10.]
+        .into_iter()
+        .map(|m| m * power)
+        .find(|step| *step >= value)
+        .unwrap_or(10. * power)
+}
+
+/// An axis label: `44K`, `1.2M`.
+fn short_number(value: f64) -> String {
+    let abs = value.abs();
+    let (scaled, suffix) = if abs >= 1e9 {
+        (value / 1e9, "B")
+    } else if abs >= 1e6 {
+        (value / 1e6, "M")
+    } else if abs >= 1e3 {
+        (value / 1e3, "K")
+    } else {
+        (value, "")
+    };
+    let text = format!("{scaled:.1}");
+    format!("{}{suffix}", text.trim_end_matches(".0"))
 }
 
 /// `yyyy-MM` as Books labels it: `Oct 2026`.

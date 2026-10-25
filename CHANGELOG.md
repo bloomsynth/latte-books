@@ -3,6 +3,12 @@
 What changes in each release of Latte Books. A release's notes on GitHub are its section
 here.
 
+## Unreleased
+
+- The dashboard draws Frappe Books' charts: cash in and out as shaded areas, profit and
+  loss as bars above and below zero, and the top expenses as a donut with the total in
+  the middle.
+
 ## [0.1.0-beta.1] - 2026-10-24
 
 The first beta: Frappe Books v0.36.0, ported to Rust as a native desktop app.

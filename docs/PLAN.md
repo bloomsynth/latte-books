@@ -313,7 +313,9 @@ CI runs the parity suite on every PR. Any difference fails the build.
   *Import, custom fields and dashboard 2026-10-23: `latte_core::importer` and the Import
   Wizard page; CustomForm and CustomField, with a new field's column added when the file
   is opened; `latte_core::dashboard` and the Dashboard page with plain bar charts. Four
-  Books bugs are fixed. Not yet checked against Books by hand.*
+  Books bugs are fixed. Not yet checked against Books by hand. 2026-10-25: Books' charts,
+  an area chart for cashflow, bars around zero for profit and loss, and a donut for the
+  top expenses.*
 - The Get Started page. *2026-10-23: `latte_core::views::get_started` and the page; the
   desk opens on it until every card is done or it is hidden. One Books bug is fixed. Not
   yet checked against Books by hand.*
