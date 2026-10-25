@@ -3,7 +3,7 @@
 What changes in each release of Latte Books. A release's notes on GitHub are its section
 here.
 
-## Unreleased
+## [0.1.0-beta.2] - 2026-10-25
 
 - The dashboard draws Frappe Books' charts: cash in and out as shaded areas, profit and
   loss as bars above and below zero, and the top expenses as a donut with the total in
