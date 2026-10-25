@@ -1248,7 +1248,10 @@ impl FormPage {
         let mut buttons: Vec<AnyElement> = Vec::new();
         let schema = doc.schema_name().to_owned();
         // `canPrint`.
-        if doc.inserted() && !doc.is_cancelled() && !doc.dirty() && crate::print::can_print(&schema)
+        if doc.inserted()
+            && !doc.is_cancelled()
+            && !doc.dirty()
+            && crate::print::can_print(&self.session, &schema)
         {
             let name = doc.name().unwrap_or_default().to_owned();
             buttons.push(

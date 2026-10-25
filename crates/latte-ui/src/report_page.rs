@@ -8,7 +8,7 @@
 //!
 //! Differences from Books:
 //! - Dates are typed as YYYY-MM-DD.
-//! - Export saves CSV, and JSON for the GSTR reports; Books also offers a PDF print.
+//! - The JSON export names the software "Latte Books".
 
 use std::collections::{HashMap, HashSet};
 
@@ -55,6 +55,7 @@ pub struct ReportPage {
     /// `Paginator.vue`, for the ledgers: the page, from 1, and the rows on a page.
     page: usize,
     count: usize,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -103,8 +104,10 @@ impl ReportPage {
             folded: HashSet::new(),
             page: 1,
             count: 50,
+            focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         };
+        page.focus.focus(window, cx);
         // The first run sets the default filters, which the controls then show.
         page.run(window, cx);
         for filter in &filters {
@@ -293,10 +296,18 @@ impl ReportPage {
         let data = {
             let s = self.session.borrow();
             self.report.can_export(&s.fyo).and_then(|()| {
+                let precision = s.formatter.display_precision;
                 if json {
-                    self.report
-                        .export_json(&s.fyo)
-                        .unwrap_or_else(|| Ok(String::new()))
+                    // GSTR's own JSON for the GST portal, else `getJsonData`.
+                    self.report.export_json(&s.fyo).unwrap_or_else(|| {
+                        Ok(reports::json(
+                            self.report.as_ref(),
+                            &s.fyo,
+                            &self.columns,
+                            &self.rows,
+                            precision,
+                        ))
+                    })
                 } else {
                     let precision = s.formatter.display_precision;
                     Ok(reports::csv(&self.columns, &self.rows, precision))
@@ -472,6 +483,21 @@ impl ReportPage {
         rows
     }
 
+    /// `/report-print/<name>`: the Print View of the report as shown.
+    fn open_print_view(&mut self, cx: &mut Context<Self>) {
+        cx.set_global(crate::report_print::LastReport(
+            crate::report_print::ReportSnapshot {
+                name: self.report.report_name().to_owned(),
+                title: self.report.title().to_owned(),
+                columns: self.columns.clone(),
+                rows: self.rows.clone(),
+            },
+        ));
+        cx.emit(Navigate(crate::Nav::Route(
+            latte_core::views::sidebar::Route::ReportPrint(self.report.report_name().to_owned()),
+        )));
+    }
+
     /// `Paginator.vue`.
     fn render_paginator(&self, cx: &mut Context<Self>) -> Div {
         let total = self.rows.len();
@@ -619,51 +645,59 @@ fn cell_color(cell: &latte_core::reports::ReportCell, precision: usize) -> Hsla 
 
 impl Render for ReportPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // `Report.vue`'s header: the Export group (`getCommonExportActions`).
-        let json = self.report.has_json_export();
-        let menu = self.menu.then(|| {
-            deferred(
-                anchored().anchor(Anchor::TopRight).snap_to_window().child(
-                    popover_panel()
-                        .id("export-menu")
-                        .occlude()
-                        .mt_2()
-                        .min_w(px(160.))
-                        .p_1()
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.menu = false;
-                            cx.notify();
-                        }))
-                        .child(dropdown_item("export-csv", "CSV").on_click(cx.listener(
-                            |this, _, window, cx| {
+        // `Report.vue`'s header: the Export group (`getCommonExportActions`), then the
+        // printer button.
+        let menu =
+            self.menu.then(|| {
+                deferred(
+                    anchored().anchor(Anchor::TopRight).snap_to_window().child(
+                        popover_panel()
+                            .id("export-menu")
+                            .occlude()
+                            .mt_2()
+                            .min_w(px(160.))
+                            .p_1()
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                                 this.menu = false;
-                                this.export(false, window, cx)
-                            },
-                        )))
-                        .when(json, |d| {
-                            d.child(dropdown_item("export-json", "JSON").mt_1().on_click(
+                                cx.notify();
+                            }))
+                            .child(dropdown_item("export-csv", "CSV").on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.menu = false;
+                                    this.export(false, window, cx)
+                                },
+                            )))
+                            .child(dropdown_item("export-json", "JSON").mt_1().on_click(
                                 cx.listener(|this, _, window, cx| {
                                     this.menu = false;
                                     this.export(true, window, cx)
                                 }),
-                            ))
-                        }),
-                ),
-            )
-            .with_priority(1)
-        });
+                            )),
+                    ),
+                )
+                .with_priority(1)
+            });
         let header = page_header(t(self.report.title()), cx).child(
             div()
-                .relative()
+                .h_flex()
+                .gap_2()
                 .child(
-                    Button::new("export")
-                        .label(t("Export"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.menu = !this.menu;
-                            cx.notify();
-                        })),
+                    div()
+                        .relative()
+                        .child(Button::new("export").primary().label(t("Export")).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.menu = !this.menu;
+                                cx.notify();
+                            }),
+                        ))
+                        .children(menu),
                 )
-                .children(menu),
+                .child(
+                    Button::new("report-print-view")
+                        .icon("printer")
+                        .tooltip(t("Open Report Print View"))
+                        .on_click(cx.listener(|this, _, _, cx| this.open_print_view(cx))),
+                ),
         );
         let filters: Vec<AnyElement> = self
             .filters
@@ -760,6 +794,15 @@ impl Render for ReportPage {
             .v_flex()
             .size_full()
             .text_color(gray(900))
+            .track_focus(&self.focus)
+            // Ctrl+P (⌘P) opens the Print View, as Books' report shortcut does.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let k = &event.keystroke;
+                if k.key == "p" && (k.modifiers.control || k.modifiers.platform) {
+                    this.open_print_view(cx);
+                    cx.stop_propagation();
+                }
+            }))
             .child(header)
             .children(self.error.clone().map(|e| error_message(e, cx)))
             .when(!self.filters.is_empty(), |d| {
