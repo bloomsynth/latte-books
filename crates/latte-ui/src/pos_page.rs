@@ -1,21 +1,30 @@
-//! The point of sale: `src/pages/POS/` @ v0.36.0 (the Classic UI, with the open and close
-//! shift and payment dialogs).
+//! The point of sale: `src/pages/POS/` @ v0.36.0, the Classic UI (`ClassicPOS.vue`,
+//! `components/POS/Classic/`) with its Open and Close POS Shift, Payment, Saved Invoice
+//! and Batch Selection modals.
 //!
 //! The work is done by `latte_core::pos`; this draws it.
 //!
 //! Differences from Books:
-//! - Opening and closing a shift, and paying, are panels on the page rather than dialogs.
-//! - Saved sales are listed beside the cart rather than in a dialog, without a search.
+//! - The item search filters the items shown and adds one on Enter, rather than being a
+//!   Link with a dropdown; items show their initials, not their image.
+//! - A row's details (the chevron) are shown, not edited, and Payment highlights nothing
+//!   for the chosen method, as in Books, but starts at Cash for the grand total.
+//! - The amounts of payment methods other than Cash are typed on opening and closing a
+//!   shift; Books leaves them read-only.
 //! - Not here yet: the Modern UI, item groups, the keyboard shortcuts, returns, coupons,
-//!   loyalty points, price lists, and editing a row's rate or discount. Pricing rules
-//!   apply as on any invoice.
+//!   loyalty points, price lists, item enquiry, and editing a row's rate or discount.
+//!   Pricing rules apply as on any invoice.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::books::Text as _;
-use crate::widgets::Button;
-use crate::widgets::small_input;
-use gpui_kit::component::input::{InputEvent, InputState};
+use crate::books::{self, Text as _, black, gray, white};
+use crate::pos_parts::{
+    big_button, cell_text, floating_field, hex_colour, initials, modal, modal_card, ratio_cell,
+    receipt_icon, shown_field, table_header,
+};
+use crate::widgets::{Button, Kind, control_frame, toast};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -31,8 +40,12 @@ use latte_db::{DocValue, DocValueMap, Filter, GetAllOptions, QueryFilter};
 use crate::i18n::t;
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::Shared;
-use crate::widgets::{error_message, field_label, info_message, page_header};
+use crate::widgets::{field_label, page_header};
 use crate::{Nav, Navigate};
+
+/// The default colours of the POS's buttons (`Defaults.json`).
+const GREEN_BUTTON: u32 = 0x86EFAC;
+const RED_BUTTON: u32 = 0xF98080;
 
 /// A row of counted cash: its denomination and how many.
 struct CashRow {
@@ -49,6 +62,8 @@ struct ShiftPanel {
     amounts: Vec<(String, Entity<InputState>)>,
     /// At closing: what each method is expected to have.
     expected: HashMap<String, Money>,
+    /// At closing: what each method opened with.
+    opened: HashMap<String, Money>,
 }
 
 struct PaymentPanel {
@@ -81,8 +96,14 @@ pub struct PosPage {
     customer: Entity<LinkInput>,
     payment: Option<PaymentPanel>,
     held: Option<HeldPanel>,
-    /// An item to pick a batch of, and how many to add.
-    batch_for: Option<(PosItem, f64)>,
+    /// The Saved Invoice modal's search by name.
+    held_search: Entity<InputState>,
+    /// An item to pick a batch of, how many to add, and the batch picker.
+    batch_for: Option<(PosItem, f64, Entity<LinkInput>)>,
+    /// `tableView`: the items as a table rather than a grid.
+    table_view: bool,
+    /// The cart rows whose details are shown.
+    expanded: HashSet<usize>,
     error: Option<String>,
     info: Option<String>,
     _subscriptions: Vec<Subscription>,
@@ -108,6 +129,8 @@ fn money_text(value: Option<&DocValue>) -> String {
 }
 
 fn number_text(n: f64) -> String {
+    // No "-0".
+    let n = n + 0.0;
     if n.fract() == 0.0 {
         format!("{n:.0}")
     } else {
@@ -121,8 +144,11 @@ impl PosPage {
             .new(|cx| InputState::new(window, cx).placeholder(t("Search Item (Name or Barcode)")));
         let customers = customer_options(&session);
         let customer = cx.new(|cx| LinkInput::new(customers, t("Customer"), window, cx));
+        let held_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("Search by Invoice Name")));
         let subscriptions = vec![
             cx.observe(&search, |_, _, cx| cx.notify()),
+            cx.observe(&held_search, |_, _, cx| cx.notify()),
             cx.subscribe_in(
                 &search,
                 window,
@@ -150,7 +176,10 @@ impl PosPage {
             customer,
             payment: None,
             held: None,
+            held_search,
             batch_for: None,
+            table_view: false,
+            expanded: HashSet::new(),
             error: None,
             info: None,
             _subscriptions: subscriptions,
@@ -212,6 +241,7 @@ impl PosPage {
         self.payment = None;
         self.held = None;
         self.batch_for = None;
+        self.expanded.clear();
     }
 
     fn set_customer(&mut self, party: String, _: &mut Window, cx: &mut Context<Self>) {
@@ -243,7 +273,7 @@ impl PosPage {
         match found {
             Ok(Some((name, quantity))) => {
                 if let Some(item) = self.items.iter().find(|i| i.name == name).cloned() {
-                    self.add(item, None, quantity, cx);
+                    self.add(item, None, quantity, window, cx);
                     self.search
                         .update(cx, |input, cx| input.set_value("", window, cx));
                 }
@@ -254,11 +284,34 @@ impl PosPage {
         cx.notify();
     }
 
-    fn add(&mut self, item: PosItem, batch: Option<String>, quantity: f64, cx: &mut Context<Self>) {
+    fn add(
+        &mut self,
+        item: PosItem,
+        batch: Option<String>,
+        quantity: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.error = None;
         self.info = None;
         if item.has_batch && batch.is_none() {
-            self.batch_for = Some((item, quantity));
+            let options = self
+                .qty_map
+                .get(&item.name)
+                .map(|q| {
+                    q.batches
+                        .keys()
+                        .map(|b| LinkOption {
+                            value: b.clone().into(),
+                            label: b.clone().into(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let picker = cx.new(|cx| LinkInput::new(options, t("Batch"), window, cx));
+            self._subscriptions
+                .push(cx.observe(&picker, |_, _, cx| cx.notify()));
+            self.batch_for = Some((item, quantity, picker));
             cx.notify();
             return;
         }
@@ -323,6 +376,20 @@ impl PosPage {
         cx.notify();
     }
 
+    /// `removeAddedItem`: the row's trash icon.
+    fn remove_row(&mut self, idx: usize, cx: &mut Context<Self>) {
+        self.error = None;
+        let Some(sale) = &mut self.sale else {
+            return;
+        };
+        let mut s = self.session.borrow_mut();
+        if let Err(e) = sale.remove(&mut s.fyo, "items", idx) {
+            self.error = Some(e.to_string());
+        }
+        self.expanded.clear();
+        cx.notify();
+    }
+
     /// `saveOrder`: saves the sale to take up later, and starts a new one.
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.error = None;
@@ -383,6 +450,7 @@ impl PosPage {
                 self.held = None;
                 self.payment = None;
                 self.batch_for = None;
+                self.expanded.clear();
                 if submitted {
                     self.open_payment(window, cx);
                 }
@@ -583,6 +651,7 @@ impl PosPage {
                     cash,
                     amounts,
                     expected: HashMap::new(),
+                    opened: HashMap::new(),
                 });
             }
             Err(e) => self.error = Some(e.to_string()),
@@ -603,6 +672,7 @@ impl PosPage {
             Ok((opening, closing)) => {
                 let cash = Self::cash_rows(closing.table("closingCash"), window, cx);
                 let mut expected = HashMap::new();
+                let mut opened = HashMap::new();
                 let mut amounts = Vec::new();
                 for row in closing.table("closingAmounts") {
                     let Some(DocValue::Text(method)) = row.get("paymentMethod") else {
@@ -610,6 +680,9 @@ impl PosPage {
                     };
                     if let Some(DocValue::Money(money)) = row.get("expectedAmount") {
                         expected.insert(method.clone(), money.clone());
+                    }
+                    if let Some(DocValue::Money(money)) = row.get("openingAmount") {
+                        opened.insert(method.clone(), money.clone());
                     }
                     if method != "Cash" {
                         let text = money_text(row.get("expectedAmount"));
@@ -621,6 +694,7 @@ impl PosPage {
                     cash,
                     amounts,
                     expected,
+                    opened,
                 });
             }
             Err(e) => self.error = Some(e.to_string()),
@@ -837,188 +911,52 @@ impl PosPage {
         cash_amount(&doc, "closingCash", &s.fyo).ok()
     }
 
-    fn render_shift(&self, opening: bool, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let (Mode::Opening(panel) | Mode::Closing(panel)) = &self.mode else {
-            return div().into_any_element();
+    /// A big button's colour: the POS profile's (when Books reads it), else Defaults',
+    /// else Books' default.
+    fn button_colour(&self, fieldname: &str, default: u32, from_profile: bool) -> Hsla {
+        let s = self.session.borrow();
+        let text = |value: Option<DocValue>| match value {
+            Some(DocValue::Text(text)) if !text.is_empty() => Some(text),
+            _ => None,
         };
-        let counted = self.counted_cash(panel, cx);
-        let title = if opening {
-            t("Open POS Shift")
-        } else {
-            t("Close POS Shift")
-        };
-        let cash_table = div()
-            .v_flex()
-            .gap_1()
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .text_12()
-                    .text_color(theme.muted_foreground)
-                    .child(div().w(px(160.)).child(t("Denomination")))
-                    .child(div().w(px(100.)).child(t("Count"))),
-            )
-            .children(panel.cash.iter().map(|row| {
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(div().w(px(160.)).child(small_input(&row.denomination)))
-                    .child(div().w(px(100.)).child(small_input(&row.count)))
-            }))
-            .child(
-                div().child(
-                    Button::new("add-denomination")
-                        .small()
-                        .ghost()
-                        .label(t("Add Row"))
-                        .on_click(cx.listener(|this, _, window, cx| this.add_cash_row(window, cx))),
-                ),
-            );
-
-        let cash_line = {
-            let counted_text = counted
-                .as_ref()
-                .map_or_else(String::new, |m| self.currency(m));
-            let mut line = div()
-                .h_flex()
-                .gap_4()
-                .child(div().w(px(120.)).child(t("Cash")))
-                .child(div().w(px(140.)).child(counted_text));
-            if !opening {
-                let expected = panel.expected.get("Cash");
-                let difference = match (counted.as_ref(), expected) {
-                    (Some(c), Some(e)) => c.sub(e).ok(),
-                    _ => None,
-                };
-                line = line
-                    .child(
-                        div()
-                            .w(px(140.))
-                            .child(expected.map(|m| self.currency(m)).unwrap_or_default()),
-                    )
-                    .child(
-                        div()
-                            .w(px(140.))
-                            .when(difference.as_ref().is_some_and(|d| d.is_negative()), |d| {
-                                d.text_color(theme.red)
-                            })
-                            .child(difference.map(|d| self.currency(&d)).unwrap_or_default()),
-                    );
-            }
-            line
-        };
-        let amounts = div()
-            .v_flex()
-            .gap_1()
-            .child(
-                div()
-                    .h_flex()
-                    .gap_4()
-                    .text_12()
-                    .text_color(theme.muted_foreground)
-                    .child(div().w(px(120.)).child(t("Payment Method")))
-                    .child(div().w(px(140.)).child(if opening {
-                        t("Opening Amount")
-                    } else {
-                        t("Closing Amount")
-                    }))
-                    .when(!opening, |d| {
-                        d.child(div().w(px(140.)).child(t("Expected Amount")))
-                            .child(div().w(px(140.)).child(t("Difference Amount")))
-                    }),
-            )
-            .child(cash_line)
-            .children(panel.amounts.iter().map(|(method, state)| {
-                let mut line = div()
-                    .h_flex()
-                    .gap_4()
-                    .child(div().w(px(120.)).child(method.clone()))
-                    .child(div().w(px(140.)).child(small_input(state)));
-                if !opening {
-                    let expected = panel.expected.get(method);
-                    let typed = self
-                        .session
-                        .borrow()
-                        .fyo
-                        .pesa()
-                        .parse(&value(state, cx))
-                        .ok();
-                    let difference = match (typed, expected) {
-                        (Some(c), Some(e)) => c.sub(e).ok(),
-                        _ => None,
-                    };
-                    line = line
-                        .child(
-                            div()
-                                .w(px(140.))
-                                .child(expected.map(|m| self.currency(m)).unwrap_or_default()),
-                        )
-                        .child(
-                            div()
-                                .w(px(140.))
-                                .child(difference.map(|d| self.currency(&d)).unwrap_or_default()),
-                        );
-                }
-                line
-            }));
-
-        let actions = div()
-            .h_flex()
-            .gap_2()
-            .when(!opening, |d| {
-                d.child(
-                    Button::new("cancel-closing")
-                        .small()
-                        .ghost()
-                        .label(t("Cancel"))
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.cancel_closing(window, cx)),
-                        ),
-                )
-            })
-            .child(
-                Button::new("shift-submit")
-                    .small()
-                    .primary()
-                    .label(if opening {
-                        t("Open Shift")
-                    } else {
-                        t("Close Shift")
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if opening {
-                            this.open_shift(window, cx)
-                        } else {
-                            this.close_shift(window, cx)
-                        }
-                    })),
-            );
-
-        div()
-            .id("shift")
-            .v_flex()
-            .flex_1()
-            .gap_4()
-            .p_4()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .text_14()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title),
-            )
-            .child(field_label(t("Cash Denominations"), false, cx))
-            .child(cash_table)
-            .child(field_label(t("Amounts"), false, cx))
-            .child(amounts)
-            .child(actions)
-            .into_any_element()
+        from_profile
+            .then(|| text(s.fyo.get_value("POSSettings", None, "posProfile")))
+            .flatten()
+            .and_then(|profile| text(s.fyo.get_value("POSProfile", Some(&profile), fieldname)))
+            .or_else(|| text(s.fyo.get_value("Defaults", None, fieldname)))
+            .and_then(|colour| hex_colour(&colour))
+            .unwrap_or_else(|| books::hex(default))
     }
 
-    fn render_items(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
+    /// `fyo.currencySymbols[currency]`.
+    fn symbol(&self) -> Option<String> {
+        let s = self.session.borrow();
+        s.formatter
+            .currency_symbols
+            .get(&s.formatter.currency)
+            .cloned()
+    }
+
+    /// Money as the floating inputs show it: rounded, without its symbol.
+    fn rounded(&self, money: Option<&Money>) -> String {
+        match money {
+            Some(money) => money.round(None),
+            None => self.session.borrow().fyo.pesa().zero().round(None),
+        }
+    }
+
+    fn discounting(&self) -> bool {
+        let s = self.session.borrow();
+        latte_core::models::helpers::single_is_truthy(
+            &s.fyo,
+            "AccountingSettings",
+            "enableDiscounting",
+        )
+    }
+
+    /// The left of `ClassicPOS.vue`: the item search, `ItemsGrid` or `ItemsTable`, and
+    /// `POSQuickActions` at the bottom.
+    fn render_items(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let query = self.search.read(cx).value().to_lowercase();
         let items: Vec<PosItem> = self
             .items
@@ -1026,461 +964,1265 @@ impl PosPage {
             .filter(|item| query.is_empty() || item.name.to_lowercase().contains(&query))
             .cloned()
             .collect();
-        let show_stock = {
-            let s = self.session.borrow();
-            pos::sells_inventory_items(&s.fyo)
+        let list = if self.table_view {
+            self.render_items_table(items, cx)
+        } else {
+            self.render_items_grid(items, window, cx)
         };
+        let view_label = if self.table_view {
+            t("Grid View")
+        } else {
+            t("List View")
+        };
+        let list_label = t("Sales Invoice List");
+        let quick_actions = div()
+            .absolute()
+            .bottom(px(11.))
+            .left(px(16.))
+            .p_1()
+            .h_flex()
+            .gap_3()
+            .child(
+                div()
+                    .id("toggle-view")
+                    .p(px(6.))
+                    .rounded(books::RADIUS_MD)
+                    .bg(gray(100))
+                    .cursor_pointer()
+                    .child(books::icon(
+                        if self.table_view { "grid" } else { "list" },
+                        px(20.),
+                        black(),
+                    ))
+                    .tooltip(move |window, cx| Tooltip::new(view_label.clone()).build(window, cx))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.table_view = !this.table_view;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .id("sales-invoice-list")
+                    .px(px(6.))
+                    .py_1()
+                    .rounded(books::RADIUS_MD)
+                    .bg(gray(100))
+                    .cursor_pointer()
+                    .child(receipt_icon())
+                    .tooltip(move |window, cx| Tooltip::new(list_label.clone()).build(window, cx))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(Navigate(Nav::Route(Route::list(
+                            "SalesInvoice",
+                            "Sales Invoices",
+                            None,
+                        ))))
+                    })),
+            );
+        div()
+            .relative()
+            .flex_grow(5.)
+            .flex_basis(px(0.))
+            .min_w_0()
+            .h_full()
+            .bg(white())
+            .border_1()
+            .border_color(gray(200))
+            .rounded(books::RADIUS_MD)
+            .child(
+                div()
+                    .v_flex()
+                    .size_full()
+                    .p_4()
+                    .child(
+                        control_frame(false, false).child(
+                            Input::new(&self.search)
+                                .appearance(false)
+                                .h(px(32.))
+                                .px_3()
+                                .text_13(),
+                        ),
+                    )
+                    .child(list),
+            )
+            .child(quick_actions)
+    }
+
+    /// `ItemsGrid.vue`: a card per item, its initials with the quantity available at the
+    /// corner, then its name and rate; one to four a row as the window widens.
+    fn render_items_grid(
+        &self,
+        items: Vec<PosItem>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let width = window.viewport_size().width;
+        let columns = if width >= px(1280.) {
+            4
+        } else if width >= px(1024.) {
+            3
+        } else if width >= px(768.) {
+            2
+        } else {
+            1
+        };
+        let symbol = self.symbol().unwrap_or_default();
         let cards = items.into_iter().enumerate().map(|(i, item)| {
+            let rate = item
+                .rate
+                .as_ref()
+                .map(|r| format!("{symbol} {}", r.round(None)))
+                .unwrap_or_default();
+            let (badge_bg, badge_fg) = if item.available > 0.0 {
+                (books::color("green", 100), books::color("green", 900))
+            } else {
+                (books::color("red", 100), books::color("red", 900))
+            };
+            let picture = div()
+                .relative()
+                .size_full()
+                .p_2()
+                .child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(books::RADIUS_LG)
+                        .bg(gray(100))
+                        .child(
+                            div()
+                                .text_size(px(28.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(gray(400))
+                                .child(initials(&item.name)),
+                        ),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_1()
+                        .right_1()
+                        .size_6()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(badge_bg)
+                        .text_color(badge_fg)
+                        .child(number_text(item.available)),
+                );
+            div()
+                .id(("item", i))
+                .v_flex()
+                .p_1()
+                .border_1()
+                .border_color(gray(300))
+                .text_12()
+                .text_color(black())
+                .text_center()
+                .cursor_pointer()
+                .child(
+                    div()
+                        .flex()
+                        .justify_center()
+                        .child(div().size(px(128.)).max_w_full().p_1().child(picture)),
+                )
+                .child(
+                    div()
+                        .text_14()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(item.name.clone()),
+                )
+                .child(div().text_14().font_weight(FontWeight::MEDIUM).child(rate))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.add(item.clone(), None, 1.0, window, cx)
+                }))
+        });
+        div()
+            .id("items")
+            .flex_1()
+            .min_h_0()
+            .py_2()
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .grid()
+                    .grid_cols(columns)
+                    .gap_2()
+                    .pb_12()
+                    .children(cards),
+            )
+    }
+
+    /// `ItemsTable.vue`: Item, Rate, Qty and Unit.
+    fn render_items_table(&self, items: Vec<PosItem>, cx: &mut Context<Self>) -> Stateful<Div> {
+        let columns = [
+            (t("Item"), 1., false),
+            (t("Rate"), 1., true),
+            (t("Qty"), 1., true),
+            (t("Unit"), 0.7, false),
+        ];
+        let rows = items.into_iter().enumerate().map(|(i, item)| {
             let rate = item
                 .rate
                 .as_ref()
                 .map(|r| self.currency(r))
                 .unwrap_or_default();
-            let available = item.available;
             div()
-                .id(("item", i))
-                .w(px(150.))
-                .p_3()
-                .v_flex()
-                .gap_1()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.border)
+                .id(("item-row", i))
+                .h_flex()
+                .w_full()
+                .h_12()
+                .px_2()
+                .border_b_1()
+                .border_l_1()
+                .border_r_1()
+                .border_color(gray(200))
                 .cursor_pointer()
-                .hover(|d| d.bg(theme.list_hover))
+                .hover(|d| d.bg(gray(25)))
+                .child(ratio_cell(1.).child(cell_text(item.name.clone(), false)))
+                .child(ratio_cell(1.).child(cell_text(rate, true)))
+                .child(ratio_cell(1.).child(cell_text(number_text(item.available), true)))
                 .child(
-                    div()
-                        .font_weight(FontWeight::MEDIUM)
-                        .truncate()
-                        .child(item.name.clone()),
+                    ratio_cell(0.7).child(cell_text(item.unit.clone().unwrap_or_default(), false)),
                 )
-                .child(div().text_12().child(rate))
-                .when(show_stock, |d| {
-                    d.child(
-                        div()
-                            .text_11()
-                            .text_color(if available > 0.0 {
-                                theme.muted_foreground
-                            } else {
-                                theme.red
-                            })
-                            .child(format!(
-                                "{} {}",
-                                number_text(available),
-                                item.unit.clone().unwrap_or_default()
-                            )),
-                    )
-                })
-                .on_click(cx.listener(move |this, _, _, cx| this.add(item.clone(), None, 1.0, cx)))
-        });
-        let batches = self.batch_for.as_ref().map(|(item, quantity)| {
-            let quantity = *quantity;
-            let rows: Vec<(String, f64)> = self
-                .qty_map
-                .get(&item.name)
-                .map(|q| q.batches.iter().map(|(b, n)| (b.clone(), *n)).collect())
-                .unwrap_or_default();
-            div()
-                .v_flex()
-                .gap_1()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.border)
-                .child(format!("{} {}", t("Select a batch of"), item.name))
-                .children(rows.into_iter().enumerate().map(|(i, (batch, qty))| {
-                    let item = item.clone();
-                    let label = format!("{batch} ({})", number_text(qty));
-                    Button::new(("batch", i))
-                        .small()
-                        .ghost()
-                        .label(label)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.add(item.clone(), Some(batch.clone()), quantity, cx)
-                        }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.add(item.clone(), None, 1.0, window, cx)
                 }))
         });
         div()
-            .v_flex()
+            .id("items")
             .flex_1()
-            .gap_3()
-            .p_4()
-            .child(small_input(&self.search))
-            .children(batches)
-            .child(
-                div()
-                    .id("items")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .child(div().h_flex().flex_wrap().gap_2().children(cards)),
-            )
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(table_header(&columns).mt_4())
+            .child(div().pb_12().children(rows))
     }
 
-    fn render_held(&self, panel: &HeldPanel, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
-        let tab = |id: &'static str, label: &str, submitted: bool| {
-            let button = Button::new(id).small().label(t(label));
-            let button = if panel.submitted == submitted {
-                button.primary()
-            } else {
-                button.ghost()
-            };
-            button.on_click(cx.listener(move |this, _, _, cx| this.show_held(submitted, cx)))
-        };
-        let rows = panel.sales.iter().enumerate().map(|(i, row)| {
-            let cell = |fieldname: &str| match row.get(fieldname) {
-                Some(DocValue::Text(text)) => text.clone(),
-                Some(DocValue::Date(date)) => latte_core::fyo::format::utc_date(*date).to_string(),
-                value => self.money(value),
-            };
-            let name = cell("name");
-            div()
-                .id(("held", i))
-                .h_flex()
-                .gap_2()
-                .p_2()
-                .border_b_1()
-                .border_color(theme.border)
-                .cursor_pointer()
-                .hover(|d| d.bg(theme.list_hover))
-                .child(div().flex_1().child(name.clone()))
-                .child(div().flex_1().child(cell("party")))
-                .child(div().w(px(100.)).child(cell("date")))
-                .child(
-                    div()
-                        .w(px(100.))
-                        .h_flex()
-                        .justify_end()
-                        .child(cell("grandTotal")),
-                )
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.take_up(name.clone(), window, cx)),
-                )
-        });
-        div()
-            .v_flex()
-            .flex_1()
-            .gap_3()
-            .p_4()
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(tab("held-saved", "Saved", false))
-                    .child(tab("held-submitted", "Submitted", true))
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("held-close")
-                            .small()
-                            .ghost()
-                            .label(t("Close"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.held = None;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .when(panel.sales.is_empty(), |d| {
-                d.child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(t("No entries found")),
-                )
-            })
-            .child(
-                div()
-                    .id("held-sales")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .children(rows),
-            )
-    }
-
+    /// The right of `ClassicPOS.vue`: the customer and `SelectedItemTable` above, the
+    /// totals and the big buttons below.
     fn render_cart(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
-        let Some(sale) = &self.sale else {
-            return div();
+        let sale = self.sale.as_ref();
+        let columns = [
+            (String::new(), 0.1, false),
+            (t("Item"), 0.9, false),
+            (t("Quantity"), 0.8, true),
+            (t("Stock Unit"), 0.8, false),
+            (t("Rate"), 0.8, true),
+            (t("Amount"), 0.8, true),
+            (String::new(), 0.2, false),
+        ];
+        let discounting = self.discounting();
+        let rows: Vec<_> = sale
+            .map(|sale| sale.table("items"))
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| self.render_cart_row(idx, row, discounting, cx))
+            .collect();
+
+        let (quantity, discounts, grand_total) = match sale {
+            Some(sale) => {
+                let s = self.session.borrow();
+                (
+                    pos::total_quantity(sale),
+                    pos::item_discounts(&s.fyo, sale).ok(),
+                    match sale.get("grandTotal") {
+                        Some(DocValue::Money(m)) => Some(m.clone()),
+                        _ => None,
+                    },
+                )
+            }
+            None => (0.0, None, None),
         };
-        let rows = sale.table("items").iter().enumerate().map(|(idx, row)| {
-            let item = match row.get("item") {
-                Some(DocValue::Text(item)) => item.clone(),
-                _ => String::new(),
-            };
-            let batch = match row.get("batch") {
-                Some(DocValue::Text(b)) if !b.is_empty() => format!(" · {b}"),
-                _ => String::new(),
-            };
-            let quantity = match row.get("quantity") {
-                Some(DocValue::Number(n)) => number_text(*n),
-                _ => String::new(),
-            };
-            let free = is_truthy(row.get("isFreeItem"));
+        let symbol = self.symbol();
+        let pair = |a: Div, b: Div| {
             div()
                 .h_flex()
                 .gap_2()
-                .py_1()
-                .border_b_1()
-                .border_color(theme.border)
-                .child(
-                    div()
-                        .flex_1()
-                        .v_flex()
-                        .child(div().truncate().child(format!("{item}{batch}")))
-                        .child(
-                            div()
-                                .text_11()
-                                .text_color(theme.muted_foreground)
-                                .child(self.money(row.get("rate"))),
-                        ),
-                )
-                .when(!free, |d| {
-                    d.child(
-                        Button::new(("less", idx))
-                            .xsmall()
-                            .ghost()
-                            .icon("minus")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.change_quantity(idx, -1.0, cx)
-                            })),
-                    )
-                })
-                .child(div().w(px(36.)).h_flex().justify_center().child(quantity))
-                .when(!free, |d| {
-                    d.child(
-                        Button::new(("more", idx))
-                            .xsmall()
-                            .ghost()
-                            .icon("plus")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.change_quantity(idx, 1.0, cx)
-                            })),
-                    )
-                })
-                .child(
-                    div()
-                        .w(px(100.))
-                        .h_flex()
-                        .justify_end()
-                        .child(self.money(row.get("amount"))),
-                )
-        });
-
-        let (quantity, discounts, taxes) = {
-            let s = self.session.borrow();
-            (
-                pos::total_quantity(sale),
-                pos::item_discounts(&s.fyo, sale).ok(),
-                pos::total_taxed_amount(&s.fyo, sale).ok(),
-            )
-        };
-        let line = |label: String, value: String| {
-            div().h_flex().justify_between().child(label).child(value)
+                .child(div().flex_1().min_w_0().child(a))
+                .child(div().flex_1().min_w_0().child(b))
         };
         let totals = div()
             .v_flex()
-            .gap_1()
-            .pt_2()
-            .text_12()
-            .child(line(t("Total Quantity"), number_text(quantity)))
-            .child(line(t("Net Total"), self.money(sale.get("netTotal"))))
-            .child(line(
-                t("Discounts"),
-                discounts.map(|d| self.currency(&d)).unwrap_or_default(),
-            ))
-            .child(line(
-                t("Taxes"),
-                taxes.map(|d| self.currency(&d)).unwrap_or_default(),
+            .flex_1()
+            .min_w_0()
+            .justify_end()
+            .child(pair(
+                floating_field(t("Total Quantity"), number_text(quantity), None),
+                floating_field(t("Add'l Discounts"), self.rounded(None), symbol.clone()),
             ))
             .child(
-                div()
-                    .h_flex()
-                    .justify_between()
-                    .text_13()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t("Grand Total"))
-                    .child(self.money(sale.get("grandTotal"))),
-            );
-        let has_items = !sale.table("items").is_empty();
-        div()
-            .v_flex()
-            .w(px(420.))
-            .h_full()
-            .flex_none()
-            .gap_2()
-            .p_4()
-            .border_l_1()
-            .border_color(theme.border)
-            .child(field_label(t("Customer"), true, cx))
-            .child(self.customer.clone())
-            .child(
-                div()
-                    .id("cart")
-                    .v_flex()
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .children(rows),
-            )
-            .child(totals)
-            .children(
-                self.payment
-                    .as_ref()
-                    .map(|panel| self.render_payment(panel, cx)),
-            )
-            .when(self.payment.is_none(), |d| {
-                d.child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .child(
-                            Button::new("clear")
-                                .small()
-                                .ghost()
-                                .label(t("Cancel"))
-                                .disabled(!has_items)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.clear_cart(window, cx)),
-                                ),
-                        )
-                        .child(
-                            Button::new("save")
-                                .small()
-                                .label(t("Save"))
-                                .disabled(!has_items || sale.is_submitted())
-                                .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
-                        )
-                        .child(
-                            Button::new("held")
-                                .small()
-                                .ghost()
-                                .label(t("Held"))
-                                .on_click(cx.listener(|this, _, _, cx| this.show_held(false, cx))),
-                        )
-                        .child(
-                            Button::new("pay")
-                                .small()
-                                .primary()
-                                .flex_1()
-                                .label(t("Pay"))
-                                .disabled(!has_items)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.open_payment(window, cx)
-                                    }),
-                                ),
-                        ),
+                pair(
+                    floating_field(
+                        t("Item Discounts"),
+                        self.rounded(discounts.as_ref()),
+                        symbol.clone(),
+                    ),
+                    floating_field(t("Grand Total"), self.rounded(grand_total.as_ref()), symbol),
                 )
-            })
-    }
-
-    fn render_payment(&self, panel: &PaymentPanel, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme().clone();
-        let methods = {
-            let s = self.session.borrow();
-            pos::payment_methods(&s.fyo).unwrap_or_default()
-        };
-        let is_cash = {
-            let s = self.session.borrow();
-            s.fyo
-                .get_value("PaymentMethod", Some(&panel.method), "type")
-                == Some(DocValue::Text("Cash".to_owned()))
-        };
-        let change = self.sale.as_ref().and_then(|sale| {
-            let s = self.session.borrow();
-            let paid = s.fyo.pesa().parse(&value(&panel.amount, cx)).ok()?;
-            let Some(DocValue::Money(total)) = sale.get("grandTotal") else {
-                return None;
-            };
-            paid.gt(total).ok()?.then(|| paid.sub(total).ok()).flatten()
-        });
-        div()
+                .mt_4(),
+            );
+        let tall = px(48.);
+        let buttons = div()
             .v_flex()
-            .gap_2()
-            .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.border)
-            .child(div().h_flex().flex_wrap().gap_1().children(
-                methods.into_iter().enumerate().map(|(i, method)| {
-                    let selected = method == panel.method;
-                    let button = Button::new(("method", i)).small().label(method.clone());
-                    let button = if selected {
-                        button.primary()
-                    } else {
-                        button.ghost()
-                    };
-                    button.on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(panel) = &mut this.payment {
-                            panel.method = method.clone();
-                        }
-                        cx.notify();
-                    }))
-                }),
-            ))
-            .child(field_label(t("Amount Paid"), true, cx))
-            .child(small_input(&panel.amount))
-            .children(change.map(|c| {
-                div()
-                    .text_12()
-                    .child(format!("{} {}", t("Change"), self.currency(&c)))
-            }))
-            .when(!is_cash, |d| {
-                d.child(field_label(t("Ref. / Cheque No."), true, cx))
-                    .child(small_input(&panel.reference))
-                    .child(field_label(t("Clearance Date"), true, cx))
-                    .child(small_input(&panel.clearance))
-            })
-            .children(panel.serial_numbers.iter().map(|(item, state)| {
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(field_label(
-                        format!("{} {item}", t("Serial Numbers of")),
-                        true,
-                        cx,
-                    ))
-                    .child(small_input(state))
-            }))
+            .flex_1()
+            .min_w_0()
             .child(
                 div()
                     .h_flex()
                     .gap_2()
                     .child(
-                        Button::new("back-to-cart")
-                            .small()
-                            .ghost()
-                            .label(t("Cancel"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.payment = None;
-                                cx.notify();
-                            })),
+                        big_button(
+                            "save",
+                            t("Save"),
+                            self.button_colour("saveButtonColour", GREEN_BUTTON, true),
+                            tall,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     )
                     .child(
-                        Button::new("submit-only")
-                            .small()
-                            .label(t("Submit"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.transact(false, false, window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("pay-now")
-                            .small()
-                            .primary()
-                            .label(t("Pay"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.transact(true, false, window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("pay-print")
-                            .small()
-                            .label(t("Pay and Print"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.transact(true, true, window, cx)
-                            })),
+                        big_button(
+                            "clear",
+                            t("Cancel"),
+                            self.button_colour("cancelButtonColour", RED_BUTTON, true),
+                            tall,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| this.clear_cart(window, cx))),
                     ),
             )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .mt_4()
+                    .child(
+                        big_button(
+                            "held",
+                            t("held"),
+                            self.button_colour("heldButtonColour", RED_BUTTON, true),
+                            tall,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.show_held(false, cx))),
+                    )
+                    .child(
+                        // `profile?.payButton`, which no profile has.
+                        big_button(
+                            "pay",
+                            t("Pay"),
+                            self.button_colour("payButtonColour", GREEN_BUTTON, false),
+                            tall,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| this.open_payment(window, cx))),
+                    ),
+            );
+        let card = || {
+            div()
+                .bg(white())
+                .border_1()
+                .border_color(gray(200))
+                .rounded(books::RADIUS_MD)
+        };
+        div()
+            .v_flex()
+            .flex_grow(7.)
+            .flex_basis(px(0.))
+            .min_w_0()
+            .h_full()
+            .gap_3()
+            .child(
+                card()
+                    .v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .p_4()
+                    .child(div().flex_none().child(self.customer.clone()))
+                    .child(table_header(&columns).mt_2())
+                    .child(
+                        div()
+                            .id("cart")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .children(rows),
+                    ),
+            )
+            .child(
+                card()
+                    .flex_none()
+                    .p_3()
+                    .child(div().h_flex().gap_3().child(totals).child(buttons)),
+            )
     }
+
+    /// `SelectedItemRow.vue`: the chevron for the row's details, the item, its quantity
+    /// with the chevrons that change it, its unit, rate and amount, and the trash icon.
+    fn render_cart_row(
+        &self,
+        idx: usize,
+        row: &Doc,
+        discounting: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let text = |fieldname: &str| match row.get(fieldname) {
+            Some(DocValue::Text(text)) => text.clone(),
+            _ => String::new(),
+        };
+        let quantity = match row.get("quantity") {
+            Some(DocValue::Number(n)) => number_text(*n),
+            _ => String::new(),
+        };
+        let free = is_truthy(row.get("isFreeItem"));
+        let expanded = self.expanded.contains(&idx);
+        let small = |value: String, numeric: bool| cell_text(value, numeric).px_2().py_1();
+        let chevron = |id: (&'static str, usize), name: &'static str, by: f64| {
+            div()
+                .id(id)
+                .cursor_pointer()
+                .child(books::icon(name, px(12.), gray(700)))
+                .on_click(cx.listener(move |this, _, _, cx| this.change_quantity(idx, by, cx)))
+        };
+        let line = div()
+            .h_flex()
+            .w_full()
+            .child(
+                ratio_cell(0.1).child(
+                    div()
+                        .id(("expand", idx))
+                        .cursor_pointer()
+                        .child(books::icon(
+                            if expanded {
+                                "chevron-up"
+                            } else {
+                                "chevron-down"
+                            },
+                            px(16.),
+                            gray(700),
+                        ))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !this.expanded.remove(&idx) {
+                                this.expanded.insert(idx);
+                            }
+                            cx.notify();
+                        })),
+                ),
+            )
+            .child(
+                ratio_cell(0.9).child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .pt_2()
+                        .when(free, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .ml_2()
+                                    .text_size(px(9.6))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(books::color("green", 800))
+                                    .child(text("pricingRule")),
+                            )
+                        })
+                        .child(small(text("item"), false)),
+                ),
+            )
+            .child(
+                ratio_cell(0.8)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(small(quantity.clone(), true)),
+                    )
+                    .when(!free, |d| {
+                        d.child(
+                            div()
+                                .v_flex()
+                                .ml_1()
+                                .child(chevron(("more", idx), "chevron-up", 1.0))
+                                .child(chevron(("less", idx), "chevron-down", -1.0)),
+                        )
+                    }),
+            )
+            .child(ratio_cell(0.8).child(div().ml_5().min_w_0().child(small(text("unit"), false))))
+            .child(ratio_cell(0.8).child(small(self.money(row.get("rate")), true)))
+            .child(ratio_cell(0.8).child(small(self.money(row.get("amount")), true)))
+            .child(ratio_cell(0.2).child(div().px_4().when(!free, |d| {
+                d.child(
+                    div()
+                        .id(("remove", idx))
+                        .cursor_pointer()
+                        .child(books::icon("trash-2", px(16.), books::color("red", 500)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.remove_row(idx, cx))),
+                )
+            })));
+        let details = expanded.then(|| {
+            let field = |label: String, value: String| {
+                div().flex_1().min_w_0().child(shown_field(label, value))
+            };
+            let percent = match row.get("itemDiscountPercent") {
+                Some(DocValue::Number(n)) => number_text(*n),
+                _ => "0".to_owned(),
+            };
+            let batch = text("batch");
+            div()
+                .h_flex()
+                .w_full()
+                .gap_4()
+                .px_4()
+                .pt_6()
+                .pb_2()
+                .child(field(t("Quantity"), quantity))
+                .child(field(t("Rate"), self.money(row.get("rate"))))
+                .when(discounting, |d| {
+                    d.child(field(
+                        t("Discount Amount"),
+                        self.money(row.get("itemDiscountAmount")),
+                    ))
+                    .child(field(t("Discount Percent"), percent))
+                })
+                .when(!batch.is_empty(), |d| d.child(field(t("Batch"), batch)))
+        });
+        div()
+            .id(("cart-row", idx))
+            .v_flex()
+            .w_full()
+            .px_2()
+            .py_2()
+            .border_1()
+            .border_color(gray(200))
+            .hover(|d| d.bg(gray(25)))
+            .child(line)
+            .children(details)
+    }
+
+    /// `OpenPOSShiftModal.vue` and `ClosePOSShiftModal.vue`.
+    fn render_shift_modal(
+        &self,
+        opening: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (Mode::Opening(panel) | Mode::Closing(panel)) = &self.mode else {
+            return div().into_any_element();
+        };
+        let counted = self.counted_cash(panel, cx);
+        let counted_text = counted
+            .as_ref()
+            .map_or_else(String::new, |m| self.currency(m));
+        let text_cell = |text: String, numeric: bool| {
+            div()
+                .w_full()
+                .min_w_0()
+                .px_2()
+                .truncate()
+                .when(numeric, |d| d.text_right())
+                .child(text)
+                .into_any_element()
+        };
+        let input_cell = |state: &Entity<InputState>| {
+            Input::new(state)
+                .appearance(false)
+                .w_full()
+                .px_2()
+                .text_13()
+                .text_right()
+                .into_any_element()
+        };
+
+        let cash_rows = panel
+            .cash
+            .iter()
+            .map(|row| vec![input_cell(&row.denomination), input_cell(&row.count)])
+            .collect();
+        let add_row = div()
+            .id("add-denomination")
+            .h_flex()
+            .w_full()
+            .h_12()
+            .px_2()
+            .border_t_1()
+            .border_color(gray(200))
+            .text_color(gray(500))
+            .cursor_pointer()
+            .child(
+                ratio_cell(0.3)
+                    .pl_1()
+                    .child(books::icon("plus", px(16.), gray(500))),
+            )
+            .child(
+                div()
+                    .flex_grow(2.)
+                    .flex_basis(px(0.))
+                    .px_2()
+                    .child(t("Add Row")),
+            )
+            .on_click(cx.listener(|this, _, window, cx| this.add_cash_row(window, cx)))
+            .into_any_element();
+        let cash_table = shift_table(
+            &[(t("Denomination"), true), (t("Count"), true)],
+            cash_rows,
+            Some(add_row),
+        );
+
+        let amounts_table =
+            if opening {
+                let mut rows = vec![vec![
+                    text_cell("Cash".to_owned(), false),
+                    text_cell(counted_text, true),
+                ]];
+                rows.extend(panel.amounts.iter().map(|(method, state)| {
+                    vec![text_cell(method.clone(), false), input_cell(state)]
+                }));
+                shift_table(
+                    &[(t("Payment Method"), false), (t("Amount"), true)],
+                    rows,
+                    None,
+                )
+            } else {
+                let money = |m: Option<&Money>| m.map(|m| self.currency(m)).unwrap_or_default();
+                let difference =
+                    |closing: Option<Money>, expected: Option<&Money>| match (closing, expected) {
+                        (Some(c), Some(e)) => c.sub(e).ok(),
+                        _ => None,
+                    };
+                let cash_expected = panel.expected.get("Cash");
+                let mut rows = vec![vec![
+                    text_cell("Cash".to_owned(), false),
+                    text_cell(money(panel.opened.get("Cash")), true),
+                    text_cell(counted_text, true),
+                    text_cell(money(cash_expected), true),
+                    text_cell(
+                        money(difference(counted.clone(), cash_expected).as_ref()),
+                        true,
+                    ),
+                ]];
+                rows.extend(panel.amounts.iter().map(|(method, state)| {
+                    let typed = self
+                        .session
+                        .borrow()
+                        .fyo
+                        .pesa()
+                        .parse(&value(state, cx))
+                        .ok();
+                    let expected = panel.expected.get(method);
+                    vec![
+                        text_cell(method.clone(), false),
+                        text_cell(money(panel.opened.get(method)), true),
+                        input_cell(state),
+                        text_cell(money(expected), true),
+                        text_cell(money(difference(typed, expected).as_ref()), true),
+                    ]
+                }));
+                shift_table(
+                    &[
+                        (t("Payment Method"), false),
+                        (t("Opening Amount"), true),
+                        (t("Closing Amount"), true),
+                        (t("Expected Amount"), true),
+                        (t("Difference Amount"), true),
+                    ],
+                    rows,
+                    None,
+                )
+            };
+
+        let buttons = div()
+            .h_flex()
+            .gap_4()
+            .mt_4()
+            .child(
+                big_button(
+                    "shift-back",
+                    if opening { t("Back") } else { t("Cancel") },
+                    books::color("red", 500),
+                    px(40.),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if opening {
+                        go_back(window, cx)
+                    } else {
+                        this.cancel_closing(window, cx)
+                    }
+                })),
+            )
+            .child(
+                big_button(
+                    "shift-submit",
+                    t("Submit"),
+                    books::color("green", 500),
+                    px(40.),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if opening {
+                        this.open_shift(window, cx)
+                    } else {
+                        this.close_shift(window, cx)
+                    }
+                })),
+            );
+        let heading = |text: String| div().text_14().font_weight(FontWeight::MEDIUM).child(text);
+        let body = if opening {
+            div()
+                .h_flex()
+                .items_start()
+                .gap_6()
+                .child(
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(heading(t("Cash In Denominations")))
+                        .child(cash_table.mt_4()),
+                )
+                .child(
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(heading(t("Opening Amount")))
+                        .child(amounts_table.mt_4())
+                        .child(buttons),
+                )
+        } else {
+            div()
+                .v_flex()
+                .child(heading(t("Closing Cash")).mt_4().mb_2())
+                .child(cash_table)
+                .child(heading(t("Closing Amounts")).mt_6().mb_2())
+                .child(amounts_table)
+                .child(buttons)
+        };
+        let viewport = window.viewport_size();
+        modal(
+            modal_card()
+                .id("shift-modal")
+                .w(viewport.width * 0.5)
+                .max_h(viewport.height)
+                .overflow_y_scroll()
+                .p_4()
+                .child(
+                    div()
+                        .pb_4()
+                        .text_18()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_center()
+                        .child(if opening {
+                            t("Open POS Shift")
+                        } else {
+                            t("Close POS Shift")
+                        }),
+                )
+                .child(body),
+            false,
+            window,
+        )
+        .into_any_element()
+    }
+
+    /// `PaymentModal.vue`: the amount paid, a button per payment method, the transfer's
+    /// reference and clearance date, the change or balance, the sale's totals, and Submit,
+    /// Cancel, Pay and Pay & Print.
+    fn render_payment_modal(
+        &self,
+        panel: &PaymentPanel,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let sale = self.sale.as_ref()?;
+        let (methods, is_cash, zero, taxes, discounts) = {
+            let s = self.session.borrow();
+            (
+                pos::payment_methods(&s.fyo).unwrap_or_default(),
+                s.fyo
+                    .get_value("PaymentMethod", Some(&panel.method), "type")
+                    == Some(DocValue::Text("Cash".to_owned())),
+                s.fyo.pesa().zero(),
+                pos::total_taxed_amount(&s.fyo, sale).ok(),
+                pos::item_discounts(&s.fyo, sale).ok(),
+            )
+        };
+        let grand_total = match sale.get("grandTotal") {
+            Some(DocValue::Money(m)) => m.clone(),
+            _ => zero.clone(),
+        };
+        let paid = self
+            .session
+            .borrow()
+            .fyo
+            .pesa()
+            .parse(&value(&panel.amount, cx))
+            .unwrap_or_else(|_| zero.clone());
+        let paid_zero = paid.is_zero();
+        let show_change = !paid_zero && paid.gt(&grand_total).unwrap_or(false);
+        let show_balance = !paid_zero && paid.lt(&grand_total).unwrap_or(false);
+        let field = |label: String, value: String| {
+            div().flex_1().min_w_0().child(shown_field(label, value))
+        };
+        let blank = || div().flex_1().min_w_0();
+        let pair = |a: Div, b: Div| div().h_flex().gap_6().child(a).child(b);
+        let labelled_input = |label: String, state: &Entity<InputState>| {
+            div()
+                .v_flex()
+                .flex_1()
+                .min_w_0()
+                .child(field_label(label, true, cx))
+                .child(
+                    control_frame(false, false).child(
+                        Input::new(state)
+                            .appearance(false)
+                            .h(px(32.))
+                            .px_3()
+                            .text_13(),
+                    ),
+                )
+        };
+
+        let amount = control_frame(false, false).child(
+            Input::new(&panel.amount)
+                .appearance(false)
+                .h(px(32.))
+                .px_3()
+                .text_13()
+                .text_right(),
+        );
+        let method_buttons =
+            div()
+                .grid()
+                .grid_cols(2)
+                .gap_6()
+                .children(methods.into_iter().enumerate().map(|(i, method)| {
+                    big_button(
+                        ("method", i),
+                        method.clone(),
+                        books::color("teal", 500),
+                        px(40.),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_payment_method(method.clone(), window, cx)
+                    }))
+                }));
+        let transfer = (!is_cash).then(|| {
+            pair(
+                labelled_input(t("Ref. / Cheque No."), &panel.reference),
+                labelled_input(t("Clearance Date"), &panel.clearance),
+            )
+        });
+        let serial_numbers = panel.serial_numbers.iter().map(|(item, state)| {
+            labelled_input(format!("{} {item}", t("Serial Numbers of")), state)
+        });
+        let change = pair(
+            if show_change {
+                field(
+                    t("Paid Change"),
+                    paid.sub(&grand_total)
+                        .map(|m| self.currency(&m))
+                        .unwrap_or_default(),
+                )
+            } else {
+                blank()
+            },
+            if show_balance {
+                field(
+                    t("Balance Amount"),
+                    grand_total
+                        .sub(&paid)
+                        .map(|m| self.currency(&m))
+                        .unwrap_or_default(),
+                )
+            } else {
+                blank()
+            },
+        );
+        let mut totals = vec![
+            field(t("Net Total"), self.money(sale.get("netTotal"))),
+            field(
+                t("Taxes and Charges"),
+                self.currency(taxes.as_ref().unwrap_or(&zero)),
+            ),
+            field(
+                t("Base Grand Total"),
+                self.money(sale.get("baseGrandTotal")),
+            ),
+        ];
+        if self.discounting() {
+            totals.push(field(
+                t("Discount Amount"),
+                self.currency(discounts.as_ref().unwrap_or(&zero)),
+            ));
+        }
+        totals.push(field(t("Grand Total"), self.money(sale.get("grandTotal"))));
+        totals.push(field(
+            t("Outstanding Amount"),
+            self.money(sale.get("outstandingAmount")),
+        ));
+        let totals = div()
+            .grid()
+            .grid_cols(2)
+            .gap_x_6()
+            .gap_y_11()
+            .children(totals);
+        let button = |id: &'static str, label: String, fieldname: &str, default: u32| {
+            big_button(
+                id,
+                label,
+                self.button_colour(fieldname, default, false),
+                px(43.),
+            )
+        };
+        let buttons = div()
+            .grid()
+            .grid_cols(2)
+            .gap_4()
+            .child(
+                button(
+                    "submit-only",
+                    t("Submit"),
+                    "submitButtonColour",
+                    GREEN_BUTTON,
+                )
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.transact(false, false, window, cx)),
+                ),
+            )
+            .child(
+                button(
+                    "cancel-payment",
+                    t("Cancel"),
+                    "cancelButtonColour",
+                    RED_BUTTON,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.payment = None;
+                    cx.notify();
+                })),
+            )
+            .child(
+                button("pay-now", t("Pay"), "payButtonColour", GREEN_BUTTON).on_click(
+                    cx.listener(|this, _, window, cx| this.transact(true, false, window, cx)),
+                ),
+            )
+            .child(
+                button(
+                    "pay-print",
+                    t("Pay & Print"),
+                    "payAndPrintButtonColour",
+                    GREEN_BUTTON,
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.transact(true, true, window, cx))),
+            );
+        let viewport = window.viewport_size();
+        Some(
+            modal(
+                modal_card()
+                    .w(viewport.width / 3.)
+                    .h(viewport.height * 0.95)
+                    .child(
+                        div()
+                            .id("payment")
+                            .v_flex()
+                            .size_full()
+                            .px_4()
+                            .py_6()
+                            .gap_4()
+                            .justify_between()
+                            .overflow_y_scroll()
+                            .child(amount)
+                            .child(method_buttons)
+                            .children(transfer)
+                            .children(serial_numbers)
+                            .child(totals)
+                            .child(change)
+                            .child(buttons),
+                    ),
+                true,
+                window,
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// `setPaymentMethodAndAmount`: the method, and the amount still owed.
+    fn set_payment_method(&mut self, method: String, window: &mut Window, cx: &mut Context<Self>) {
+        let owed = self.sale.as_ref().map(|sale| {
+            match (sale.get("outstandingAmount"), sale.get("grandTotal")) {
+                (Some(DocValue::Money(m)), _) if !m.is_zero() => m.round(None),
+                (_, total) => money_text(total),
+            }
+        });
+        if let Some(panel) = &mut self.payment {
+            panel.method = method;
+            if let Some(owed) = owed {
+                panel
+                    .amount
+                    .update(cx, |input, cx| input.set_value(owed, window, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// `SavedInvoiceModal.vue`: the saved or submitted sales, searched by name.
+    fn render_held_modal(
+        &self,
+        panel: &HeldPanel,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let viewport = window.viewport_size();
+        let query = self.held_search.read(cx).value().to_lowercase();
+        let tab = |id: &'static str, label: String, submitted: bool| {
+            div()
+                .id(id)
+                .flex_1()
+                .mt_2()
+                .p_2()
+                .flex()
+                .justify_center()
+                .text_12()
+                .text_color(gray(700))
+                .cursor_pointer()
+                .when(panel.submitted == submitted, |d| d.underline())
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| this.show_held(submitted, cx)))
+        };
+        let columns = [
+            (t("Name"), 1., false),
+            (t("Customer"), 1., false),
+            (t("Date"), 1., false),
+            (t("Grand Total"), 0.8, true),
+        ];
+        let rows: Vec<_> = panel
+            .sales
+            .iter()
+            .filter(|row| {
+                query.is_empty()
+                    || matches!(row.get("name"), Some(DocValue::Text(n)) if n.to_lowercase().contains(&query))
+            })
+            .enumerate()
+            .map(|(i, row)| {
+                let cell = |fieldname: &str| match row.get(fieldname) {
+                    Some(DocValue::Text(text)) => text.clone(),
+                    Some(DocValue::Date(date)) => self
+                        .session
+                        .borrow()
+                        .formatter
+                        .date(latte_core::fyo::format::utc_date(*date)),
+                    value => self.money(value),
+                };
+                let name = cell("name");
+                div()
+                    .id(("held", i))
+                    .h_flex()
+                    .w_full()
+                    .h_12()
+                    .px_2()
+                    .border_b_1()
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(gray(200))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(gray(25)))
+                    .child(ratio_cell(1.).child(cell_text(name.clone(), false)))
+                    .child(ratio_cell(1.).child(cell_text(cell("party"), false)))
+                    .child(ratio_cell(1.).child(cell_text(cell("date"), false)))
+                    .child(ratio_cell(0.8).child(cell_text(cell("grandTotal"), true)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.take_up(name.clone(), window, cx)
+                    }))
+            })
+            .collect();
+        let has_rows = !rows.is_empty();
+        modal(
+            modal_card()
+                .w(viewport.height * 0.6 + px(40.))
+                .p_5()
+                .child(
+                    div()
+                        .text_center()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(t("Invoices")),
+                )
+                .child(div().mt_2().h(px(1.)).bg(gray(200)))
+                .child(
+                    div()
+                        .mt_4()
+                        .p_2()
+                        .border_1()
+                        .border_color(gray(200))
+                        .rounded(books::RADIUS_MD)
+                        .child(Input::new(&self.held_search).appearance(false).h(px(24.))),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .child(tab("held-saved", t("Saved"), false))
+                        .child(tab("held-submitted", t("Submitted"), true)),
+                )
+                .child(table_header(&columns).mt_2())
+                .when(has_rows, |d| {
+                    d.child(
+                        div()
+                            .id("held-sales")
+                            .h(viewport.height * 0.65)
+                            .overflow_y_scroll()
+                            .children(rows),
+                    )
+                })
+                .child(
+                    div().mt_4().h_flex().child(
+                        big_button(
+                            "held-cancel",
+                            t("Cancel"),
+                            books::color("red", 500),
+                            px(40.),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.held = None;
+                            cx.notify();
+                        })),
+                    ),
+                ),
+            false,
+            window,
+        )
+        .into_any_element()
+    }
+
+    /// `BatchSelectionModal.vue`: a batch of the item, then Select or Cancel.
+    fn render_batch_modal(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, _, picker) = self.batch_for.as_ref()?;
+        let chosen = picker.read(cx).value().is_some();
+        Some(
+            modal(
+                modal_card()
+                    .w(px(384.))
+                    .child(
+                        div()
+                            .py_3()
+                            .text_center()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(gray(800))
+                            .child(t("Select the Batch")),
+                    )
+                    .child(
+                        div()
+                            .px_10()
+                            .pt_6()
+                            .child(field_label(t("Batch"), true, cx))
+                            .child(picker.clone())
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .gap_4()
+                                    .mt_8()
+                                    .mb_6()
+                                    .child(
+                                        big_button(
+                                            "batch-select",
+                                            t("Select"),
+                                            books::color("green", 500),
+                                            px(43.),
+                                        )
+                                        .when(!chosen, |d| d.opacity(0.5))
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                let Some((item, quantity, picker)) =
+                                                    this.batch_for.clone()
+                                                else {
+                                                    return;
+                                                };
+                                                let Some(batch) =
+                                                    picker.read(cx).value().map(|v| v.to_string())
+                                                else {
+                                                    return;
+                                                };
+                                                this.add(item, Some(batch), quantity, window, cx)
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        big_button(
+                                            "batch-cancel",
+                                            t("Cancel"),
+                                            books::color("red", 500),
+                                            px(43.),
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.batch_for = None;
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    ),
+                            ),
+                    ),
+                false,
+                window,
+            )
+            .into_any_element(),
+        )
+    }
+}
+
+/// `$router.back()`: the page before the POS.
+fn go_back(window: &mut Window, cx: &mut App) {
+    let Some(desk) = cx
+        .try_global::<crate::desk::NavState>()
+        .and_then(|n| n.desk.upgrade())
+    else {
+        return;
+    };
+    desk.update(cx, |desk, cx| desk.go_back(window, cx));
+}
+
+/// `Table.vue` with `show-header` and `border`, as the shift modals show theirs: `#` and
+/// the columns, 48px rows, and Add Row when rows can be added.
+fn shift_table(
+    columns: &[(String, bool)],
+    rows: Vec<Vec<AnyElement>>,
+    add_row: Option<AnyElement>,
+) -> Div {
+    let header = div()
+        .h_flex()
+        .w_full()
+        .h_12()
+        .px_2()
+        .text_color(gray(600))
+        .child(ratio_cell(0.3).pl_2().child("#"))
+        .children(columns.iter().map(|(label, numeric)| {
+            ratio_cell(1.)
+                .px_2()
+                .when(*numeric, |d| d.justify_end())
+                .child(div().truncate().child(label.clone()))
+        }));
+    div()
+        .v_flex()
+        .w_full()
+        .text_13()
+        .text_color(gray(900))
+        .border_1()
+        .border_color(gray(200))
+        .rounded(books::RADIUS_MD)
+        .child(header)
+        .children(rows.into_iter().enumerate().map(|(i, cells)| {
+            div()
+                .h_flex()
+                .w_full()
+                .h_12()
+                .px_2()
+                .border_t_1()
+                .border_color(gray(200))
+                .child(
+                    ratio_cell(0.3)
+                        .pl_2()
+                        .text_color(gray(600))
+                        .child(format!("{}", i + 1)),
+                )
+                .children(cells.into_iter().map(|cell| ratio_cell(1.).child(cell)))
+        }))
+        .children(add_row)
 }
 
 /// The parties a POS sale can be for: customers, and those that are both.
@@ -1512,36 +2254,70 @@ fn customer_options(session: &Shared) -> Vec<LinkOption> {
 }
 
 impl Render for PosPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let selling = matches!(self.mode, Mode::Selling);
-        let header = page_header(t("Point of Sale"), cx).when(selling, |h| {
-            h.child(
-                Button::new("close-shift")
-                    .small()
-                    .label(t("Close Shift"))
-                    .on_click(cx.listener(|this, _, window, cx| this.begin_closing(window, cx))),
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let header = page_header(t("Point of Sale"), cx).child(
+            Button::new("close-shift")
+                .label(t("Close POS Shift"))
+                .bg(books::color("red", 500))
+                .text_color(white())
+                .font_weight(FontWeight::MEDIUM)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if matches!(this.mode, Mode::Selling) {
+                        this.begin_closing(window, cx)
+                    }
+                })),
+        );
+        let body = div()
+            .h_flex()
+            .flex_1()
+            .min_h_0()
+            .p_4()
+            .gap_2()
+            .bg(gray(25))
+            .child(self.render_items(window, cx))
+            .child(self.render_cart(cx));
+        let shift = match &self.mode {
+            Mode::Opening(_) => Some(self.render_shift_modal(true, window, cx)),
+            Mode::Closing(_) => Some(self.render_shift_modal(false, window, cx)),
+            Mode::Selling => None,
+        };
+        let payment = self
+            .payment
+            .as_ref()
+            .and_then(|panel| self.render_payment_modal(panel, window, cx));
+        let held = self
+            .held
+            .as_ref()
+            .map(|panel| self.render_held_modal(panel, window, cx));
+        let batch = self.render_batch_modal(window, cx);
+        let message = match (&self.error, &self.info) {
+            (Some(error), _) => Some((error.clone(), Kind::Error)),
+            (None, Some(info)) => Some((info.clone(), Kind::Success)),
+            (None, None) => None,
+        };
+        let toast = message.map(|(message, kind)| {
+            toast(
+                message,
+                kind,
+                cx.listener(|this, _, _, cx| {
+                    this.error = None;
+                    this.info = None;
+                    cx.notify();
+                }),
+                window,
             )
         });
-        let body = match &self.mode {
-            Mode::Opening(_) => self.render_shift(true, cx),
-            Mode::Closing(_) => self.render_shift(false, cx),
-            Mode::Selling => div()
-                .h_flex()
-                .flex_1()
-                .min_h_0()
-                .child(match &self.held {
-                    Some(panel) => self.render_held(panel, cx),
-                    None => self.render_items(cx),
-                })
-                .child(self.render_cart(cx))
-                .into_any_element(),
-        };
         div()
             .v_flex()
             .size_full()
+            .bg(white())
+            .text_color(black())
             .child(header)
-            .children(self.error.clone().map(|e| error_message(e, cx)))
-            .children(self.info.clone().map(|m| info_message(m, cx)))
             .child(body)
+            .children(shift)
+            .children(payment)
+            .children(held)
+            .children(batch)
+            .children(toast)
     }
 }

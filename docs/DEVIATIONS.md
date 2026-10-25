@@ -89,8 +89,8 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | POS shift takings | A payment's whole amount once per POS invoice it pays; drafts and cancelled payments count | What each submitted payment put against its POS invoices, once | Books bug |
 | POS negative closing amount | Allowed (the check swallows its error) | Refused | Books bug |
 | POS cash over the total | The payment is for all the cash and is refused | The payment is for the total; the rest shown as change | Books bug |
-| POS screens | Open shift, close shift and payment are dialogs | Panels on the page | Simpler in GPUI |
-| POS saved sales | Saved and submitted sales are listed in a dialog | Listed in a panel beside the cart | Simpler in GPUI |
+| POS shift and payment amounts | Opening and closing amounts other than Cash are read-only; Payment starts at 0 until a method is picked | Amounts other than Cash can be typed; Payment starts at Cash for the grand total | Not ported yet |
+| POS item search | A Link dropdown; items show their images; a row's details can be edited | Filters the items shown and adds one on Enter; items show initials; row details are read-only | Items carry no image yet |
 | POS paying a submitted sale | Submits it again, shows the error, then pays | Pays it | Books bug |
 | POS not ported yet | The Modern UI, item groups, keyboard shortcuts, returns, coupons, loyalty points, price lists, and editing a row's rate or discount at the till | Not ported yet | The Modern UI, and returns, coupons and loyalty at the till, come after 1.0 |
 | Get Started "Create Purchase Invoice" | Ticked once there is a sales invoice | Ticked once there is a purchase invoice | Books bug |
