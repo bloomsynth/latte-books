@@ -3,8 +3,8 @@
 //! @ v0.36.0), a template's errors, the grouped "…" menu (`DropdownWithActions.vue`),
 //! and Save as PDF and Print (`getPathAndMakePDF`).
 //!
-//! GPUI has no print dialog, so Print writes the PDF to the temp folder and opens it in
-//! the computer's PDF viewer, to print from there (see docs/DEVIATIONS.md).
+//! Print opens the computer's own print dialog (`latte_printer`); where there is none,
+//! it opens the PDF in the computer's PDF viewer, to print from there.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use crate::widgets::{Kind, Toast, dropdown_item, popover_panel, show_toast};
 /// A laid out printout: its PDF-ready document and its pages as images, with their
 /// sizes in points.
 pub struct Laid {
-    pub printout: Printout,
+    pub printout: Arc<Printout>,
     pub pages: Vec<(Arc<Image>, (f64, f64))>,
 }
 
@@ -46,7 +46,10 @@ pub fn lay_out(
             .zip(printout.page_sizes())
             .map(|(png, size)| (Arc::new(Image::from_bytes(ImageFormat::Png, png)), size))
             .collect();
-        Ok(Laid { printout, pages })
+        Ok(Laid {
+            printout: Arc::new(printout),
+            pages,
+        })
     })
 }
 
@@ -254,17 +257,17 @@ fn documents() -> PathBuf {
         .unwrap_or_default()
 }
 
-/// Save as PDF (`print` false): asks where and writes the PDF; Print: writes it to the
-/// temp folder and opens it with the computer's PDF viewer, whose print dialog prints it.
-/// Either way a toast says how it went (`showExportInFolder`).
+/// Save as PDF (`print` false): asks where and writes the PDF. Print: the computer's
+/// print dialog, as Books' `webContents.print`. Either way a toast says how it went
+/// (`showExportInFolder`).
 pub fn output(
-    pdf: Result<Vec<u8>, String>,
+    printout: &Arc<Printout>,
     print: bool,
     name: &str,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let pdf = match pdf {
+    let pdf = match printout.pdf() {
         Ok(pdf) => pdf,
         Err(e) => {
             show_toast(Toast::new(e, Kind::Error), window, cx);
@@ -273,16 +276,7 @@ pub fn output(
     };
     let file_name = format!("{}.pdf", sanitize(name));
     if print {
-        let dir = std::env::temp_dir().join("latte-books-print");
-        let path = dir.join(&file_name);
-        let toast = match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, pdf)) {
-            Ok(()) => {
-                cx.open_with_system(&path);
-                Toast::new(t("Opened in your PDF viewer to print"), Kind::Success).short()
-            }
-            Err(e) => Toast::new(format!("{}: {e}", t("Print Failed")), Kind::Error),
-        };
-        show_toast(toast, window, cx);
+        system_print(printout, pdf, &file_name, window, cx);
         return;
     }
     let path = cx.prompt_for_new_path(&documents(), Some(&file_name));
@@ -298,6 +292,111 @@ pub fn output(
             cx.update(|window, cx| show_toast(toast, window, cx)).ok();
         })
         .detach();
+}
+
+/// Print: the printout to the computer's print dialog. The dialog runs on its own: on
+/// Windows on a background thread (it blocks until it closes), on macOS as a sheet, on
+/// Linux through the desktop portal.
+fn system_print(
+    printout: &Arc<Printout>,
+    pdf: Vec<u8>,
+    file_name: &str,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    use raw_window_handle::{HasDisplayHandle as _, HasWindowHandle as _};
+
+    let pages = printout.clone();
+    let job = latte_printer::Job {
+        title: file_name.trim_end_matches(".pdf").to_owned(),
+        pdf: pdf.clone(),
+        page_sizes: printout.page_sizes(),
+        draw: Box::new(move |index, pixel_per_pt| pages.bgra_page(index, pixel_per_pt)),
+    };
+    let handle = window.window_handle().ok().map(|h| h.as_raw());
+    let display = window.display_handle().ok().map(|h| h.as_raw());
+    let file_name = file_name.to_owned();
+
+    #[cfg(windows)]
+    {
+        let _ = display;
+        let owner = match handle {
+            Some(raw_window_handle::RawWindowHandle::Win32(h)) => h.hwnd.get(),
+            _ => 0,
+        };
+        let task = cx
+            .background_executor()
+            .spawn(async move { latte_printer::print(owner, job) });
+        window
+            .spawn(cx, async move |cx| {
+                let outcome = task.await;
+                cx.update(|window, cx| printed(outcome, pdf, &file_name, window, cx))
+                    .ok();
+            })
+            .detach();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = display;
+        let outcome = match handle {
+            Some(raw_window_handle::RawWindowHandle::AppKit(h)) => {
+                latte_printer::print(h.ns_view, job)
+            }
+            _ => latte_printer::Outcome::Unavailable("No window to print from".into()),
+        };
+        printed(outcome, pdf, &file_name, window, cx);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    window
+        .spawn(cx, async move |cx| {
+            let outcome = latte_printer::print(handle, display, job).await;
+            cx.update(|window, cx| printed(outcome, pdf, &file_name, window, cx))
+                .ok();
+        })
+        .detach();
+
+    #[cfg(not(any(
+        windows,
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd"
+    )))]
+    {
+        let _ = (handle, display, job);
+        let outcome = latte_printer::Outcome::Unavailable(String::new());
+        printed(outcome, pdf, &file_name, window, cx);
+    }
+}
+
+/// The toast for how a print went. Without a print dialog the PDF opens in the
+/// computer's PDF viewer, to print from there.
+fn printed(
+    outcome: latte_printer::Outcome,
+    pdf: Vec<u8>,
+    file_name: &str,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    use latte_printer::Outcome;
+    let toast = match outcome {
+        Outcome::Printed => Toast::new(t("Print Successful"), Kind::Success).short(),
+        Outcome::Cancelled | Outcome::Shown => return,
+        Outcome::Failed(e) => Toast::new(format!("{}: {e}", t("Print Failed")), Kind::Error),
+        Outcome::Unavailable(_) => {
+            let dir = std::env::temp_dir().join("latte-books-print");
+            let path = dir.join(file_name);
+            match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, pdf)) {
+                Ok(()) => {
+                    cx.open_with_system(&path);
+                    Toast::new(t("Opened in your PDF viewer to print"), Kind::Success).short()
+                }
+                Err(e) => Toast::new(format!("{}: {e}", t("Print Failed")), Kind::Error),
+            }
+        }
+    };
+    show_toast(toast, window, cx);
 }
 
 /// A file name from a document's name.

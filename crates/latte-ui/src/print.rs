@@ -5,8 +5,8 @@
 //! Print Settings, New Template, the template itself and Duplicate Template.
 //!
 //! Differences from Books:
-//! - Print opens the PDF in the computer's PDF viewer to print from there; GPUI has no
-//!   print dialog.
+//! - Print opens the computer's own print dialog rather than Chromium's (see
+//!   `latte_printer`).
 //! - A Books HTML template isn't printed: the page says so, and offers Convert to Typst,
 //!   which makes a Typst copy of it and opens that in the Template Builder.
 //! - Every page is shown, one under another; Books shows the first page's area and
@@ -40,7 +40,7 @@ pub struct PrintPage {
     template_list: Vec<String>,
     template: Option<PrintTemplate>,
     picker: Entity<LinkInput>,
-    printout: Option<Printout>,
+    printout: Option<Arc<Printout>>,
     pages: Vec<(Arc<Image>, (f64, f64))>,
     errors: Vec<PrintError>,
     /// A message under the header, such as a failed conversion.
@@ -187,7 +187,7 @@ impl PrintPage {
 
     fn save_pdf(&mut self, print: bool, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(printout) = &self.printout {
-            print_parts::output(printout.pdf(), print, &self.name, window, cx);
+            print_parts::output(printout, print, &self.name, window, cx);
         }
     }
 

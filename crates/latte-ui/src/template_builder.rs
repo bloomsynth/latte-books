@@ -76,7 +76,7 @@ pub struct TemplateBuilder {
     panel_width: f32,
     /// The scale, panel width and sidebar before edit mode, while it is on.
     edit_mode: Option<(f32, f32)>,
-    printout: Option<Printout>,
+    printout: Option<Arc<Printout>>,
     pages: Vec<(Arc<Image>, (f64, f64))>,
     errors: Vec<PrintError>,
     error: Option<String>,
@@ -563,7 +563,7 @@ impl TemplateBuilder {
     fn save_pdf(&mut self, print: bool, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(printout) = &self.printout {
             let name = self.doc.name().unwrap_or_default().to_owned();
-            print_parts::output(printout.pdf(), print, &name, window, cx);
+            print_parts::output(printout, print, &name, window, cx);
         }
     }
 
