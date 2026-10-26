@@ -846,7 +846,8 @@ impl FormPage {
             let s = self.session.borrow();
             form_view::exchange_rate(&s.fyo, &self.doc).map(|(_, _, r)| r)
         };
-        if current == Some(rate) {
+        // The rate as entered: an untouched box, read back, gives the same rate.
+        if current.is_some_and(|c| (c - rate).abs() <= c.abs() * 1e-12) {
             return;
         }
         self.set_value(

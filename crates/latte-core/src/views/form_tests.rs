@@ -303,3 +303,17 @@ fn quick_view_shows_the_linked_documents_values() {
         "{values:?}"
     );
 }
+
+#[test]
+fn the_rate_box_keeps_the_rate_as_entered() {
+    // Books shows 13.33 and writes it back on leaving the box; Latte shows every digit,
+    // so reading the box back gives the rate again.
+    let rate = 40.0 / 3.0;
+    for (from_value, swapped) in [(1.0, false), (1.0, true), (7.0, false), (7.0, true)] {
+        let shown = crate::fyo::model::helpers::js_number_string(exchange_rate_right(
+            rate, from_value, swapped,
+        ));
+        let back = exchange_rate_from_right(shown.parse().unwrap(), from_value, swapped);
+        assert!((back - rate).abs() <= rate * 1e-12, "{back} for {rate}");
+    }
+}

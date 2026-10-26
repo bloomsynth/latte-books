@@ -691,11 +691,15 @@ what Books already saved is left as it is.
 - **How we know:** from the code.
 - **Test:** `a_payment_without_taxes_prints`.
 
-## To fix when the app is built
+## Forms
 
 ### The rate box rewrites the exchange rate
 
 - **In Books:** the exchange rate box shows the rate to two decimals and writes that back
   when you leave it, even unchanged, so 13.3333… becomes 13.33.
+- **What it does to your books:** opening a foreign-currency invoice and clicking through
+  the rate changes its rate, and so every amount converted with it.
+- **In Latte:** the box shows the rate with all its digits, and leaving it unchanged
+  leaves the rate as it was.
 - **How we know:** seen in Books, 2026-10-23, comparing an invoice in EUR.
-- **Plan:** the Phase 3 form keeps the rate as entered.
+- **Test:** `the_rate_box_keeps_the_rate_as_entered`.

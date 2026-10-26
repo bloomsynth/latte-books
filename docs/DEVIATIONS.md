@@ -20,6 +20,7 @@ Latte fixes are also described one by one in [BOOKS-BUGS.md](BOOKS-BUGS.md).
 | Custom forms and fields | Customize Form is a page of its own, and a new field appears straight away | Customize Form is the CustomForm list and form; saving or deleting one opens the file again by itself, which adds the new fields and their columns | The schemas are built when a file is opened; reopening is how Books makes the column too |
 | A custom field's label set again to the same value | Refused as a duplicate of itself | Allowed | Books bug |
 | Exchange rates | An invoice in a foreign currency fetches today's rate from api.vatcomply.com | The rate is 1 until it is set in the header's exchange rate control, as in Books when it can't fetch | No network calls yet |
+| Exchange rate box | Shows the rate to two decimals and writes that back on leaving the box, even unchanged | Shows every digit; leaving it unchanged keeps the rate | Books bug |
 | Returning an invoice with loyalty points | The return changes the invoice's loyalty entry by its own points, whichever way they went | Refused with "Returning an invoice with loyalty points isn't supported in Latte yet." | Books' result isn't clearly right; to settle with real cases |
 | Pricing rule applied flag | Set on every sales invoice once pricing rules are on | Set only when a rule applies | Books bug |
 | A coupon for an item in several pricing rules | Checked against the first rule the item is in only | Applies whatever the order of the item's rules | Books bug |
