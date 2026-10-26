@@ -48,7 +48,7 @@ pub struct ReportPrintPage {
     print_size: &'static str,
     landscape: bool,
     columns: Vec<bool>,
-    printout: Option<latte_print::Printout>,
+    printout: Option<Arc<latte_print::Printout>>,
     pages: Vec<(Arc<Image>, (f64, f64))>,
     error: Option<String>,
     generation: usize,
@@ -259,7 +259,7 @@ impl ReportPrintPage {
             let today = jiff::Zoned::now().date();
             format!("{} - {}", t(&self.report.title), s.formatter.date(today))
         };
-        print_parts::output(printout.pdf(), print, &name, window, cx);
+        print_parts::output(printout, print, &name, window, cx);
     }
 }
 

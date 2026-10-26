@@ -16,6 +16,7 @@ latte-core = { path = "crates/latte-core" }
 latte-i18n = { path = "crates/latte-i18n" }
 latte-mcp = { path = "crates/latte-mcp" }
 latte-print = { path = "crates/latte-print" }
+latte-printer = { path = "crates/latte-printer" }
 latte-regional = { path = "crates/latte-regional" }
 latte-ui = { path = "crates/latte-ui" }
 

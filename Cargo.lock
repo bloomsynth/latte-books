@@ -283,6 +283,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "getrandom 0.4.3",
+ "raw-window-handle",
  "serde",
  "serde_repr",
  "wayland-backend",
@@ -4155,6 +4156,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "latte-printer"
+version = "0.1.0-beta.2"
+dependencies = [
+ "ashpd",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-pdf-kit",
+ "raw-window-handle",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "latte-regional"
 version = "0.1.0-beta.2"
 dependencies = [
@@ -4184,7 +4198,9 @@ dependencies = [
  "latte-i18n",
  "latte-mcp",
  "latte-print",
+ "latte-printer",
  "latte-schema",
+ "raw-window-handle",
  "serde_json",
 ]
 
@@ -5105,6 +5121,20 @@ dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
  "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-pdf-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c14ed801ae810c6ba487cedd7616bb48f9a8e37940042f57e862538e2c7db117"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation 0.3.2",
 ]
 

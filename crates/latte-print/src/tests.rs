@@ -238,3 +238,29 @@ fn a_report_prints() {
     assert!(printout.page_count() > 1);
     assert!(printout.page_sizes()[0].0 > printout.page_sizes()[0].1);
 }
+
+/// What Print sends a printer that takes pictures: each page on white, as BGRA.
+#[test]
+fn a_page_is_drawn_for_the_printer() {
+    let printout = render(
+        crate::templates::BASE_TEMPLATE,
+        &values("SalesInvoice"),
+        (21.0, 29.7),
+        &t,
+    )
+    .unwrap();
+    let (width, height, bgra) = printout.bgra_page(0, 1.0).unwrap();
+    let (w, h) = printout.page_sizes()[0];
+    assert_eq!((width, height), (w.round() as u32, h.round() as u32));
+    assert_eq!(bgra.len(), (width * height * 4) as usize);
+    // The top left corner is the white paper, opaque.
+    assert_eq!(&bgra[..4], &[255, 255, 255, 255]);
+    // Something is printed: not every pixel is white.
+    assert!(
+        bgra.as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| *p != [255, 255, 255, 255])
+    );
+    assert!(printout.bgra_page(printout.page_count(), 1.0).is_none());
+}

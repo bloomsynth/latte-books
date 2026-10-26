@@ -308,6 +308,34 @@ impl Printout {
         })
     }
 
+    /// Page `index` drawn on white, `pixel_per_pt` pixels to a point, for a printer:
+    /// its width and height in pixels and its pixels as BGRA, top row first.
+    pub fn bgra_page(&self, index: usize, pixel_per_pt: f64) -> Option<(u32, u32, Vec<u8>)> {
+        let page = self.document.pages().get(index)?;
+        let options = typst_render::RenderOptions {
+            pixel_per_pt: Scalar::new(pixel_per_pt),
+            ..Default::default()
+        };
+        let pixmap = typst_render::render(page, &options);
+        // Premultiplied RGBA over white: each colour plus what the alpha leaves.
+        let bgra = pixmap
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| {
+                let clear = 255 - p[3];
+                [
+                    p[2].saturating_add(clear),
+                    p[1].saturating_add(clear),
+                    p[0].saturating_add(clear),
+                    255,
+                ]
+            })
+            .collect();
+        Some((pixmap.width(), pixmap.height(), bgra))
+    }
+
     /// Each page as a PNG image, `pixel_per_pt` pixels to a point.
     pub fn png_pages(&self, pixel_per_pt: f64) -> Result<Vec<Vec<u8>>, String> {
         self.png_pages_up_to(pixel_per_pt, usize::MAX)
