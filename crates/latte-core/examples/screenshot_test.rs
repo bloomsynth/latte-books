@@ -1,4 +1,4 @@
-//! Makes the company the README's screenshot shows: Copperleaf Coffee Roasters, a made-up
+//! Makes the company the README's screenshot shows: Copperleaf Coffee, a made-up
 //! US coffee roaster with a year of growing wholesale sales, seasonal peaks, green coffee
 //! bought to match, rent, payroll and ads, and customers who pay 10 to 45 days later.
 //!
@@ -146,7 +146,7 @@ fn values<const N: usize>(pairs: [(&str, DocValue); N]) -> DocValueMap {
 fn run(path: &str) -> Result<()> {
     let today = today();
     let mut options = SetupWizardOptions::for_country("United States", today);
-    options.company_name = "Copperleaf Coffee Roasters".into();
+    options.company_name = "Copperleaf Coffee".into();
     options.fullname = "Maya Okafor".into();
     options.email = "maya@copperleaf.example".into();
     options.bank_name = BANK.into();
