@@ -8,6 +8,9 @@
 //! shows or hides the sidebar and F1 opens the documentation of the page shown; the
 //! sidebar's Shortcuts lists them all.
 //!
+//! Not in Books: the Show Sidebar button is always shown, not only when hovered, and the
+//! sidebar buttons name Shift+H in a tooltip.
+//!
 //! Not in Books: every two seconds the desk looks for changes another device, such as an AI
 //! assistant, wrote to the file, and shows the page again when it may show them.
 //!
@@ -15,6 +18,7 @@
 //! Books' Shift+Backspace goes back even then.
 
 use crate::books::{self, Text as _, black, gray, pick, raw_gray, white};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -616,6 +620,7 @@ impl Desk {
                     .rounded(books::RADIUS)
                     .cursor_pointer()
                     .hover(|d| d.bg(hover))
+                    .tooltip(sidebar_tooltip)
                     .child(books::icon("chevrons-left", px(16.), link_color))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.sidebar_hidden = true;
@@ -623,6 +628,11 @@ impl Desk {
                     })),
             )
     }
+}
+
+/// The sidebar buttons' tooltip, which names the shortcut.
+fn sidebar_tooltip(window: &mut Window, cx: &mut App) -> AnyView {
+    Tooltip::new(format!("{} (Shift+H)", t("Toggle sidebar"))).build(window, cx)
 }
 
 /// Hides or shows the sidebar: the Template Builder's edit mode hides it.
@@ -770,7 +780,8 @@ impl Render for Desk {
                     .child(self.page.clone()),
             )
             .when(self.sidebar_hidden, |d| {
-                // Desk.vue's Show Sidebar button: unseen until hovered.
+                // Desk.vue's Show Sidebar button, which Books leaves unseen until hovered;
+                // here it is always shown, so a hidden sidebar can be found again.
                 d.child(
                     div()
                         .id("show-sidebar")
@@ -780,10 +791,13 @@ impl Render for Desk {
                         .m_4()
                         .p_1()
                         .rounded(books::RADIUS)
+                        .border_1()
+                        .border_color(gray(200))
+                        .bg(white())
                         .text_color(gray(600))
-                        .opacity(0.)
                         .cursor_pointer()
-                        .hover(|d| d.opacity(1.).bg(gray(100)).shadow_md())
+                        .hover(|d| d.bg(gray(100)).shadow_md())
+                        .tooltip(sidebar_tooltip)
                         .child(books::icon("chevrons-right", px(16.), gray(600)))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sidebar_hidden = false;
