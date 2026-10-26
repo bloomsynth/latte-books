@@ -184,3 +184,35 @@ fn every_chart_of_accounts_can_be_set_up() {
         assert!(count(&fyo, "Account") > 10, "{chart}");
     }
 }
+
+#[test]
+fn the_company_name_can_be_changed_but_not_the_bank_or_country() {
+    let file = TempFile::new("rename");
+    let mut fyo = indian_company(&file);
+    let mut doc = fyo.get_doc("AccountingSettings", None).unwrap();
+    let schema = doc.schema().clone();
+    let ctx = crate::views::field::context(&fyo, &doc, None);
+    let read_only = |fieldname: &str| {
+        let f = schema
+            .fields
+            .iter()
+            .find(|f| f.fieldname == fieldname)
+            .unwrap();
+        crate::views::field::is_read_only(f, &ctx)
+    };
+    assert!(!read_only("companyName"));
+    assert!(read_only("bankName"));
+    assert!(read_only("country"));
+
+    doc.set_value("companyName", text("Acme Roasters"));
+    doc.sync(&mut fyo).unwrap();
+    assert_eq!(
+        setting(&fyo, "AccountingSettings", "companyName"),
+        Some(text("Acme Roasters"))
+    );
+    // What invoices print is Print Settings' own name, left as it was.
+    assert_eq!(
+        setting(&fyo, "PrintSettings", "companyName"),
+        Some(text("Acme"))
+    );
+}

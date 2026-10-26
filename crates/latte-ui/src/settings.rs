@@ -8,6 +8,8 @@
 //! - Saved settings take effect at once, said in a toast; Books asks to reload the window.
 //!   Ctrl+S (⌘S) saves, as in Books.
 //! - There is no ERPNext Sync tab.
+//! - The company's name can be changed in General; the window title and the recent files
+//!   follow it.
 
 use std::collections::HashMap;
 
@@ -107,6 +109,7 @@ impl SettingsPage {
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let company = self.session.borrow().company_name();
         let mut errors = Vec::new();
         for form in self.forms.values() {
             form.update(cx, |form, cx| {
@@ -119,6 +122,12 @@ impl SettingsPage {
         // Dark mode, as Books shows it once the window is reloaded.
         let dark = self.session.borrow().dark_mode();
         books::set_dark(dark, cx);
+        let renamed = self.session.borrow().company_name();
+        if renamed != company {
+            let path = self.session.borrow().path.clone();
+            crate::session::remember_file(&path, &renamed);
+            window.set_window_title(&format!("{renamed} - Latte Books"));
+        }
         if errors.is_empty() {
             self.error = None;
             show_toast(
