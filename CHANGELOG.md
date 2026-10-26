@@ -5,11 +5,79 @@ here.
 
 ## [Unreleased]
 
+## [0.1.0-beta.3] - 2026-10-26
+
+Latte now looks and works like Frappe Books on every screen.
+
+### Looks like Frappe Books
+
+- Frappe Books' colours, font, icons and layout on every screen, and **dark mode**
+  (System Settings).
+- **Search** (Ctrl+K, ⌘K on macOS) with recent items and filters, and a **Shortcuts** window
+  listing every keyboard shortcut.
+- Messages that close by themselves and offer a next step, such as **Open Folder** after
+  an export.
+
+### Forms
+
+- Edit a table row's other fields in a panel beside the form, and see **Linked Entries**
+  (Ctrl+L).
+- Link fields search as you type, with **Create** to add a new record without leaving
+  the form.
+- **Make Payment** opens over the invoice and marks it paid when you save.
+- Frappe Books' checks before saving, submitting and deleting, such as a warning when an
+  item is short of stock.
+- Set the **exchange rate** on an invoice in another currency.
+- A calendar for dates, a colour picker, attachments, and a barcode box for scanners.
+
+### Printing
+
+- Templates are written in Typst and edited in the **Template Builder**, with a live
+  preview. Printouts use fonts that come with Latte, so they look the same on every
+  computer.
+- New templates for shipments and POS receipts.
+- **Convert to Typst** turns a template you made in Frappe Books into one you can edit in
+  Latte. The original is kept for Frappe Books.
+- **Print** opens your computer's print dialog.
+- Print reports, and export any report as JSON.
+
+### Point of sale
+
+- The Modern layout as well as the Classic one, item pictures and groups.
+- Coupons, loyalty points, price lists, returns and item enquiries at the till.
+- Change a row's rate, discount or quantity at the till, with an on-screen keypad.
+
+### Also
+
+- Lists: pick items and create a quote or invoice from them; filter any list.
+- The Import Wizard edits cells in place and lets you fix the rows that failed.
 - On Windows, the installer updates an older Latte Books in place, without asking whether
   to uninstall it first.
-- A new payment no longer defaults to the Cash In Hand or Bank Accounts group, which
-  could happen on a fast computer and left the payment out of the cash account and the
-  Cashflow chart.
+- Fixed: a new payment could default to the Cash In Hand or Bank Accounts group on a fast
+  computer, leaving it out of the cash account and the Cashflow chart.
+- Fixed: removing a coupon from an invoice could leave its discounted rate on the row.
+- 70 Frappe Books bugs fixed in all, each listed in
+  [docs/BOOKS-BUGS.md](https://github.com/bloomsynth/latte-books/blob/main/docs/BOOKS-BUGS.md).
+
+### Installing
+
+The installers aren't signed yet, so your system warns you the first time:
+
+- **Windows** (`.exe`): SmartScreen says "Windows protected your PC". Choose **More info**,
+  then **Run anyway**. Latte installs for your user only, without admin rights.
+- **macOS** (`.dmg`, Apple Silicon): drag Latte Books to Applications, then right-click it
+  and choose **Open**. If macOS says the app is damaged, run
+  `xattr -cr "/Applications/Latte Books.app"` in Terminal.
+- **Linux**: install the `.deb`, or make the `.AppImage` executable and run it.
+
+Check a download against `SHA256SUMS.txt`, or that it was built from this repository with
+`gh attestation verify <file> --repo bloomsynth/latte-books`.
+
+### Known issues
+
+- Frappe Books' own HTML templates don't print directly: convert them to Typst first.
+- Exchange rates aren't fetched: set the rate on an invoice in another currency yourself.
+- Arabic and Persian are shown left to right.
 
 ## [0.1.0-beta.2] - 2026-10-25
 

@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["spikes"]
 
 [workspace.package]
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 edition = "2024"
 license = "AGPL-3.0-only"
 publish = false
