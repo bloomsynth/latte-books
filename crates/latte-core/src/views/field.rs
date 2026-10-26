@@ -7,6 +7,8 @@
 //   Books' schemas never write those out, so this changes nothing in practice.
 // - Dates are typed as YYYY-MM-DD; Books' browser input takes the computer's format. Both
 //   open a calendar (`latte-ui`'s `date_picker.rs`).
+// - AccountingSettings' Company Name can be changed. Books makes it read-only, though
+//   nothing in the books refers to it: it is only shown, as the company's name.
 
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -53,6 +55,11 @@ pub fn is_read_only(field: &Field, ctx: &DocContext<'_>) -> bool {
     }
     if doc.is_cancelled() || parent_is(Doc::is_cancelled) {
         return true;
+    }
+    if field.schema_name.as_deref() == Some("AccountingSettings")
+        && field.fieldname == "companyName"
+    {
+        return false;
     }
     field.read_only
         || doc
