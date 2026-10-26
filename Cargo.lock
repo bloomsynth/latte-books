@@ -4175,6 +4175,7 @@ dependencies = [
 name = "latte-ui"
 version = "0.1.0-beta.2"
 dependencies = [
+ "base64 0.22.1",
  "fastrand",
  "gpui-kit",
  "jiff",
@@ -7887,9 +7888,7 @@ version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27ee52e27dfab0da5ac3d19e7e43a21fbc7ff83af9301119468bae89fa857a8b"
 dependencies = [
- "dirs 6.0.0",
  "ecow",
- "fontdb",
  "once_cell",
  "parking_lot",
  "rustc-hash 2.1.3",

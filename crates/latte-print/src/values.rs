@@ -2,8 +2,9 @@
 //! `src/utils/printTemplates.ts` @ v0.36.0.
 //!
 //! Differences from Books:
-//! - Linked documents are followed two links deep (`doc.links.party.links.address`),
-//!   which is as deep as the templates read. Books follows every link.
+//! - Linked documents are followed two links deep (`doc.links.party.links.address`,
+//!   and a row's `row.links.item.links.…`), as deep as the Key Hints go. Books follows
+//!   every link.
 //! - A Payment's `taxes` are the Sales Invoice's tax rows formatted like other rows,
 //!   and an empty list when the payment isn't for a Sales Invoice. Books passes the
 //!   invoice's raw rows, and nothing at all otherwise, which the Payment template reads
@@ -123,6 +124,14 @@ pub fn print_values(
         Some(&ACCOUNTING_SETTINGS_FIELDS),
         0,
     )?);
+    // A field the company's schemas don't have, such as GSTIN outside India, is
+    // `undefined` in Books, which the templates read as empty.
+    for fieldname in PRINT_SETTINGS_FIELDS
+        .iter()
+        .chain(ACCOUNTING_SETTINGS_FIELDS.iter())
+    {
+        print.entry((*fieldname).to_owned()).or_insert(Value::Null);
+    }
 
     if schema_name.ends_with("Invoice") || schema_name.ends_with("Quote") {
         let discount = if doc.schema().field("enableDiscounting").is_some() {
@@ -241,7 +250,7 @@ fn doc_values(
             let rows = doc
                 .table(&field.fieldname)
                 .iter()
-                .map(|row| doc_values(fyo, formatter, row, None, LINK_DEPTH).map(Value::Object))
+                .map(|row| doc_values(fyo, formatter, row, None, 0).map(Value::Object))
                 .collect::<Result<Vec<_>, _>>()?;
             if rows.is_empty() {
                 Value::from("")

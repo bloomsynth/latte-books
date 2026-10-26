@@ -5,7 +5,8 @@
 // Differences from Books:
 // - A field the schema marks `hidden: false` (or `readOnly: false`) still asks the model.
 //   Books' schemas never write those out, so this changes nothing in practice.
-// - Dates are typed as YYYY-MM-DD; Books opens a date picker.
+// - Dates are typed as YYYY-MM-DD; Books' browser input takes the computer's format. Both
+//   open a calendar (`latte-ui`'s `date_picker.rs`).
 
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -159,16 +160,23 @@ pub fn link_target(field: &Field, ctx: &DocContext<'_>) -> Option<String> {
     }
 }
 
-/// The filters a Link field's options must pass: the field's own `filters` and the
-/// model's `static filters` (`getCreateFilters` is not applied: Books uses those only for
-/// creating from the dropdown).
+/// `getFilters`: the filters a Link field's options must pass: the field's own
+/// `filters`, else the model's `static filters`, which SystemSettings' `removeFilter`
+/// turns off. (`getCreateFilters` is not applied: Books uses those only for creating
+/// from the dropdown.)
 pub fn link_filters(field: &Field, ctx: &DocContext<'_>) -> QueryFilter {
     let mut filters = QueryFilter::new();
-    for (key, value) in field.filters.iter().flatten() {
-        filters.insert(
-            key.clone(),
-            Filter::Equals(FilterValue::Text(value.clone())),
-        );
+    if let Some(own) = &field.filters {
+        for (key, value) in own {
+            filters.insert(
+                key.clone(),
+                Filter::Equals(FilterValue::Text(value.clone())),
+            );
+        }
+        return filters;
+    }
+    if crate::models::helpers::single_is_truthy(ctx.fyo, "SystemSettings", "removeFilter") {
+        return filters;
     }
     if let Some(model_filters) = ctx.doc.model().link_filters(&field.fieldname, ctx) {
         filters.extend(model_filters);
@@ -183,6 +191,17 @@ pub fn link_options(
     field: &Field,
     ctx: &DocContext<'_>,
 ) -> Result<Vec<(String, String)>, Error> {
+    link_options_filtered(fyo, field, ctx, true)
+}
+
+/// [`link_options`], or with `filtered` false every document of the target, as after
+/// "No results found, disable filters".
+pub fn link_options_filtered(
+    fyo: &Fyo,
+    field: &Field,
+    ctx: &DocContext<'_>,
+    filtered: bool,
+) -> Result<Vec<(String, String)>, Error> {
     let Some(target) = link_target(field, ctx) else {
         return Ok(Vec::new());
     };
@@ -195,7 +214,11 @@ pub fn link_options(
         .filter(|title| title != "name" && schema.field(title).is_some());
     let mut fields = vec!["name".to_owned()];
     fields.extend(title_field.clone());
-    let filters = link_filters(field, ctx);
+    let filters = if filtered {
+        link_filters(field, ctx)
+    } else {
+        QueryFilter::new()
+    };
     let options = GetAllOptions {
         fields: Some(fields),
         filters: filters
@@ -249,14 +272,7 @@ pub fn display(formatter: &Formatter, field: &Field, value: Option<&DocValue>) -
         (Some(FieldType::Int), DocValue::Number(n)) => format!("{}", n.trunc() as i64),
         (Some(FieldType::Float), DocValue::Number(n)) => formatter.float(*n),
         (_, DocValue::Number(n)) => crate::fyo::model::helpers::js_number_string(*n),
-        (Some(FieldType::Datetime), DocValue::Date(ts)) => {
-            let zoned = ts.to_zoned(TimeZone::system());
-            format!(
-                "{} {}",
-                formatter.date(zoned.date()),
-                zoned.time().strftime("%H:%M")
-            )
-        }
+        (Some(FieldType::Datetime), DocValue::Date(ts)) => formatter.datetime(*ts),
         (_, DocValue::Date(ts)) => formatter.date(local_date(*ts)),
         (_, DocValue::Bool(b)) => if *b { "Yes" } else { "No" }.to_owned(),
         (_, DocValue::Text(text)) => text.clone(),

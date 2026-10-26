@@ -1,15 +1,16 @@
 //! Choosing a company file: `src/pages/DatabaseSelector.vue` @ v0.36.0.
 //!
 //! Differences from Books:
-//! - Create Demo shows its progress in the selector instead of a full-window loader.
-//! - "Remove" takes a file off the list and leaves it on the disk. Books deletes the file.
+//! - An error opening a file is said in Books' dialog, whose Report opens an issue on Latte
+//!   Books' repository.
+//! - A file's × takes it off the list and leaves it on the disk. Books deletes the file.
 //! - Changing the language rebuilds the screen; Books reloads the window.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use gpui_kit::component::button::*;
+use crate::books::{self, Text as _, black, gray, white};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -19,7 +20,7 @@ use latte_core::dummy::setup_dummy_instance;
 
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::{self, RecentFile};
-use crate::widgets::error_message;
+use crate::widgets::{error_dialog, loading};
 
 pub enum Selected {
     Open(PathBuf),
@@ -175,8 +176,8 @@ impl Selector {
         .detach();
     }
 
+    /// A recent file: its number, name, when it changed and where it is.
     fn row(&self, i: usize, file: &RecentFile, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let path = file.path.clone();
         let forget = file.path.clone();
         let name = if file.company_name.is_empty() {
@@ -187,47 +188,79 @@ impl Selector {
         } else {
             file.company_name.clone()
         };
+        let modified = std::fs::metadata(&file.path)
+            .and_then(|m| m.modified())
+            .ok()
+            .map(relative_time)
+            .unwrap_or_default();
+        let shown_path = truncate_path(&file.path.display().to_string());
         div()
             .id(("file", i))
             .h_flex()
-            .w_full()
-            .px_3()
-            .py_2()
-            .gap_3()
-            .rounded_md()
+            .h_16()
+            .px_4()
+            .gap_4()
             .cursor_pointer()
-            .hover(|d| d.bg(theme.list_hover))
+            .hover(|d| d.bg(gray(50)))
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(Selected::Open(path.clone()))))
             .child(
                 div()
-                    .size(px(28.))
+                    .size_8()
                     .flex_none()
-                    .rounded_md()
-                    .bg(theme.muted)
+                    .rounded_full()
+                    .bg(gray(200))
                     .h_flex()
                     .justify_center()
+                    .text_13()
+                    .text_color(gray(500))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(name.chars().next().unwrap_or('?').to_string()),
+                    .child((i + 1).to_string()),
             )
             .child(
                 div()
                     .v_flex()
                     .flex_1()
-                    .overflow_hidden()
-                    .child(div().font_weight(FontWeight::MEDIUM).child(name))
+                    .min_w_0()
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
+                            .h_flex()
+                            .justify_between()
+                            .child(div().font_weight(FontWeight::MEDIUM).child(name))
+                            .child(
+                                div()
+                                    .text_12()
+                                    .text_color(gray(600))
+                                    .whitespace_nowrap()
+                                    .child(modified),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_12()
+                            .text_color(gray(600))
                             .truncate()
-                            .child(file.path.display().to_string()),
+                            .child(shown_path),
                     ),
             )
             .child(
-                Button::new(("forget", i))
-                    .ghost()
-                    .xsmall()
-                    .label(t("Remove"))
+                div()
+                    .id(("forget", i))
+                    .group("forget")
+                    .ml_auto()
+                    .size_8()
+                    .flex_none()
+                    .rounded_full()
+                    .h_flex()
+                    .justify_center()
+                    .hover(|d| d.bg(books::color("red", 200)))
+                    .child(
+                        books::icon("x", px(16.), gray(600))
+                            .group_hover("forget", |s| s.text_color(books::color("red", 400))),
+                    )
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(t("Remove from the list"))
+                            .build(window, cx)
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         session::forget_file(&forget);
@@ -238,24 +271,63 @@ impl Selector {
     }
 }
 
+/// `truncate`: the end of a long path.
+fn truncate_path(path: &str) -> String {
+    let count = path.chars().count();
+    if count < 72 {
+        return path.to_owned();
+    }
+    let tail: String = path.chars().skip(count - 72).collect();
+    format!("...{tail}")
+}
+
+/// `DateTime.toRelative()`: "3 days ago".
+fn relative_time(time: std::time::SystemTime) -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(time)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (n, unit) = match seconds {
+        s if s < 60 => (s, "second"),
+        s if s < 3_600 => (s / 60, "minute"),
+        s if s < 86_400 => (s / 3_600, "hour"),
+        s if s < 2_592_000 => (s / 86_400, "day"),
+        s if s < 31_536_000 => (s / 2_592_000, "month"),
+        s => (s / 31_536_000, "year"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
+/// A round icon of the selector's actions: blue for new, green for existing, pink for the
+/// demo.
+fn action_icon(color: &str, icon: &str, size: f32) -> Div {
+    div()
+        .size_8()
+        .flex_none()
+        .rounded_full()
+        .bg(books::color(color, 500))
+        .h_flex()
+        .justify_center()
+        .child(books::icon(icon, px(size), books::hex(0xFFFFFF)))
+}
+
 impl Render for Selector {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let action = |id: &'static str, title: &str, detail: &str| {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let busy = self.creating_demo.is_some();
+        let action = |id: &'static str, icon: Div, title: &str, detail: &str| {
             div()
                 .id(id)
-                .v_flex()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .cursor_pointer()
-                .hover(|d| d.bg(theme.list_hover))
-                .child(div().font_weight(FontWeight::MEDIUM).child(t(title)))
+                .h_flex()
+                .h_16()
+                .px_4()
+                .gap_4()
+                .when(!busy, |d| d.cursor_pointer().hover(|d| d.bg(gray(50))))
+                .child(icon)
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(t(detail)),
+                        .v_flex()
+                        .child(div().font_weight(FontWeight::MEDIUM).child(t(title)))
+                        .child(div().text_12().text_color(gray(600)).child(t(detail))),
                 )
         };
         let rows: Vec<AnyElement> = self
@@ -265,125 +337,142 @@ impl Render for Selector {
             .enumerate()
             .map(|(i, file)| self.row(i, file, cx).into_any_element())
             .collect();
-        div().size_full().h_flex().justify_center().child(
-            div()
-                .v_flex()
-                .w(px(600.))
-                .max_h(px(640.))
-                .border_1()
-                .border_color(theme.border)
-                .rounded_lg()
-                .child(
-                    div()
-                        .v_flex()
-                        .p_4()
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .child(
-                            div()
-                                .text_xl()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(t("Welcome to Latte Books")),
-                        )
-                        .child(div().text_color(theme.muted_foreground).child(t(
-                            "Create a new company or select an existing one from your computer",
-                        ))),
-                )
-                .children(self.error.clone().map(|e| error_message(e, cx)))
-                .child(
-                    div()
-                        .v_flex()
-                        .p_2()
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .child(
-                            action(
-                                "new-company",
-                                "New Company",
-                                "Create a new company and store it on your computer",
+        let has_files = !self.files.is_empty();
+        let hr = || div().w_full().h(px(1.)).flex_none().bg(gray(200));
+        div()
+            .size_full()
+            .h_flex()
+            .justify_center()
+            .bg(gray(25))
+            .child(
+                div()
+                    .v_flex()
+                    .relative()
+                    .w(books::W_FORM)
+                    .h(px(700.))
+                    .bg(white())
+                    .border_1()
+                    .border_color(gray(200))
+                    .rounded(books::RADIUS_LG)
+                    .shadow(books::shadow_lg())
+                    .text_color(gray(900))
+                    .child(
+                        div()
+                            .v_flex()
+                            .p_4()
+                            .child(
+                                div()
+                                    .text_20()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(black())
+                                    .child(t("Welcome to Latte Books")),
                             )
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Selected::New))),
+                            .child(div().text_13().text_color(gray(600)).child(t(
+                                "Create a new company or select an existing one from your computer",
+                            ))),
+                    )
+                    .child(hr())
+                    .child(
+                        action(
+                            "new-company",
+                            action_icon("blue", "plus", 20.),
+                            "New Company",
+                            "Create a new company and store it on your computer",
                         )
-                        .child(
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(Selected::New))),
+                    )
+                    .child(
+                        action(
+                            "existing-company",
+                            action_icon("green", "upload", 16.),
+                            "Existing Company",
+                            "Load an existing company from your computer",
+                        )
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.open_existing(window, cx)),
+                        ),
+                    )
+                    .when(!has_files, |d| {
+                        d.child(
                             action(
-                                "existing-company",
-                                "Existing Company",
-                                "Load an existing company from your computer",
+                                "create-demo",
+                                action_icon("pink", "monitor", 16.),
+                                "Create Demo",
+                                "Create a demo company to try out Latte Books",
                             )
                             .on_click(
-                                cx.listener(|this, _, window, cx| this.open_existing(window, cx)),
+                                cx.listener(|this, _, window, cx| this.create_demo(window, cx)),
                             ),
                         )
-                        .when(self.files.is_empty(), |d| {
-                            d.child(
-                                action(
-                                    "create-demo",
-                                    "Create Demo",
-                                    "Create a demo company to try out Latte Books",
-                                )
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.create_demo(window, cx)),
-                                ),
-                            )
-                        }),
-                )
-                .child(match &self.creating_demo {
-                    // `Loading`.
-                    Some((message, percent)) => div()
-                        .id("files")
-                        .v_flex()
-                        .p_4()
-                        .gap_2()
-                        .flex_1()
-                        .child(div().text_sm().child(t(message)))
-                        .child(
-                            div()
-                                .h(px(6.))
-                                .w_full()
-                                .rounded_full()
-                                .bg(theme.muted)
-                                .child(
+                    })
+                    .child(hr())
+                    .child(
+                        div()
+                            .id("files")
+                            .v_flex()
+                            .max_h(px(340.))
+                            .overflow_y_scroll()
+                            .children(rows),
+                    )
+                    .when(has_files, |d| d.child(hr()))
+                    // The language and Create Demo, at the foot of the card.
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h_flex()
+                            .justify_between()
+                            .p_4()
+                            .text_12()
+                            .when(!busy, |d| {
+                                d.child(div().w(px(160.)).child(self.language.clone()))
+                            })
+                            .when(busy, |d| d.child(div()))
+                            .when(has_files, |d| {
+                                let label = if busy { "Please Wait" } else { "Create Demo" };
+                                d.child(
                                     div()
-                                        .h_full()
-                                        .rounded_full()
-                                        .bg(theme.primary)
-                                        .w(relative(percent.clamp(0.0, 1.0) as f32)),
-                                ),
-                        ),
-                    None => div()
-                        .id("files")
-                        .v_flex()
-                        .p_2()
-                        .flex_1()
-                        .overflow_y_scroll()
-                        .children(rows),
-                })
-                .child(
-                    div()
-                        .h_flex()
-                        .justify_between()
-                        .p_2()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .child(div().w(px(200.)).child(self.language.clone()))
-                        .when(!self.files.is_empty(), |d| {
-                            let label = if self.creating_demo.is_some() {
-                                "Please Wait"
-                            } else {
-                                "Create Demo"
-                            };
-                            d.child(
-                                Button::new("create-demo")
-                                    .small()
-                                    .label(t(label))
-                                    .disabled(self.creating_demo.is_some())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.create_demo(window, cx)
-                                    })),
-                            )
-                        }),
-                ),
-        )
+                                        .id("create-demo")
+                                        .h_flex()
+                                        .h_8()
+                                        .px_4()
+                                        .rounded(books::RADIUS)
+                                        .bg(gray(100))
+                                        .when(!busy, |d| {
+                                            d.cursor_pointer().hover(|d| d.bg(gray(200)))
+                                        })
+                                        .child(t(label))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            if this.creating_demo.is_none() {
+                                                this.create_demo(window, cx)
+                                            }
+                                        })),
+                                )
+                            }),
+                    ),
+            )
+            // `Loading` with `full-width` while the demo is made.
+            .children(
+                self.creating_demo
+                    .as_ref()
+                    .map(|(message, percent)| loading(t(message), *percent, window)),
+            )
+            .children(self.error.clone().map(|e| {
+                let this = cx.entity().downgrade();
+                error_dialog(
+                    &e,
+                    std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                        this.update(cx, |this, cx| {
+                            this.error = None;
+                            cx.notify();
+                        })
+                        .ok();
+                    }),
+                    window,
+                )
+            }))
     }
 }
 

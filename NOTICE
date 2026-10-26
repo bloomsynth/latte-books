@@ -45,6 +45,27 @@ License as above with this copyright:
     Copyright (c) 2019 - 2023 Tauri Programme within The Commons Conservancy
     Copyright (c) 2017 - 2019 Cargo-Bundle developers
 
+The app's look follows Frappe Books' interface. Its sidebar and checkbox icons
+(crates/latte-ui/icons/sidebar, check-on.svg, check-off.svg, selector.svg) are taken from
+Frappe Books' components, under the AGPL-3.0 above.
+
+crates/latte-ui/fonts holds Inter (https://rsms.me/inter/), the font Frappe Books uses,
+Copyright (c) 2016-2020 The Inter Project Authors, under the SIL Open Font License 1.1
+(crates/latte-ui/fonts/LICENSE.txt).
+
+crates/latte-ui/icons/feather holds Feather icons (https://feathericons.com), which Frappe
+Books uses, Copyright (c) 2013-2017 Cole Bemis, under the MIT License
+(crates/latte-ui/icons/feather/LICENSE).
+
+Latte's print templates are Typst ports of Frappe Books' print templates
+(vendor/books/templates), and Books' HTML templates are converted to Typst by
+crates/latte-print/src/convert.
+
+crates/latte-print/fonts bundles the Liberation fonts (Copyright (c) 2012 Red Hat, Inc.;
+digitized data copyright (c) 2010 Google Corporation) and Inter (Copyright (c) 2016-2020
+The Inter Project Authors), both under the SIL Open Font License 1.1; see the LICENSE
+files beside them.
+
 Latte Books is not affiliated with, endorsed by or sponsored by Frappe Technologies
 Pvt. Ltd. "Frappe" and "Frappe Books" are trademarks of their owner and are used here
 only to describe where this project comes from.

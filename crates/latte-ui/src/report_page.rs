@@ -2,14 +2,23 @@
 //!
 //! The filters run the report again as they change, and Export saves it as CSV.
 //!
+//! As in Books, the filters are a grid of labelled controls, the rows are 48px with fixed
+//! column widths, a group row folds what is under it, and the ledgers come a page at a
+//! time.
+//!
+//! A date filter opens the calendar of `date_picker.rs` when clicked, as Books' date
+//! input opens the browser's; it can be typed as YYYY-MM-DD too.
+//!
 //! Differences from Books:
-//! - Dates are typed as YYYY-MM-DD.
-//! - Export saves CSV, and JSON for the GSTR reports; Books also offers a PDF print.
+//! - Dates are typed as YYYY-MM-DD or picked from a calendar.
+//! - The JSON export names the software "Latte Books".
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use gpui_kit::component::button::*;
-use gpui_kit::component::checkbox::Checkbox;
+use crate::books::{self, Text as _, gray};
+use crate::widgets::{
+    Button, Kind as ToastKind, check_box, control_frame, dropdown_item, popover_panel, toast,
+};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -23,9 +32,10 @@ use latte_core::reports::{
 use latte_db::{DocValue, GetAllOptions};
 
 use crate::Navigate;
+use crate::date_picker::{DatePicked, DatePicker, PickerClosed, anchored_picker};
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::Shared;
-use crate::widgets::{error_message, info_message, page_header};
+use crate::widgets::{error_message, page_header};
 
 enum FilterControl {
     Input(Entity<InputState>),
@@ -42,8 +52,21 @@ pub struct ReportPage {
     rows: Vec<ReportRow>,
     error: Option<String>,
     info: Option<String>,
+    /// The Export menu is open.
+    menu: bool,
+    /// The group rows folded, by index.
+    folded: HashSet<usize>,
+    /// `Paginator.vue`, for the ledgers: the page, from 1, and the rows on a page.
+    page: usize,
+    count: usize,
+    /// The calendar open under a date filter, by its fieldname.
+    picker: Option<(String, Entity<DatePicker>, [Subscription; 2])>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
+
+/// `wconst`: a column of width 1 is 8rem.
+const WCONST: f32 = 128.;
 
 impl EventEmitter<Navigate> for ReportPage {}
 
@@ -64,10 +87,15 @@ impl ReportPage {
 
     pub fn new(
         session: Shared,
-        report: Box<dyn Report>,
+        mut report: Box<dyn Report>,
+        preset: &[(String, String)],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // `defaultFilters`: the filters the report was opened with.
+        for (fieldname, value) in preset {
+            report.set(fieldname, FilterValue::Text(value.clone()));
+        }
         let filters = report.filters(&session.borrow().fyo);
         let mut page = Self {
             session,
@@ -78,12 +106,37 @@ impl ReportPage {
             rows: Vec::new(),
             error: None,
             info: None,
+            menu: false,
+            folded: HashSet::new(),
+            page: 1,
+            count: 50,
+            picker: None,
+            focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         };
+        page.focus.focus(window, cx);
+        // Ctrl+P (⌘P) opens the Print View while the report is shown, wherever the
+        // focus is, as Books' `pmod+P` does.
+        let entity = cx.entity().downgrade();
+        page._subscriptions
+            .push(cx.intercept_keystrokes(move |event, _, cx| {
+                let k = &event.keystroke;
+                if k.key != "p"
+                    || !(k.modifiers.control || k.modifiers.platform)
+                    || k.modifiers.shift
+                {
+                    return;
+                }
+                if let Some(this) = entity.upgrade() {
+                    this.update(cx, |this, cx| this.open_print_view(cx));
+                    cx.stop_propagation();
+                }
+            }));
+        // The first run sets the default filters, which the controls then show.
+        page.run(window, cx);
         for filter in &filters {
             page.make_control(filter, window, cx);
         }
-        page.run(window, cx);
         page
     }
 
@@ -179,7 +232,7 @@ impl ReportPage {
             _ => {
                 let options = self.link_options(filter);
                 let label = filter.label.clone();
-                let state = cx.new(|cx| LinkInput::new(options, label, window, cx));
+                let state = cx.new(|cx| LinkInput::new(options, label, window, cx).small());
                 if let FilterValue::Text(text) = &value {
                     let text: SharedString = text.clone().into();
                     state.update(cx, |link, cx| link.set_value(Some(text), window, cx));
@@ -245,14 +298,17 @@ impl ReportPage {
 
     fn run(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         let s = self.session.borrow();
+        // Running sets the default filters, such as To Date, that the columns follow.
         let result = self
             .report
-            .columns(&s.fyo, &s.formatter)
-            .and_then(|columns| Ok((columns, self.report.run(&s.fyo, &s.formatter)?)));
+            .run(&s.fyo, &s.formatter)
+            .and_then(|rows| Ok((self.report.columns(&s.fyo, &s.formatter)?, rows)));
         match result {
             Ok((columns, rows)) => {
                 self.columns = columns;
                 self.rows = rows;
+                self.folded.clear();
+                self.page = 1;
                 self.error = None;
             }
             Err(e) => self.error = Some(e.to_string()),
@@ -264,10 +320,18 @@ impl ReportPage {
         let data = {
             let s = self.session.borrow();
             self.report.can_export(&s.fyo).and_then(|()| {
+                let precision = s.formatter.display_precision;
                 if json {
-                    self.report
-                        .export_json(&s.fyo)
-                        .unwrap_or_else(|| Ok(String::new()))
+                    // GSTR's own JSON for the GST portal, else `getJsonData`.
+                    self.report.export_json(&s.fyo).unwrap_or_else(|| {
+                        Ok(reports::json(
+                            self.report.as_ref(),
+                            &s.fyo,
+                            &self.columns,
+                            &self.rows,
+                            precision,
+                        ))
+                    })
                 } else {
                     let precision = s.formatter.display_precision;
                     Ok(reports::csv(&self.columns, &self.rows, precision))
@@ -295,9 +359,14 @@ impl ReportPage {
                 return;
             };
             let result = std::fs::write(&path, csv);
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 match result {
-                    Ok(()) => this.info = Some(format!("Saved {}", path.display())),
+                    Ok(()) => crate::widgets::show_toast(
+                        crate::widgets::Toast::new(t("Export Successful"), ToastKind::Success)
+                            .open_folder(&path),
+                        window,
+                        cx,
+                    ),
                     Err(e) => this.error = Some(e.to_string()),
                 }
                 cx.notify();
@@ -307,136 +376,536 @@ impl ReportPage {
         .detach();
     }
 
-    fn render_filter(&self, filter: &Filter, cx: &mut Context<Self>) -> AnyElement {
-        let control = match self.controls.get(&filter.fieldname) {
-            Some(FilterControl::Input(state)) => Input::new(state).small().into_any_element(),
-            Some(FilterControl::Link(state)) => state.clone().into_any_element(),
+    /// `showPicker()`: the calendar under a date filter.
+    fn open_picker(&mut self, fieldname: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let value = match self.report.get(fieldname) {
+            FilterValue::Date(date) => Some(date.to_datetime(jiff::civil::Time::midnight())),
+            _ => None,
+        };
+        let picker = cx.new(|_| DatePicker::new(value, false));
+        let picked_name = fieldname.to_owned();
+        let picked = cx.subscribe_in(
+            &picker,
+            window,
+            move |this, _, event: &DatePicked, window, cx| {
+                let value = event
+                    .0
+                    .map_or(FilterValue::Null, |d| FilterValue::Date(d.date()));
+                this.set_filter(&picked_name, value, window, cx);
+            },
+        );
+        let closed = cx.subscribe_in(&picker, window, |this, _, _: &PickerClosed, window, cx| {
+            this.picker = None;
+            window.blur(cx);
+            cx.notify();
+        });
+        self.picker = Some((fieldname.to_owned(), picker, [picked, closed]));
+        cx.notify();
+    }
+
+    /// A filter as `Report.vue` shows it: its label above a small bordered control.
+    fn render_filter(
+        &self,
+        filter: &Filter,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let label = || {
+            div()
+                .mb_1()
+                .text_12()
+                .text_color(gray(600))
+                .child(filter.label.clone())
+        };
+        match self.controls.get(&filter.fieldname) {
+            Some(FilterControl::Input(state)) => {
+                let focused = state.focus_handle(cx).is_focused(window);
+                // `Date.vue`: the formatted date and a calendar until clicked.
+                let shown = match (&filter.kind, focused, self.report.get(&filter.fieldname)) {
+                    (FilterKind::Date, false, FilterValue::Date(date)) => {
+                        Some(self.session.borrow().formatter.date(date))
+                    }
+                    (FilterKind::Date, false, _) => Some(String::new()),
+                    _ => None,
+                };
+                let overlay = shown.clone().map(|text| {
+                    let state = state.clone();
+                    let fieldname = filter.fieldname.clone();
+                    let empty = text.is_empty();
+                    div()
+                        .id(SharedString::from(format!(
+                            "filter-{}-shown",
+                            filter.fieldname
+                        )))
+                        .absolute()
+                        .inset_0()
+                        .h_flex()
+                        .px_2()
+                        .cursor_text()
+                        .child(
+                            div()
+                                .flex_1()
+                                .truncate()
+                                .when(empty, |d| d.text_color(gray(500)))
+                                .child(if empty { filter.label.clone() } else { text }),
+                        )
+                        .child(books::icon("calendar", px(16.), gray(600)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            state.focus_handle(cx).focus(window, cx);
+                            this.open_picker(&fieldname, window, cx);
+                        }))
+                });
+                let picker = self
+                    .picker
+                    .as_ref()
+                    .filter(|(name, ..)| *name == filter.fieldname)
+                    .map(|(_, picker, _)| anchored_picker(picker));
+                div()
+                    .v_flex()
+                    .relative()
+                    .child(label())
+                    .child(
+                        control_frame(false, focused)
+                            .relative()
+                            .min_h(px(30.))
+                            .child(
+                                Input::new(state)
+                                    .appearance(false)
+                                    .h(px(28.))
+                                    .px_2()
+                                    .text_13()
+                                    .when(shown.is_some(), |i| i.text_color(hsla(0., 0., 0., 0.))),
+                            )
+                            .children(overlay),
+                    )
+                    .children(picker)
+                    .into_any_element()
+            }
+            Some(FilterControl::Link(state)) => div()
+                .v_flex()
+                .child(label())
+                .child(state.clone())
+                .into_any_element(),
             Some(FilterControl::Check) | None => {
                 let checked = self.report.get(&filter.fieldname) == FilterValue::Bool(true);
                 let fieldname = filter.fieldname.clone();
-                Checkbox::new(SharedString::from(format!("filter-{fieldname}")))
-                    .checked(checked)
-                    .label(filter.label.clone())
-                    .on_click(cx.listener(move |this, checked: &bool, window, cx| {
-                        this.set_filter(&fieldname, FilterValue::Bool(*checked), window, cx)
+                // `Check.vue` with a border, at the foot of its cell (`self-end`).
+                div()
+                    .id(SharedString::from(format!("filter-{fieldname}")))
+                    .mt_auto()
+                    .h_flex()
+                    .min_h(px(30.))
+                    .px_2()
+                    .rounded(books::RADIUS)
+                    .border_1()
+                    .border_color(gray(200))
+                    .bg(gray(25))
+                    .cursor_pointer()
+                    .child(check_box(checked))
+                    .child(
+                        div()
+                            .ml_3()
+                            .text_13()
+                            .text_color(gray(600))
+                            .child(filter.label.clone()),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_filter(&fieldname, FilterValue::Bool(!checked), window, cx)
                     }))
                     .into_any_element()
             }
+        }
+    }
+
+    /// `usePagination`: the ledgers and GST returns come a page at a time.
+    fn paginated(&self) -> bool {
+        matches!(
+            self.report.report_name(),
+            "general-ledger" | "stock-ledger" | "gstr-1" | "gstr-2"
+        )
+    }
+
+    /// The rows shown: those not under a folded group, and on the page.
+    fn visible_rows(&self) -> Vec<(usize, ReportRow)> {
+        let mut hidden_below: Option<usize> = None;
+        let mut rows = Vec::new();
+        for (i, row) in self.rows.iter().enumerate() {
+            let level = row.level.unwrap_or(0);
+            if let Some(fold) = hidden_below {
+                if level > fold {
+                    continue;
+                }
+                hidden_below = None;
+            }
+            if row.is_group && self.folded.contains(&i) {
+                hidden_below = Some(level);
+            }
+            rows.push((i, row.clone()));
+        }
+        if self.paginated() {
+            let start = ((self.page - 1) * self.count).min(rows.len());
+            let end = (start + self.count).min(rows.len());
+            rows = rows[start..end].to_vec();
+        }
+        rows
+    }
+
+    /// `/report-print/<name>`: the Print View of the report as shown.
+    fn open_print_view(&mut self, cx: &mut Context<Self>) {
+        cx.set_global(crate::report_print::LastReport(
+            crate::report_print::ReportSnapshot {
+                name: self.report.report_name().to_owned(),
+                title: self.report.title().to_owned(),
+                columns: self.columns.clone(),
+                rows: self.rows.clone(),
+            },
+        ));
+        cx.emit(Navigate(crate::Nav::Route(
+            latte_core::views::sidebar::Route::ReportPrint(self.report.report_name().to_owned()),
+        )));
+    }
+
+    /// `Paginator.vue`.
+    fn render_paginator(&self, cx: &mut Context<Self>) -> Div {
+        let total = self.rows.len();
+        let pages = total.div_ceil(self.count.max(1)).max(1);
+        let first = ((self.page - 1) * self.count + 1).min(total);
+        let last = (self.page * self.count).min(total);
+        let page = self.page;
+        let arrow = |id: &'static str, icon: &'static str, enabled: bool| {
+            div()
+                .id(id)
+                .when(enabled, |d| d.cursor_pointer())
+                .child(books::icon(
+                    icon,
+                    px(16.),
+                    if enabled {
+                        gray(600)
+                    } else {
+                        gray(600).opacity(0.)
+                    },
+                ))
         };
-        div().w(px(170.)).child(control).into_any_element()
+        let counts: Vec<i64> = [50i64, 100, 500, -1]
+            .into_iter()
+            .filter(|&c| {
+                if c == -1 {
+                    total >= 50
+                } else {
+                    total >= c as usize
+                }
+            })
+            .collect();
+        div()
+            .h_flex()
+            .flex_none()
+            .h(px(50.))
+            .px_4()
+            .text_12()
+            .text_color(gray(800))
+            .child(div().flex_1().child(format!("{first} - {last}")))
+            .child(
+                div()
+                    .flex_1()
+                    .h_flex()
+                    .justify_center()
+                    .gap_1()
+                    .child(
+                        arrow("report-page-back", "chevron-left", page > 1).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.page = page.saturating_sub(1).max(1);
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_1()
+                            .bg(gray(100))
+                            .rounded(books::RADIUS)
+                            .child(div().w_7().h_flex().justify_end().child(page.to_string()))
+                            .child(div().text_color(gray(600)).child("/"))
+                            .child(div().w_7().child(pages.to_string())),
+                    )
+                    .child(
+                        arrow("report-page-next", "chevron-right", page < pages).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.page = (page + 1).min(pages);
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            )
+            .child(
+                div().flex_1().h_flex().justify_end().child(
+                    div()
+                        .h_flex()
+                        .when(!counts.is_empty(), |d| {
+                            d.border_1().border_color(gray(100)).rounded(books::RADIUS)
+                        })
+                        .children(counts.into_iter().map(|c| {
+                            let size = if c == -1 { total.max(1) } else { c as usize };
+                            div()
+                                .id(SharedString::from(format!("report-count-{c}")))
+                                .w_9()
+                                .h_flex()
+                                .justify_center()
+                                .cursor_pointer()
+                                .when(self.count == size, |d| {
+                                    d.bg(gray(100)).rounded(books::RADIUS)
+                                })
+                                .child(if c == -1 { t("All") } else { c.to_string() })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.count = size;
+                                    this.page = 1;
+                                    cx.notify();
+                                }))
+                        })),
+                ),
+            )
     }
 }
 
-fn cell_box(column: &Column) -> Div {
+/// A cell as `ListReport.vue`'s `getCellStyle` places it: `width × 8rem`, `px-3`, none
+/// before the first or after the last.
+fn cell_box(column: &Column, first: bool, last: bool) -> Div {
     let d = div()
-        .flex_grow(column.width.max(0.5) as f32)
-        .flex_basis(px(0.))
-        .min_w(px(60.))
-        .px_2()
-        .truncate();
+        .w(px(column_width(column)))
+        .flex_none()
+        .px_3()
+        .when(first, |d| d.pl_0())
+        .when(last, |d| d.pr_0())
+        .whitespace_nowrap()
+        .overflow_hidden();
     match column.align {
         Align::Right => d.h_flex().justify_end(),
         Align::Center => d.h_flex().justify_center(),
-        Align::Left => d,
+        Align::Left => d.h_flex(),
     }
 }
 
+/// `cell.width ?? 1`, in pixels.
+fn column_width(column: &Column) -> f32 {
+    let width = if column.width > 0. { column.width } else { 1. };
+    width as f32 * WCONST
+}
+
+/// `getCellColorClass`: red or green when asked, gray for nothing or zero.
+fn cell_color(cell: &latte_core::reports::ReportCell, precision: usize) -> Hsla {
+    use latte_core::reports::RawValue;
+    match cell.color {
+        Some(CellColor::Red) => return books::color("red", 600),
+        Some(CellColor::Green) => return books::color("green", 600),
+        None => {}
+    }
+    let zero = match &cell.raw_value {
+        RawValue::Empty => true,
+        RawValue::Text(text) => text.is_empty(),
+        RawValue::Bool(b) => !b,
+        RawValue::Number(n) => format!("{n:.precision$}").parse::<f64>().unwrap_or(0.) == 0.,
+        RawValue::Money(m) => m.round(Some(precision as i64)).parse::<f64>().unwrap_or(0.) == 0.,
+        RawValue::Date(_) => false,
+    };
+    if zero { gray(600) } else { gray(900) }
+}
+
 impl Render for ReportPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // `Report.vue`'s header: the Export group (`getCommonExportActions`), then the
+        // printer button.
+        let menu =
+            self.menu.then(|| {
+                deferred(
+                    anchored().anchor(Anchor::TopRight).snap_to_window().child(
+                        popover_panel()
+                            .id("export-menu")
+                            .occlude()
+                            .mt_2()
+                            .min_w(px(160.))
+                            .p_1()
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.menu = false;
+                                cx.notify();
+                            }))
+                            .child(dropdown_item("export-csv", "CSV").on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.menu = false;
+                                    this.export(false, window, cx)
+                                },
+                            )))
+                            .child(dropdown_item("export-json", "JSON").mt_1().on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.menu = false;
+                                    this.export(true, window, cx)
+                                }),
+                            )),
+                    ),
+                )
+                .with_priority(1)
+            });
         let header = page_header(t(self.report.title()), cx).child(
             div()
                 .h_flex()
                 .gap_2()
-                .when(self.report.has_json_export(), |buttons| {
-                    buttons.child(
-                        Button::new("export-json")
-                            .small()
-                            .label(t("JSON"))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.export(true, window, cx)),
-                            ),
-                    )
-                })
                 .child(
-                    Button::new("export").small().label(t("Export")).on_click(
-                        cx.listener(|this, _, window, cx| this.export(false, window, cx)),
-                    ),
+                    div()
+                        .relative()
+                        .child(Button::new("export").primary().label(t("Export")).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.menu = !this.menu;
+                                cx.notify();
+                            }),
+                        ))
+                        .children(menu),
+                )
+                .child(
+                    Button::new("report-print-view")
+                        .icon("printer")
+                        .tooltip(t("Open Report Print View"))
+                        .on_click(cx.listener(|this, _, _, cx| this.open_print_view(cx))),
                 ),
         );
         let filters: Vec<AnyElement> = self
             .filters
             .clone()
             .iter()
-            .map(|f| self.render_filter(f, cx))
+            .map(|f| self.render_filter(f, window, cx))
             .collect();
         let columns = self.columns.clone();
+        let n = columns.len();
+        let width: f32 = columns.iter().map(column_width).sum::<f32>() + 32.;
         let column_header = div()
             .h_flex()
+            .min_w(px(width))
             .w_full()
+            .h_12()
+            .flex_none()
             .px_4()
-            .py_2()
             .border_b_1()
-            .border_color(theme.border)
-            .text_color(theme.muted_foreground)
-            .children(columns.iter().map(|c| cell_box(c).child(c.label.clone())));
-        let rows = self.rows.clone();
+            .border_color(gray(200))
+            .text_13()
+            .children(
+                columns
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| cell_box(c, i == 0, i + 1 == n).child(c.label.clone())),
+            );
+        let rows = self.visible_rows();
+        let count = rows.len();
+        let precision = self.session.borrow().formatter.display_precision;
         let body = uniform_list(
             "report-rows",
             rows.len(),
             cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
-                let theme = cx.theme().clone();
                 range
-                    .map(|i| {
-                        let row = &rows[i];
+                    .map(|r| {
+                        let (i, row) = &rows[r];
+                        let i = *i;
+                        let is_group = row.is_group;
                         div()
-                            .id(i)
+                            .id(r)
                             .h_flex()
+                            .min_w(px(width))
                             .w_full()
-                            .h(px(32.))
+                            .h_12()
                             .px_4()
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .when(row.is_group, |d| d.font_weight(FontWeight::SEMIBOLD))
-                            .children(row.cells.iter().zip(columns.iter()).map(|(cell, column)| {
-                                let mut d = cell_box(column).pl(px(8. + 16. * cell.indent as f32));
-                                if cell.bold {
-                                    d = d.font_weight(FontWeight::SEMIBOLD);
-                                }
-                                if cell.italics {
-                                    d = d.italic();
-                                }
-                                match cell.color {
-                                    Some(CellColor::Red) => d = d.text_color(theme.red),
-                                    Some(CellColor::Green) => d = d.text_color(theme.green),
-                                    None => {}
-                                }
-                                d.child(cell.value.clone())
-                            }))
+                            .text_13()
+                            .when(r + 1 < count, |d| d.border_b_1().border_color(gray(200)))
+                            .when(is_group, |d| {
+                                d.cursor_pointer()
+                                    .hover(|d| d.bg(gray(50)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !this.folded.remove(&i) {
+                                            this.folded.insert(i);
+                                        }
+                                        cx.notify();
+                                    }))
+                            })
+                            .children(row.cells.iter().zip(columns.iter()).enumerate().map(
+                                |(c, (cell, column))| {
+                                    let mut d = cell_box(column, c == 0, c + 1 == n)
+                                        .text_color(cell_color(cell, precision));
+                                    if cell.indent > 0 {
+                                        d = d.pl(px(32. * cell.indent as f32));
+                                    }
+                                    if cell.bold {
+                                        d = d.font_weight(FontWeight::BOLD);
+                                    }
+                                    if cell.italics {
+                                        d = d.italic();
+                                    }
+                                    d.child(cell.value.clone())
+                                },
+                            ))
                     })
                     .collect()
             }),
         )
         .flex_1();
+        let empty = self.rows.is_empty();
+
+        let toast = self.info.clone().map(|message| {
+            toast(
+                message,
+                ToastKind::Success,
+                cx.listener(|this, _, _, cx| {
+                    this.info = None;
+                    cx.notify();
+                }),
+                window,
+            )
+        });
 
         div()
             .v_flex()
             .size_full()
+            .text_color(gray(900))
+            .track_focus(&self.focus)
             .child(header)
             .children(self.error.clone().map(|e| error_message(e, cx)))
-            .children(self.info.clone().map(|m| info_message(m, cx)))
-            .child(
-                div()
-                    .h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_4()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .children(filters),
-            )
-            .child(column_header)
-            .child(body)
+            .when(!self.filters.is_empty(), |d| {
+                d.child(
+                    div()
+                        .grid()
+                        .grid_cols(5)
+                        .gap_4()
+                        .p_4()
+                        .flex_none()
+                        .border_b_1()
+                        .border_color(gray(200))
+                        .children(filters),
+                )
+            })
+            .map(|d| {
+                if empty {
+                    d.child(
+                        div()
+                            .w_full()
+                            .mt_20()
+                            .h_flex()
+                            .justify_center()
+                            .text_13()
+                            .text_color(gray(800))
+                            .child(t("No Values to be Displayed")),
+                    )
+                } else {
+                    d.child(
+                        div()
+                            .id("report-body")
+                            .flex_1()
+                            .min_h_0()
+                            .v_flex()
+                            .overflow_x_scroll()
+                            .child(column_header)
+                            .child(body),
+                    )
+                }
+            })
+            .when(self.paginated() && !empty, |d| {
+                d.child(self.render_paginator(cx))
+            })
+            .when(!self.paginated(), |d| d.child(div().h_4().flex_none()))
+            .children(toast)
     }
 }

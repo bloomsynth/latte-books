@@ -504,9 +504,12 @@ fn update_pricing_rule_detail(doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error>
             .collect();
         doc.set_table_rows("items", items);
     }
-    // `set('pricingRuleDetail', null)`, then the rows: a table value adds rows.
-    doc.set_table_rows("pricingRuleDetail", Vec::new());
-    doc.set(fyo, "pricingRuleDetail", DocValue::Table(rows))?;
+    // `set('pricingRuleDetail', null)`, which runs the rows' rate formula even when no
+    // rule is left, then the rows: a table value adds rows.
+    doc.set(fyo, "pricingRuleDetail", DocValue::Null)?;
+    if !rows.is_empty() {
+        doc.set(fyo, "pricingRuleDetail", DocValue::Table(rows))?;
+    }
     Ok(())
 }
 

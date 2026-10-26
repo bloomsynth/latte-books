@@ -552,6 +552,46 @@ what Books already saved is left as it is.
 - **How we know:** from the code.
 - **Test:** `a_saved_sale_is_taken_up_and_paid_later`.
 
+### A cash refund for a return can't be paid
+
+- **In Books:** the refund for a return is a payment out, and the till sets the counter cash
+  account as its To Account, as it does for a sale. The From Account is the counter cash
+  account too, and the payment is refused as going to and from the same account.
+- **What it does to your books:** a return paid back in cash at the till is submitted but
+  left unpaid.
+- **In Latte:** the refund is paid from the counter cash account to the customer.
+- **How we know:** from the code; Latte refused it the same way until fixed.
+- **Test:** `a_sale_is_returned_and_paid_back_at_the_till`.
+
+### A refused quantity stays on the row
+
+- **In Books:** a row's quantity changed in its details, or on the Modern UI's keypad, is
+  set, then checked against the stock; when the check fails the error is shown and the
+  refused quantity is left on the row. Only the quick quantity (Q and digits) puts it back.
+- **What it does to your books:** the sale can be saved with more than there is in stock.
+- **In Latte:** the quantity goes back to what it was.
+- **How we know:** from the code.
+- **Test:** `a_row_quantity_is_checked_and_put_back_if_refused`.
+
+### The keypad takes a quantity of zero or less
+
+- **In Books:** the keypad sets whatever is typed, with its minus key, as the row's
+  quantity. The row's own field and the quick quantity refuse zero or less on a sale.
+- **What it does to your books:** a sale can carry a negative row, taking stock back in
+  without a return.
+- **In Latte:** "Quantity must be greater than zero." as elsewhere.
+- **How we know:** from the code.
+- **Test:** `the_keypad_types_and_saves_as_books_does`.
+
+### Cancelling the loyalty points modal keeps the points redeemed
+
+- **In Books:** typing points in the Redeem Loyalty Points modal redeems them at once;
+  Cancel then only forgets them on the screen, and the sale keeps them redeemed.
+- **What it does to your books:** the customer spends points the cashier meant to leave.
+- **In Latte:** Cancel takes the points back.
+- **How we know:** from the code.
+- **Test:** `loyalty_points_are_redeemed_at_the_till`.
+
 ## Data import
 
 ### A shorter file takes the template's columns
@@ -651,11 +691,15 @@ what Books already saved is left as it is.
 - **How we know:** from the code.
 - **Test:** `a_payment_without_taxes_prints`.
 
-## To fix when the app is built
+## Forms
 
 ### The rate box rewrites the exchange rate
 
 - **In Books:** the exchange rate box shows the rate to two decimals and writes that back
   when you leave it, even unchanged, so 13.3333… becomes 13.33.
+- **What it does to your books:** opening a foreign-currency invoice and clicking through
+  the rate changes its rate, and so every amount converted with it.
+- **In Latte:** the box shows the rate with all its digits, and leaving it unchanged
+  leaves the rate as it was.
 - **How we know:** seen in Books, 2026-10-23, comparing an invoice in EUR.
-- **Plan:** the Phase 3 form keeps the rate as entered.
+- **Test:** `the_rate_box_keeps_the_rate_as_entered`.

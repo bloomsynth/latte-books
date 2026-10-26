@@ -1,7 +1,8 @@
 //! Set up AI assistants (Dime): connects the assistants on this computer to Latte Books,
 //! as DaVinci Resolve 21.1's File > Setup AI Assistants does. Not in Books.
 
-use gpui_kit::component::button::*;
+use crate::books::Text as _;
+use crate::widgets::Button;
 use gpui_kit::component::*;
 use gpui_kit::*;
 
@@ -137,7 +138,7 @@ impl AssistantsPage {
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_12()
                             .text_color(if connected {
                                 theme.green
                             } else {

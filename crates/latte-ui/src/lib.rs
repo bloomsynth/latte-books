@@ -5,9 +5,14 @@
 
 mod app;
 mod assistants_page;
+mod attach_image;
+mod books;
 mod coa;
 mod dashboard;
+mod date_picker;
 mod desk;
+mod export_wizard;
+mod filter_dropdown;
 mod form;
 mod get_started;
 mod i18n;
@@ -15,13 +20,20 @@ mod import_wizard;
 mod link;
 mod list_page;
 mod placeholder;
+mod pos_link;
 mod pos_page;
+mod pos_parts;
 mod print;
+mod print_parts;
 mod report_page;
+mod report_print;
+mod search_bar;
 mod selector;
 mod session;
 mod settings;
 mod setup_wizard;
+mod shortcuts;
+mod template_builder;
 mod widgets;
 
 use gpui_kit::*;
@@ -51,10 +63,11 @@ pub fn run() {
         latte_mcp::assistants::update_entries(&server);
     }
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(books::Assets)
         .run(|cx: &mut App| {
             i18n::load();
             gpui_kit::init(cx);
+            books::init(cx);
             let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

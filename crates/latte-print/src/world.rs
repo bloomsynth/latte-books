@@ -1,5 +1,9 @@
-//! The Typst world a template is compiled in: the template, the shared helpers, the
-//! values as `/data.json`, the logo as `/logo`, and the system and bundled fonts.
+//! The Typst world a template is compiled in: the template, Latte's print library
+//! (`/latte.typ`), the values as `/data.json`, the document's images, and the fonts
+//! bundled with Latte.
+//!
+//! Only bundled fonts are used, never the computer's, so a template prints the same on
+//! every device.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -12,13 +16,51 @@ use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
 use typst_kit::fonts::FontStore;
 
-/// The computer's fonts, then Typst's own, found once.
+/// The fonts bundled with Latte (see `fonts/`): Liberation Sans, Serif and Mono, which
+/// have the metrics of Arial, Times New Roman and Courier, the fonts Books' Print
+/// Settings offer; Inter, the font of Books' screens; then Typst's own.
+const BUNDLED: [&[u8]; 17] = [
+    include_bytes!("../fonts/LiberationSans-Regular.ttf"),
+    include_bytes!("../fonts/LiberationSans-Bold.ttf"),
+    include_bytes!("../fonts/LiberationSans-Italic.ttf"),
+    include_bytes!("../fonts/LiberationSans-BoldItalic.ttf"),
+    include_bytes!("../fonts/LiberationSerif-Regular.ttf"),
+    include_bytes!("../fonts/LiberationSerif-Bold.ttf"),
+    include_bytes!("../fonts/LiberationSerif-Italic.ttf"),
+    include_bytes!("../fonts/LiberationSerif-BoldItalic.ttf"),
+    include_bytes!("../fonts/LiberationMono-Regular.ttf"),
+    include_bytes!("../fonts/LiberationMono-Bold.ttf"),
+    include_bytes!("../fonts/LiberationMono-Italic.ttf"),
+    include_bytes!("../fonts/LiberationMono-BoldItalic.ttf"),
+    include_bytes!("../fonts/Inter-Regular.otf"),
+    include_bytes!("../fonts/Inter-Italic.otf"),
+    include_bytes!("../fonts/Inter-Medium.otf"),
+    include_bytes!("../fonts/Inter-SemiBold.otf"),
+    include_bytes!("../fonts/Inter-Bold.otf"),
+];
+
 static FONTS: LazyLock<FontStore> = LazyLock::new(|| {
     let mut store = FontStore::new();
-    store.extend(typst_kit::fonts::system());
+    for data in BUNDLED {
+        for font in Font::iter(Bytes::new(data)) {
+            let info = font.info().clone();
+            store.push((font, info));
+        }
+    }
     store.extend(typst_kit::fonts::embedded());
     store
 });
+
+/// The families of the bundled fonts, as a template names them.
+pub fn font_families() -> Vec<String> {
+    let mut families: Vec<String> = FONTS
+        .book()
+        .families()
+        .map(|(family, _)| family.to_owned())
+        .collect();
+    families.dedup();
+    families
+}
 
 static LIBRARY: LazyLock<LazyHash<Library>> = LazyLock::new(|| LazyHash::new(Library::default()));
 

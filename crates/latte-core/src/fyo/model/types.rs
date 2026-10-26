@@ -113,6 +113,11 @@ pub trait Model: Send + Sync {
         Ok(())
     }
 
+    /// `canDelete`, for a model that adds to the base `Doc`'s.
+    fn can_delete(&self, _doc: &Doc) -> bool {
+        true
+    }
+
     /// `duplicate`: what a model changes on a copy, after the base copy is made.
     fn duplicate(&self, _doc: &mut Doc) {}
 

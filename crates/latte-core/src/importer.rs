@@ -586,24 +586,34 @@ impl Importer {
     /// `importData`: saves each document the rows make, and submits it if asked.
     pub fn import(&self, fyo: &mut Fyo, submit: bool) -> Result<ImportResult, Error> {
         let mut result = ImportResult::default();
-        for mut doc in self.docs(fyo)? {
-            let old_name = doc.name().unwrap_or_default().to_owned();
-            let mut saved = doc.sync(fyo);
-            if saved.is_ok() && submit {
-                saved = doc.submit(fyo);
-            }
-            let name = doc.name().unwrap_or_default().to_owned();
-            match saved {
-                Ok(()) => {
-                    result.success.push(name);
-                    result.success_old_names.push(old_name);
-                }
-                Err(error) => result.failed.push((name, error)),
-            }
+        for doc in self.docs(fyo)? {
+            result.import_doc(fyo, doc, submit);
         }
         Ok(result)
     }
+}
 
+impl ImportResult {
+    /// One document of `importData`'s loop: saved, and submitted if asked, with what came
+    /// of it noted.
+    pub fn import_doc(&mut self, fyo: &mut Fyo, mut doc: Doc, submit: bool) {
+        let old_name = doc.name().unwrap_or_default().to_owned();
+        let mut saved = doc.sync(fyo);
+        if saved.is_ok() && submit {
+            saved = doc.submit(fyo);
+        }
+        let name = doc.name().unwrap_or_default().to_owned();
+        match saved {
+            Ok(()) => {
+                self.success.push(name);
+                self.success_old_names.push(old_name);
+            }
+            Err(error) => self.failed.push((name, error)),
+        }
+    }
+}
+
+impl Importer {
     /// `clearSuccessfullyImportedEntries`: keeps only the rows whose document failed.
     pub fn keep_failed(&mut self, result: &ImportResult) {
         let name_key = format!("{}.name", self.schema_name);

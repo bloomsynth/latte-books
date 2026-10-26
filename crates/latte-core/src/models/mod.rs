@@ -16,7 +16,7 @@ use crate::fyo::model::types::Model;
 use crate::models::base_models::{
     account, accounting_ledger_entry, address, coupon_code, invoice_item, item, journal_entry,
     journal_entry_account, lead, loyalty, party, payment, payment_for, pricing_rule,
-    purchase_invoice, sales_invoice, sales_quote, tax_summary,
+    print_template, purchase_invoice, sales_invoice, sales_quote, tax_summary,
 };
 use crate::models::inventory::{
     inventory_settings, point_of_sale, stock_movement, stock_movement_item, stock_transfer,
@@ -41,7 +41,7 @@ pub fn regional_models(country_code: &str) -> HashMap<String, Arc<dyn Model>> {
 
 /// `models`, to pass to [`Fyo::register_models`](crate::Fyo::register_models).
 pub fn models() -> HashMap<String, Arc<dyn Model>> {
-    let models: [(&str, Arc<dyn Model>); 32] = [
+    let models: [(&str, Arc<dyn Model>); 33] = [
         ("Account", Arc::new(account::Account)),
         ("Address", Arc::new(address::Address)),
         (
@@ -73,6 +73,7 @@ pub fn models() -> HashMap<String, Arc<dyn Model>> {
         ("PriceListItem", Arc::new(pricing_rule::PricingRuleItem)),
         ("PricingRule", Arc::new(pricing_rule::PricingRule)),
         ("PricingRuleItem", Arc::new(pricing_rule::PricingRuleItem)),
+        ("PrintTemplate", Arc::new(print_template::PrintTemplate)),
         ("PurchaseInvoice", Arc::new(purchase_invoice::MODEL)),
         ("PurchaseInvoiceItem", Arc::new(invoice_item::InvoiceItem)),
         ("PurchaseReceipt", Arc::new(stock_transfer::StockTransfer)),
@@ -105,9 +106,9 @@ pub fn models() -> HashMap<String, Arc<dyn Model>> {
 #[cfg(test)]
 mod inventory_tests;
 #[cfg(test)]
-mod invoice_tests;
+pub(crate) mod invoice_tests;
 #[cfg(test)]
-mod payment_tests;
+pub(crate) mod payment_tests;
 #[cfg(test)]
 mod pricing_tests;
 #[cfg(test)]

@@ -154,6 +154,11 @@ pub fn columns(fyo: &Fyo, schema_name: &str) -> Vec<ListColumn> {
             "$status" => Some(ListColumn::Status),
             "$enabled" => Some(ListColumn::Enabled),
             "$enabledFor" => Some(ListColumn::EnabledFor),
+            // PrintTemplate's `type` column: "Type", showing the schema's label.
+            "type" if schema_name == "PrintTemplate" => schema.field(name).cloned().map(|mut f| {
+                f.label = Some("Type".to_owned());
+                ListColumn::Field(f)
+            }),
             _ => schema.field(name).cloned().map(ListColumn::Field),
         })
         .collect()
@@ -384,6 +389,14 @@ pub fn rows(
         let cells = columns
             .iter()
             .map(|column| match column {
+                ListColumn::Field(f) if schema_name == "PrintTemplate" && f.fieldname == "type" => {
+                    let kind = field::display(formatter, f, values.get(&f.fieldname));
+                    ListCell::Text(
+                        fyo.schema(&kind)
+                            .map(|s| s.label.clone())
+                            .unwrap_or_default(),
+                    )
+                }
                 ListColumn::Field(f) => {
                     ListCell::Text(field::display(formatter, f, values.get(&f.fieldname)))
                 }
@@ -433,4 +446,66 @@ pub fn create_values(name: &str) -> DocValueMap {
         _ => return DocValueMap::new(),
     };
     DocValueMap::from([(field.to_owned(), DocValue::Text(value.to_owned()))])
+}
+
+/// `actionOptions` of `ListView.vue`: what the Item list's Create makes from the selected
+/// items.
+pub const ITEM_CREATE_OPTIONS: [(&str, &str); 3] = [
+    ("SalesQuote", "Sales Quote"),
+    ("SalesInvoice", "Sales Invoice"),
+    ("PurchaseInvoice", "Purchase Invoice"),
+];
+
+/// `createInvoice` of `ListView.vue`: a new document of `schema_name` with a row for each
+/// item, at the item's rate (or 0) and a quantity of 1.
+pub fn new_doc_with_items(
+    fyo: &mut Fyo,
+    schema_name: &str,
+    items: &[String],
+) -> Result<crate::Doc, Error> {
+    let mut doc = fyo.get_new_doc(schema_name, DocValueMap::new())?;
+    for item in items {
+        let rate = match fyo.get_value("Item", Some(item), "rate") {
+            Some(DocValue::Money(rate)) => rate,
+            _ => fyo.pesa().zero(),
+        };
+        let row = DocValueMap::from([
+            ("item".to_owned(), DocValue::Text(item.clone())),
+            ("rate".to_owned(), DocValue::Money(rate)),
+            ("quantity".to_owned(), DocValue::Number(1.0)),
+        ]);
+        doc.append(fyo, "items", row)?;
+    }
+    Ok(doc)
+}
+
+#[cfg(test)]
+mod item_create_tests {
+    use super::*;
+    use crate::setup_tests::{TempFile, indian_company};
+    use crate::tests::{map, text};
+
+    #[test]
+    fn selected_items_make_an_invoice_with_a_row_each() {
+        let file = TempFile::new("list create");
+        let mut fyo = indian_company(&file);
+        for (name, rate) in [("Beans", 250.0), ("Filter", 0.0)] {
+            let values = map([("name", text(name)), ("rate", DocValue::Number(rate))]);
+            fyo.get_new_doc("Item", values)
+                .unwrap()
+                .sync(&mut fyo)
+                .unwrap();
+        }
+        let items = ["Beans".to_owned(), "Filter".to_owned()];
+        let doc = new_doc_with_items(&mut fyo, "SalesInvoice", &items).unwrap();
+        let rows = doc.table("items");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get("item"), Some(&text("Beans")));
+        assert_eq!(rows[0].get("quantity"), Some(&DocValue::Number(1.0)));
+        match rows[0].get("rate") {
+            Some(DocValue::Money(rate)) => assert_eq!(rate.round(None), "250.00"),
+            other => panic!("rate is {other:?}"),
+        }
+        assert!(doc.not_inserted());
+    }
 }

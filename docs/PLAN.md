@@ -307,8 +307,12 @@ CI runs the parity suite on every PR. Any difference fails the build.
   `latte_core::pos` for opening and closing shifts, the cart's checks, and making the
   invoice, shipment and payment of a sale. The page has the Classic UI's item list,
   cart, payment and shift panels, barcode and weighed-item search, and saved sales taken
-  up later. Seven Books bugs are fixed. The Modern UI, and returns, coupons and loyalty at
-  the till, come after 1.0. Not yet checked against Books by hand.*
+  up later. Seven Books bugs are fixed. Not yet checked against Books by hand.
+  2026-10-25: the rest of Books' point of sale: the Modern UI and its keypad, item groups
+  and pictures, the Item Enquiry, Price List, Coupon Code, Loyalty Program, Return and
+  Alert modals, editing a row's quantity, rate, discount, batch and serial numbers at the
+  till, the keyboard shortcuts and the quick quantity, and the item search as a Link.
+  Their logic is in `latte_core::pos` with tests; four more Books bugs are fixed.*
 - Data import (CSV), custom fields and forms, the dashboard.
   *Import, custom fields and dashboard 2026-10-23: `latte_core::importer` and the Import
   Wizard page; CustomForm and CustomField, with a new field's column added when the file

@@ -9,14 +9,21 @@ use crate::models::helpers::single_is_truthy;
 pub enum Route {
     GetStarted,
     Dashboard,
-    /// `/list/<schema>/<title>`, with the `routeFilters` named `filters`.
+    /// `/list/<schema>/<title>`, with the `routeFilters` named `filters`, and the
+    /// `query.filters` given as (field, operator, value), such as a party's invoices.
     List {
         schema: String,
         title: String,
         filters: Option<String>,
+        conditions: Vec<(String, String, String)>,
     },
     /// `/report/<name>`.
     Report(String),
+    /// `/report/<name>` with `defaultFilters`, such as a document's ledger entries.
+    FilteredReport {
+        name: String,
+        filters: Vec<(String, String)>,
+    },
     ChartOfAccounts,
     ImportWizard,
     /// `/settings`, at a tab: the settings schema it shows.
@@ -34,6 +41,13 @@ pub enum Route {
         schema: String,
         name: String,
     },
+    /// `/report-print/<name>`: a report's Print View.
+    ReportPrint(String),
+    /// `/template-builder/<name>`: a PrintTemplate's form (`formRoute`); no name for a
+    /// new one.
+    TemplateBuilder {
+        name: Option<String>,
+    },
     /// Latte's own: the "Set up AI assistants" screen (Dime).
     AiAssistants,
 }
@@ -44,6 +58,20 @@ impl Route {
             schema: schema.to_owned(),
             title: title.to_owned(),
             filters: filters.map(str::to_owned),
+            conditions: Vec::new(),
+        }
+    }
+
+    /// A list filtered as `query.filters` filters it: `[(field, operator, value)]`.
+    pub fn filtered_list(schema: &str, title: &str, conditions: &[(&str, &str, &str)]) -> Self {
+        Self::List {
+            schema: schema.to_owned(),
+            title: title.to_owned(),
+            filters: None,
+            conditions: conditions
+                .iter()
+                .map(|(f, o, v)| ((*f).to_owned(), (*o).to_owned(), (*v).to_owned()))
+                .collect(),
         }
     }
 }

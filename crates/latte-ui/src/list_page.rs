@@ -1,17 +1,26 @@
 //! A list of documents: `src/pages/ListView/ListView.vue` and `List.vue` @ v0.36.0.
 //!
-//! Differences from Books:
-//! - Every matching document is listed; Books shows them a page at a time.
-//! - A search box finds documents by name or title, in place of Books' filter builder.
+//! The header holds Books' Export Wizard, Filter menu (`FilterDropdown.vue`) and New. A list opened for
+//! some documents only, such as a party's invoices, starts with those filters. Ctrl+N
+//! (⌘N) makes a new entry and Ctrl+E (⌘E) opens the Export Wizard. The Item list's
+//! Select picks items with checkboxes, and its Create makes a Sales Quote, Sales Invoice
+//! or Purchase Invoice with them.
 
-use gpui_kit::component::button::*;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use crate::export_wizard::{ExportClosed, ExportWizard};
+use crate::filter_dropdown::{FilterDropdown, FiltersChanged};
+use crate::widgets::{
+    Button, Kind as ToastKind, Toast, check_box, dropdown_item, modal, popover_panel, show_toast,
+};
 use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use latte_core::views::list::{self, ListCell, ListColumn, ListRow};
 use latte_core::views::sidebar::Route;
-use latte_db::QueryFilter;
+use latte_db::{Filter, FilterValue, QueryFilter};
+use latte_schema::FieldType;
 
+use crate::books::{self, Text as _, gray, white};
+use crate::i18n::t;
 use crate::session::Shared;
 use crate::widgets::{badge, error_message, page_header};
 use crate::{Nav, Navigate};
@@ -22,9 +31,22 @@ pub struct ListPage {
     title: String,
     filters_name: Option<String>,
     filters: QueryFilter,
+    /// The Filter menu's filters, on top of `filters`.
+    conditions: Vec<(String, String, String)>,
+    filter: Entity<FilterDropdown>,
+    /// The Export Wizard, while open.
+    export: Option<(Entity<ExportWizard>, Subscription)>,
+    /// The Item list's Select: whether on, the items picked, and whether Create's menu is
+    /// open (`isSelectionMode`, `selectedItems`, `showDropdown`).
+    selecting: bool,
+    selected: Vec<String>,
+    show_create: bool,
+    focus: FocusHandle,
     columns: Vec<ListColumn>,
     rows: Vec<ListRow>,
-    search: Entity<InputState>,
+    /// `Paginator.vue`: the page shown, from 1, and the rows on a page.
+    page: usize,
+    count: usize,
     error: Option<String>,
     _subscription: Subscription,
 }
@@ -37,16 +59,22 @@ impl ListPage {
         schema: &str,
         title: &str,
         filters_name: Option<&str>,
+        conditions: Vec<(String, String, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
-        let subscription =
-            cx.subscribe_in(&search, window, |this, _, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.load(cx);
-                }
-            });
+        let fields = session
+            .borrow()
+            .fyo
+            .schema(schema)
+            .map(|schema| schema.fields.clone())
+            .unwrap_or_default();
+        let filter = cx.new(|cx| FilterDropdown::new(&fields, &conditions, window, cx));
+        let subscription = cx.subscribe(&filter, |this, _, event: &FiltersChanged, cx| {
+            this.conditions = event.0.clone();
+            this.page = 1;
+            this.load(cx);
+        });
         let columns = list::columns(&session.borrow().fyo, schema);
         let filters = filters_name.map(list::route_filters).unwrap_or_default();
         let mut page = Self {
@@ -55,9 +83,17 @@ impl ListPage {
             title: title.to_owned(),
             filters_name: filters_name.map(str::to_owned),
             filters,
+            conditions,
+            filter,
+            export: None,
+            selecting: false,
+            selected: Vec::new(),
+            show_create: false,
+            focus: cx.focus_handle(),
             columns,
             rows: Vec::new(),
-            search,
+            page: 1,
+            count: COUNTS[0] as usize,
             error: None,
             _subscription: subscription,
         };
@@ -65,16 +101,76 @@ impl ListPage {
         page
     }
 
-    fn load(&mut self, cx: &mut Context<Self>) {
-        let search = self.search.read(cx).value().to_string();
+    /// The route's filters and the Filter menu's, as a query filter.
+    fn query_filter(&self) -> QueryFilter {
         let s = self.session.borrow();
-        match list::rows(&s.fyo, &s.formatter, &self.schema, &self.filters, &search) {
+        let schema = s.fyo.schema(&self.schema);
+        let mut filters = self.filters.clone();
+        for (field, operator, value) in &self.conditions {
+            let fieldtype = schema
+                .and_then(|schema| schema.field(field))
+                .and_then(|f| f.fieldtype);
+            // Money is stored as text with every digit of its precision, which a
+            // filter on it is given in too (`fyo.pesa(0).store`).
+            let value = match (fieldtype, value.parse::<f64>()) {
+                (Some(FieldType::Currency), Ok(n)) => match s.fyo.pesa().from_f64(n) {
+                    Ok(money) => FilterValue::Text(money.store()),
+                    Err(_) => FilterValue::Text(value.clone()),
+                },
+                (Some(FieldType::Int | FieldType::Float), Ok(n)) => FilterValue::Number(n),
+                _ => FilterValue::Text(value.clone()),
+            };
+            let filter = match operator.as_str() {
+                "is null" => Filter::Equals(FilterValue::Null),
+                "is not null" => Filter::op("!=", FilterValue::Null),
+                operator => Filter::op(operator, value),
+            };
+            // A number series filters the names (`emitFilterChange`).
+            let field = if field == "numberSeries" {
+                "name"
+            } else {
+                field
+            };
+            filters.insert(field.to_owned(), filter);
+        }
+        filters
+    }
+
+    fn load(&mut self, cx: &mut Context<Self>) {
+        let filters = self.query_filter();
+        let s = self.session.borrow();
+        match list::rows(&s.fyo, &s.formatter, &self.schema, &filters, "") {
             Ok(rows) => {
                 self.rows = rows;
+                self.page = self.page.clamp(1, self.page_count().max(1));
                 self.error = None;
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+        cx.notify();
+    }
+
+    fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let session = self.session.clone();
+        let filters = self.query_filter();
+        let (schema, title) = (self.schema.clone(), self.title.clone());
+        let wizard = cx.new(|cx| ExportWizard::new(session, &schema, &title, filters, window, cx));
+        let subscription = cx.subscribe_in(
+            &wizard,
+            window,
+            |this, _, event: &ExportClosed, window, cx| {
+                this.export = None;
+                // `showExportInFolder`.
+                if let Some(path) = &event.0 {
+                    let toast =
+                        Toast::new(t("Export Successful"), ToastKind::Success).open_folder(path);
+                    show_toast(toast, window, cx);
+                }
+                this.focus.focus(window, cx);
+                cx.notify();
+            },
+        );
+        self.export = Some((wizard, subscription));
         cx.notify();
     }
 
@@ -93,61 +189,332 @@ impl ListPage {
             }
         }
     }
+
+    /// `toggleSelectionMode`.
+    fn toggle_selecting(&mut self, cx: &mut Context<Self>) {
+        self.selecting = !self.selecting;
+        if !self.selecting {
+            self.show_create = false;
+            self.selected.clear();
+        }
+        cx.notify();
+    }
+
+    /// `toggleItemSelection`.
+    fn toggle_selected(&mut self, name: &str, cx: &mut Context<Self>) {
+        match self.selected.iter().position(|n| n == name) {
+            Some(i) => {
+                self.selected.remove(i);
+            }
+            None => self.selected.push(name.to_owned()),
+        }
+        cx.notify();
+    }
+
+    /// `toggleSelectAll`: every row of the list, not only the page's.
+    fn toggle_select_all(&mut self, cx: &mut Context<Self>) {
+        let all = !self.rows.is_empty() && self.selected.len() == self.rows.len();
+        self.selected = if all {
+            Vec::new()
+        } else {
+            self.rows.iter().map(|r| r.name.clone()).collect()
+        };
+        cx.notify();
+    }
+
+    /// `createInvoice`: a new document with a row for each selected item.
+    fn create_with_items(&mut self, schema: &str, cx: &mut Context<Self>) {
+        let doc = {
+            let mut s = self.session.borrow_mut();
+            list::new_doc_with_items(&mut s.fyo, schema, &self.selected)
+        };
+        match doc {
+            Ok(doc) => {
+                self.selected.clear();
+                self.selecting = false;
+                self.show_create = false;
+                cx.emit(Navigate(Nav::Doc(doc)));
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        cx.notify();
+    }
+
+    /// The Item list's Select, or once items are picked, Create and its menu.
+    fn render_select(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.schema != "Item" {
+            return None;
+        }
+        if !self.selecting || self.selected.is_empty() {
+            return Some(
+                Button::new("select")
+                    .label(t("Select"))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_selecting(cx)))
+                    .into_any_element(),
+            );
+        }
+        let menu = self.show_create.then(|| {
+            popover_panel()
+                .absolute()
+                .top_full()
+                .mt_1()
+                .w(px(160.))
+                .rounded(books::RADIUS)
+                .border_color(gray(300))
+                .children(
+                    list::ITEM_CREATE_OPTIONS
+                        .into_iter()
+                        .map(|(schema, label)| {
+                            dropdown_item(SharedString::from(format!("create-{schema}")), label)
+                                .px_4()
+                                .py_2()
+                                .rounded_none()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.create_with_items(schema, cx)
+                                }))
+                        }),
+                )
+        });
+        Some(
+            div()
+                .relative()
+                .child(
+                    Button::new("create")
+                        .label("Create")
+                        .w(px(160.))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_create = !this.show_create;
+                            cx.notify();
+                        })),
+                )
+                .children(menu.map(deferred))
+                .into_any_element(),
+        )
+    }
 }
 
-fn column_cell(column: &ListColumn) -> Div {
-    let d = div().flex_1().min_w(px(80.)).px_2().truncate();
-    if column.is_numeric() {
-        d.h_flex().justify_end()
-    } else {
-        d
+impl Focusable for ListPage {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+/// A column of `Row.vue`'s grid: equal widths, 16px apart; numbers to the right.
+fn column_cell(column: &ListColumn, last: bool) -> Div {
+    div()
+        .flex_1()
+        .flex_basis(px(0.))
+        .min_w_0()
+        .h_flex()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .when(column.is_numeric(), |d| d.justify_end())
+        .when(last, |d| d.pr_4())
+}
+
+/// `List.vue`'s `#` column: 32px, right-aligned, 8px before the columns.
+fn number_cell() -> Div {
+    div()
+        .w_8()
+        .mr_2()
+        .flex_none()
+        .h_flex()
+        .justify_end()
+        .text_color(gray(700))
+}
+
+/// `Paginator.vue`'s page sizes; -1 is All.
+const COUNTS: [i64; 4] = [50, 100, 500, -1];
+
+impl ListPage {
+    fn page_count(&self) -> usize {
+        self.rows.len().div_ceil(self.count.max(1))
+    }
+
+    fn set_page(&mut self, page: usize, cx: &mut Context<Self>) {
+        self.page = page.clamp(1, self.page_count().max(1));
+        cx.notify();
+    }
+
+    /// `Paginator.vue`: the rows shown, the page, and the page sizes.
+    fn render_paginator(&self, cx: &mut Context<Self>) -> Div {
+        let total = self.rows.len();
+        let first = (self.page - 1) * self.count + 1;
+        let last = (self.page * self.count).min(total);
+        let pages = self.page_count();
+        let arrow = |id: &'static str, icon: &'static str, enabled: bool| {
+            div()
+                .id(id)
+                .when(enabled, |d| d.cursor_pointer())
+                .child(books::icon(
+                    icon,
+                    px(16.),
+                    if enabled {
+                        gray(600)
+                    } else {
+                        white().opacity(0.)
+                    },
+                ))
+        };
+        let counts: Vec<i64> = COUNTS
+            .into_iter()
+            .filter(|&c| {
+                if c == -1 {
+                    total >= COUNTS[0] as usize
+                } else {
+                    total >= c as usize
+                }
+            })
+            .collect();
+        let page = self.page;
+        div()
+            .h_flex()
+            .h(px(50.))
+            .px_4()
+            .border_t_1()
+            .border_color(gray(200))
+            .text_12()
+            .text_color(gray(800))
+            .child(div().flex_1().child(format!("{first} - {last}")))
+            .child(
+                div()
+                    .flex_1()
+                    .h_flex()
+                    .justify_center()
+                    .gap_1()
+                    .child(arrow("page-back", "chevron-left", page > 1).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_page(page.saturating_sub(1), cx)
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_1()
+                            .bg(gray(100))
+                            .rounded(books::RADIUS)
+                            .child(div().w_7().h_flex().justify_end().child(page.to_string()))
+                            .child(div().text_color(gray(600)).child("/"))
+                            .child(div().w_7().child(pages.to_string())),
+                    )
+                    .child(
+                        arrow("page-next", "chevron-right", page < pages).on_click(
+                            cx.listener(move |this, _, _, cx| this.set_page(page + 1, cx)),
+                        ),
+                    ),
+            )
+            .child(
+                div().flex_1().h_flex().justify_end().child(
+                    div()
+                        .h_flex()
+                        .when(!counts.is_empty(), |d| {
+                            d.border_1().border_color(gray(100)).rounded(books::RADIUS)
+                        })
+                        .children(counts.into_iter().map(|c| {
+                            let size = if c == -1 { total.max(1) } else { c as usize };
+                            let selected = self.count == size;
+                            div()
+                                .id(SharedString::from(format!("count-{c}")))
+                                .w_9()
+                                .h_flex()
+                                .justify_center()
+                                .cursor_pointer()
+                                .when(selected, |d| d.bg(gray(100)).rounded(books::RADIUS))
+                                .child(if c == -1 { t("All") } else { c.to_string() })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.count = size;
+                                    this.page = 1;
+                                    cx.notify();
+                                }))
+                        })),
+                ),
+            )
     }
 }
 
 impl Render for ListPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header = page_header(self.title.clone(), cx).child(
             div()
                 .h_flex()
                 .gap_2()
-                .child(div().w(px(220.)).child(Input::new(&self.search).small()))
+                .children(self.render_select(cx))
+                .child(
+                    Button::new("export")
+                        .label(t("Export"))
+                        .on_click(cx.listener(|this, _, window, cx| this.open_export(window, cx))),
+                )
+                .child(self.filter.clone())
                 .child(
                     Button::new("new")
-                        .small()
                         .primary()
-                        .icon(IconName::Plus)
+                        .icon("plus")
                         .on_click(cx.listener(|this, _, _, cx| this.new_doc(cx))),
                 ),
         );
         let columns = self.columns.clone();
+        let n = columns.len();
+        let selecting = self.selecting;
+        let all_selected = !self.rows.is_empty() && self.selected.len() == self.rows.len();
         let column_header = div()
             .h_flex()
             .w_full()
-            .px_4()
-            .py_2()
+            .h_12()
+            .flex_none()
             .border_b_1()
-            .border_color(theme.border)
-            .text_color(theme.muted_foreground)
-            .child(div().w(px(40.)).child("#"))
-            .children(columns.iter().map(|c| column_cell(c).child(c.label())));
+            .border_color(gray(200))
+            .text_color(gray(700))
+            .map(|d| {
+                if selecting {
+                    d.child(
+                        number_cell().child(
+                            div()
+                                .id("select-all")
+                                .cursor_pointer()
+                                .child(check_box(all_selected))
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx))),
+                        ),
+                    )
+                } else {
+                    d.child(number_cell().child("#"))
+                }
+            })
+            .child(
+                div().flex_1().h_flex().gap_4().children(
+                    columns
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| column_cell(c, i + 1 == n).child(c.label())),
+                ),
+            );
 
         let body = if self.rows.is_empty() {
             div()
                 .flex_1()
-                .h_flex()
+                .v_flex()
+                .items_center()
                 .justify_center()
-                .text_color(theme.muted_foreground)
-                .child("No entries found")
+                .gap_3()
+                .child(div().text_color(gray(800)).child(t("No entries found")))
+                .child(
+                    Button::new("make-entry")
+                        .primary()
+                        .label(t("Make Entry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.new_doc(cx))),
+                )
                 .into_any_element()
         } else {
-            let rows = self.rows.clone();
+            let start = (self.page - 1) * self.count;
+            let end = (start + self.count).min(self.rows.len());
+            let rows: Vec<ListRow> = self.rows[start..end].to_vec();
+            let selected = self.selected.clone();
             let schema = self.schema.clone();
+            // `hover:bg-gray-50 dark:hover:bg-gray-850`.
+            let hover = books::pick(gray(50), books::raw_gray(850));
             uniform_list(
                 "rows",
                 rows.len(),
                 cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
-                    let theme = cx.theme().clone();
                     range
                         .map(|i| {
                             let row = &rows[i];
@@ -155,40 +522,74 @@ impl Render for ListPage {
                                 schema: schema.clone(),
                                 name: Some(row.name.clone()),
                             };
+                            let name = row.name.clone();
+                            let checked = selected.contains(&row.name);
                             div()
                                 .id(i)
                                 .h_flex()
                                 .w_full()
-                                .h(px(36.))
-                                .px_4()
+                                .h_12()
                                 .border_b_1()
-                                .border_color(theme.border)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.list_hover))
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(Navigate(Nav::Route(route.clone())))
-                                }))
+                                .border_color(gray(200))
+                                .hover(|d| d.bg(hover))
+                                .map(|d| {
+                                    if selecting {
+                                        d.child(
+                                            number_cell().child(
+                                                div()
+                                                    .id(("select", i))
+                                                    .cursor_pointer()
+                                                    .child(check_box(checked))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.toggle_selected(&name, cx)
+                                                        },
+                                                    )),
+                                            ),
+                                        )
+                                    } else {
+                                        d.child(number_cell().child(format!("{}", start + i + 1)))
+                                    }
+                                })
                                 .child(
                                     div()
-                                        .w(px(40.))
-                                        .text_color(theme.muted_foreground)
-                                        .child(format!("{}", i + 1)),
+                                        .id(("cells", i))
+                                        .flex_1()
+                                        .h_full()
+                                        .h_flex()
+                                        .gap_4()
+                                        .cursor_pointer()
+                                        .text_color(books::pick(gray(900), books::raw_gray(300)))
+                                        .when(!selecting, |d| {
+                                            d.on_click(cx.listener(move |_, _, _, cx| {
+                                                cx.emit(Navigate(Nav::Route(route.clone())))
+                                            }))
+                                        })
+                                        .children(
+                                            row.cells.iter().zip(columns.iter()).enumerate().map(
+                                                |(c, (cell, column))| {
+                                                    let content = match cell {
+                                                        ListCell::Text(text) => div()
+                                                            .truncate()
+                                                            .child(text.clone())
+                                                            .into_any_element(),
+                                                        ListCell::Status(status)
+                                                            if status.label.is_empty() =>
+                                                        {
+                                                            div().into_any_element()
+                                                        }
+                                                        ListCell::Status(status) => badge(
+                                                            status.label.clone(),
+                                                            status.color,
+                                                            cx,
+                                                        )
+                                                        .into_any_element(),
+                                                    };
+                                                    column_cell(column, c + 1 == n).child(content)
+                                                },
+                                            ),
+                                        ),
                                 )
-                                .children(row.cells.iter().zip(columns.iter()).map(
-                                    |(cell, column)| {
-                                        let content = match cell {
-                                            ListCell::Text(text) => text.clone().into_any_element(),
-                                            ListCell::Status(status) if status.label.is_empty() => {
-                                                div().into_any_element()
-                                            }
-                                            ListCell::Status(status) => {
-                                                badge(status.label.clone(), status.color, cx)
-                                                    .into_any_element()
-                                            }
-                                        };
-                                        column_cell(column).child(content)
-                                    },
-                                ))
                         })
                         .collect()
                 }),
@@ -200,9 +601,38 @@ impl Render for ListPage {
         div()
             .v_flex()
             .size_full()
+            .text_13()
+            .track_focus(&self.focus)
+            // `ListView.vue`'s shortcuts: Ctrl+N (⌘N) a new entry, Ctrl+E (⌘E) Export.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let k = &event.keystroke;
+                if !(k.modifiers.control || k.modifiers.platform) || k.modifiers.shift {
+                    return;
+                }
+                match k.key.as_str() {
+                    "n" => this.new_doc(cx),
+                    "e" if this.export.is_none() => this.open_export(window, cx),
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
             .child(header)
             .children(self.error.clone().map(|e| error_message(e, cx)))
             .child(column_header)
             .child(body)
+            .when(!self.rows.is_empty(), |d| {
+                d.child(self.render_paginator(cx))
+            })
+            .children(self.export.as_ref().map(|(wizard, _)| {
+                modal(
+                    wizard.clone(),
+                    cx.listener(|this, _, window, cx| {
+                        this.export = None;
+                        this.focus.focus(window, cx);
+                        cx.notify();
+                    }),
+                    window,
+                )
+            }))
     }
 }

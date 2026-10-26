@@ -1,13 +1,18 @@
 //! Settings: `src/pages/Settings/Settings.vue` @ v0.36.0. A tab for each settings
 //! document, and one Save for all of them.
 //!
+//! As in Books, the tab's settings are a 600px card titled by the tab, with the tabs at
+//! its foot.
+//!
 //! Differences from Books:
-//! - Saved settings take effect at once; Books asks to reload the window.
+//! - Saved settings take effect at once, said in a toast; Books asks to reload the window.
+//!   Ctrl+S (⌘S) saves, as in Books.
 //! - There is no ERPNext Sync tab.
 
 use std::collections::HashMap;
 
-use gpui_kit::component::button::*;
+use crate::books::{self, Text as _, black, gray, white};
+use crate::widgets::{Button, DialogButton, Kind as DialogKind, Toast, dialog, show_toast};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -18,7 +23,7 @@ use latte_core::fyo::model::helpers::is_truthy;
 use crate::Navigate;
 use crate::form::FormPage;
 use crate::session::Shared;
-use crate::widgets::{error_message, info_message, page_header};
+use crate::widgets::page_header;
 
 const TABS: [(&str, &str); 6] = [
     ("AccountingSettings", "General"),
@@ -34,7 +39,7 @@ pub struct SettingsPage {
     tab: &'static str,
     forms: HashMap<&'static str, Entity<FormPage>>,
     error: Option<String>,
-    info: Option<String>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -53,7 +58,7 @@ impl SettingsPage {
             tab: TABS[0].0,
             forms: HashMap::new(),
             error: None,
-            info: None,
+            focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         };
         let tab = TABS
@@ -111,12 +116,18 @@ impl SettingsPage {
             });
         }
         self.session.borrow_mut().refresh_formatter();
+        // Dark mode, as Books shows it once the window is reloaded.
+        let dark = self.session.borrow().dark_mode();
+        books::set_dark(dark, cx);
         if errors.is_empty() {
             self.error = None;
-            self.info = Some("Settings saved".to_owned());
+            show_toast(
+                Toast::new(t("Settings saved"), DialogKind::Success).short(),
+                window,
+                cx,
+            );
         } else {
             self.error = Some(errors.join("\n"));
-            self.info = None;
         }
         cx.notify();
     }
@@ -127,44 +138,132 @@ impl SettingsPage {
 }
 
 impl Render for SettingsPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let header = page_header(t("Settings"), cx).children(self.can_save(cx).then(|| {
-            Button::new("save-settings")
-                .small()
-                .primary()
-                .label(t("Save"))
-                .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
-        }));
-        let tabs = self.tabs();
-        let tab_bar = div()
-            .h_flex()
-            .px_4()
-            .gap_4()
-            .border_b_1()
-            .border_color(theme.border)
-            .children(tabs.into_iter().map(|(schema, label)| {
-                let active = schema == self.tab;
-                div()
-                    .id(schema)
-                    .py_2()
-                    .cursor_pointer()
-                    .when(active, |d| {
-                        d.border_b_2()
-                            .border_color(theme.primary)
-                            .font_weight(FontWeight::SEMIBOLD)
-                    })
-                    .when(!active, |d| d.text_color(theme.muted_foreground))
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, window, cx| this.show(schema, window, cx)))
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let header = page_header("", cx)
+            .border_b_0()
+            .children(self.can_save(cx).then(|| {
+                Button::new("save-settings")
+                    .primary()
+                    .label(t("Save"))
+                    .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
             }));
+        let tabs = self.tabs();
+        let title = tabs
+            .iter()
+            .find(|(schema, _)| *schema == self.tab)
+            .map(|(_, label)| t(label))
+            .unwrap_or_default();
+        // `FormHeader.vue`: the tab's name, and "Settings" on the right.
+        let form_header = div()
+            .h_flex()
+            .flex_none()
+            .h(px(56.))
+            .px_4()
+            .justify_between()
+            .border_b_1()
+            .border_color(gray(200))
+            .text_18()
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(div().text_color(black()).child(title))
+            .child(div().text_color(gray(600)).child(t("Settings")));
+        // `Settings.vue`'s tab bar, at the foot of the card.
+        let tab_bar = (tabs.len() > 1).then(|| {
+            div()
+                .h_flex()
+                .flex_none()
+                .px_4()
+                .pb_4()
+                .gap_8()
+                .border_t_1()
+                .border_color(gray(200))
+                .bg(white())
+                .children(tabs.into_iter().map(|(schema, label)| {
+                    let active = schema == self.tab;
+                    div()
+                        .id(schema)
+                        .text_12()
+                        .cursor_pointer()
+                        .when(active, |d| {
+                            d.pt(px(14.))
+                                .border_t_2()
+                                .border_color(gray(800))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(gray(900))
+                        })
+                        .when(!active, |d| d.pt_4().text_color(gray(700)))
+                        .child(t(label))
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| this.show(schema, window, cx)),
+                        )
+                }))
+        });
+        let card = div()
+            .v_flex()
+            .h_full()
+            .w(books::W_FORM)
+            .mx_4()
+            .mb_4()
+            .bg(white())
+            .border_1()
+            .border_color(gray(200))
+            .rounded(books::RADIUS_LG)
+            .shadow(books::shadow_lg())
+            .overflow_hidden()
+            .child(form_header)
+            .child(
+                div()
+                    .id("settings-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(self.forms.get(self.tab).cloned()),
+            )
+            .children(tab_bar);
+
+        let dialog = self.error.clone().map(|error| {
+            let close = cx.listener(|this, _, _, cx| {
+                this.error = None;
+                cx.notify();
+            });
+            dialog(
+                t("Error"),
+                Some(error.into()),
+                DialogKind::Error,
+                vec![DialogButton::new(t("Okay"), false, close)],
+                window,
+            )
+        });
         div()
             .v_flex()
             .size_full()
+            .bg(gray(25))
+            .text_13()
             .child(header)
-            .children(self.error.clone().map(|e| error_message(e, cx)))
-            .children(self.info.clone().map(|m| info_message(m, cx)))
-            .child(tab_bar)
-            .children(self.forms.get(self.tab).cloned())
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .h_flex()
+                    .justify_center()
+                    .child(card),
+            )
+            .children(dialog)
+            .track_focus(&self.focus)
+            // `Settings.vue`: Ctrl+S (⌘S) saves, when there is something to save.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let k = &event.keystroke;
+                if k.key == "s" && (k.modifiers.control || k.modifiers.platform) {
+                    if this.can_save(cx) {
+                        this.save(window, cx);
+                    }
+                    cx.stop_propagation();
+                }
+            }))
+    }
+}
+
+impl Focusable for SettingsPage {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
     }
 }

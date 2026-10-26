@@ -42,7 +42,7 @@ single file.
   Frappe Books can still open it afterwards.
 - **Fast and light.** Native code drawn on the GPU, with no Electron or browser inside.
 - **The same accounting.** The documents, rules and reports of Frappe Books, with the ledger
-  checked against it, and [65 of its bugs fixed](docs/BOOKS-BUGS.md).
+  checked against it, and [70 of its bugs fixed](docs/BOOKS-BUGS.md).
 - **Free.** There's nothing to pay for, now or later, and the code is open source.
 - **Private.** No telemetry or update checks. Your books stay on your computer
   unless you connect an AI assistant.

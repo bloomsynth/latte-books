@@ -1,51 +1,80 @@
 //! The Import Wizard: `src/pages/ImportWizard.vue` @ v0.36.0.
 //!
 //! Pick what to import, save its template, fill it in elsewhere and select it, check the
-//! column each field is in, fix any cell shown in red, and import. The work is done by
+//! column each field is in, fix any cell shown in red by editing it in place, and import.
+//! Submit is asked in a dialog once the import starts, the columns are picked in a dialog
+//! from the "…" menu, and the import ends with what was imported: Fix Failed keeps the
+//! rows that failed, Show Me opens the list and Done starts again. The work is done by
 //! `latte_core::importer`.
 //!
 //! Differences from Books:
-//! - A cell is fixed by clicking it and typing in the box above the table; Books edits it
-//!   in place.
-//! - Whether to submit what is imported is a checkbox; Books asks once the import starts.
-//! - The columns to pick are listed on the page; Books shows them in a dialog.
+//! - A cell is edited as text, whatever its field; Books shows the field's own control,
+//!   such as a checkbox or a date picker.
+//! - Fix Failed keeps the columns as they were; Books puts them back in the template's
+//!   order.
 
-use gpui_kit::component::button::*;
-use gpui_kit::component::checkbox::Checkbox;
+use std::time::Duration;
+
+use crate::books::{self, Text as _, gray};
+use crate::widgets::{
+    Button, DialogButton, Kind, check_box, control_frame, dialog, dropdown_item, loading, modal,
+    popover_panel,
+};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use latte_core::importer::{self, ImportResult, Importer};
+use latte_core::importer::{self, Cell, ImportResult, Importer};
+use latte_core::views::field;
+use latte_core::views::sidebar::Route;
 
-use crate::Navigate;
 use crate::i18n::t;
 use crate::link::{LinkInput, LinkOption, LinkPicked};
 use crate::session::Shared;
-use crate::widgets::{error_message, field_label, info_message, page_header};
+use crate::{Nav, Navigate};
 
+/// `10rem`, a column's width, and `4rem`, the row numbers'.
 const COLUMN_WIDTH: f32 = 160.;
+const INDEX_WIDTH: f32 = 64.;
 
-/// What an import did, as the wizard lists it.
+/// What an import did (`success`, `failed`).
 struct Outcome {
     success: Vec<String>,
     failed: Vec<(String, String)>,
+    /// The names in the file of what was imported (`successOldName`).
+    success_old_names: Vec<String>,
+}
+
+/// The dialogs the wizard asks in.
+enum Ask {
+    /// "Cannot Import" or "Cannot read file", with why.
+    Error(String, String),
+    /// `askShouldSubmit`.
+    Submit,
 }
 
 pub struct ImportWizard {
     session: Shared,
     type_input: Entity<LinkInput>,
     importer: Option<Importer>,
+    /// The file selected (`file`).
     file_name: Option<String>,
     columns: Vec<Entity<LinkInput>>,
+    /// `showColumnPicker`.
     show_picker: bool,
-    submit: bool,
-    selected: Option<(usize, usize)>,
+    /// The "…" menu, while open.
+    menu: bool,
+    /// The cell being edited, and its box.
+    editing: Option<(usize, usize)>,
     cell_input: Entity<InputState>,
+    ask: Option<Ask>,
+    /// `isMakingEntries`: how many of how many are made.
+    making: Option<(usize, usize)>,
+    /// `complete`.
     outcome: Option<Outcome>,
-    error: Option<String>,
-    info: Option<String>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
     _column_subscriptions: Vec<Subscription>,
 }
@@ -68,8 +97,8 @@ impl ImportWizard {
                 })
                 .collect()
         };
-        let type_input = cx.new(|cx| LinkInput::new(options, t("Import Type"), window, cx));
-        let cell_input = cx.new(|cx| InputState::new(window, cx).placeholder(t("No Value")));
+        let type_input = cx.new(|cx| LinkInput::new(options, t("Import Type"), window, cx).small());
+        let cell_input = cx.new(|cx| InputState::new(window, cx));
         let subscriptions = vec![
             cx.subscribe_in(
                 &type_input,
@@ -79,10 +108,14 @@ impl ImportWizard {
             cx.subscribe_in(
                 &cell_input,
                 window,
-                |this, state, event: &InputEvent, _, cx| {
+                |this, state, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
                         let text = state.read(cx).value().to_string();
                         this.set_cell(&text, cx);
+                        // Enter leaves the cell; the page keeps the keyboard for the shortcuts.
+                        if matches!(event, InputEvent::PressEnter { .. }) {
+                            this.focus.focus(window, cx);
+                        }
                     }
                 },
             ),
@@ -94,41 +127,52 @@ impl ImportWizard {
             file_name: None,
             columns: Vec::new(),
             show_picker: false,
-            submit: false,
-            selected: None,
+            menu: false,
+            editing: None,
             cell_input,
+            ask: None,
+            making: None,
             outcome: None,
-            error: None,
-            info: None,
+            focus: cx.focus_handle(),
             _subscriptions: subscriptions,
             _column_subscriptions: Vec::new(),
         }
     }
 
+    /// `setImportType`: a new importer for the type, after `clear`.
     fn set_type(&mut self, schema_name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.clear_messages();
-        self.file_name = None;
-        self.selected = None;
-        self.outcome = None;
-        if schema_name.is_empty() {
-            self.importer = None;
-        } else {
+        self.clear_state();
+        if !schema_name.is_empty() {
             let s = self.session.borrow();
             match Importer::new(schema_name, &s.fyo) {
                 Ok(importer) => self.importer = Some(importer),
-                Err(e) => self.error = Some(e.to_string()),
+                Err(e) => self.ask = Some(Ask::Error(t("Error"), e.to_string())),
             }
         }
         self.make_columns(window, cx);
         cx.notify();
     }
 
-    fn clear_messages(&mut self) {
-        self.error = None;
-        self.info = None;
+    fn clear_state(&mut self) {
+        self.importer = None;
+        self.file_name = None;
+        self.editing = None;
+        self.outcome = None;
+        self.making = None;
+        self.menu = false;
+        self.show_picker = false;
     }
 
-    /// The fields a column can be for: the picked ones.
+    /// `clear`: back to no type.
+    fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_state();
+        self.type_input
+            .update(cx, |link, cx| link.set_value(None, window, cx));
+        self.make_columns(window, cx);
+        cx.notify();
+    }
+
+    /// `gridColumnTitleDf`'s options: the picked fields, then None.
     fn column_options(&self) -> Vec<LinkOption> {
         let Some(importer) = &self.importer else {
             return Vec::new();
@@ -141,10 +185,29 @@ impl ImportWizard {
                 value: key.clone().into(),
                 label: field.column_label().into(),
             })
+            .chain([LinkOption {
+                value: "".into(),
+                label: t("None").into(),
+            }])
             .collect()
     }
 
-    /// A field picker for each column, set to the column's field.
+    /// `columnCount`: the picked fields until a file is selected, then the file's columns
+    /// that have a place.
+    fn column_count(&self) -> usize {
+        let Some(importer) = &self.importer else {
+            return 0;
+        };
+        if self.file_name.is_none() {
+            return importer.picked.values().filter(|p| **p).count();
+        }
+        match importer.rows.first() {
+            None => importer.assigned.len(),
+            Some(row) => importer.assigned.len().min(row.len()),
+        }
+    }
+
+    /// A column picker for each column, set to the column's field.
     fn make_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.columns.clear();
         self._column_subscriptions.clear();
@@ -156,7 +219,8 @@ impl ImportWizard {
             .unwrap_or_default();
         for (index, key) in assigned.into_iter().enumerate() {
             let options = options.clone();
-            let input = cx.new(|cx| LinkInput::new(options, t("Select column"), window, cx));
+            let input =
+                cx.new(|cx| LinkInput::new(options, t("Select column"), window, cx).small());
             input.update(cx, |link, cx| {
                 link.set_value(key.map(Into::into), window, cx)
             });
@@ -180,7 +244,10 @@ impl ImportWizard {
         cx.notify();
     }
 
-    fn toggle_picked(
+    /// `pickColumn`: a field picked or not; one no longer picked leaves its column, and
+    /// before a file is selected the columns follow the picked fields
+    /// (`reassignTemplateFields`).
+    fn pick_column(
         &mut self,
         key: &str,
         picked: bool,
@@ -193,16 +260,33 @@ impl ImportWizard {
                 return;
             };
             importer.picked.insert(key.to_owned(), picked);
-            if !picked {
-                let columns: Vec<usize> = importer
+            if !picked
+                && let Some(index) = importer
                     .assigned
                     .iter()
-                    .enumerate()
-                    .filter(|(_, k)| k.as_deref() == Some(key))
-                    .map(|(i, _)| i)
-                    .collect();
-                for index in columns {
-                    importer.set_template_field(&s.fyo, index, None);
+                    .position(|k| k.as_deref() == Some(key))
+            {
+                importer.set_template_field(&s.fyo, index, None);
+                if importer.rows.is_empty() {
+                    let picked: Vec<String> = importer
+                        .picked
+                        .iter()
+                        .filter(|(_, p)| **p)
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    for i in 0..importer.assigned.len() {
+                        importer.set_template_field(&s.fyo, i, picked.get(i).cloned());
+                    }
+                }
+            }
+            if picked && importer.rows.is_empty() && self.file_name.is_none() {
+                // A newly picked field gets the next column.
+                let index = importer.picked.values().filter(|p| **p).count() - 1;
+                if index >= importer.assigned.len() {
+                    importer.assigned.resize(index + 1, None);
+                }
+                if importer.assigned[index].is_none() {
+                    importer.set_template_field(&s.fyo, index, Some(key.to_owned()));
                 }
             }
         }
@@ -215,19 +299,8 @@ impl ImportWizard {
             return;
         };
         let template = importer.csv_template();
-        let label = self
-            .type_input
-            .read(cx)
-            .value()
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-        let label = self
-            .session
-            .borrow()
-            .fyo
-            .schema(&label)
-            .map_or(label, |s| s.label.clone());
-        let file_name = format!("{label} {}.csv", t("Template"));
+        // `importType + ' ' + t`Template``: the schema's name.
+        let file_name = format!("{} {}.csv", importer.schema_name, t("Template"));
         let dir = documents_dir();
         let path = cx.prompt_for_new_path(&dir, Some(&file_name));
         cx.spawn_in(window, async move |this, cx| {
@@ -236,9 +309,8 @@ impl ImportWizard {
             };
             let result = std::fs::write(&path, template);
             this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => this.info = Some(format!("Saved {}", path.display())),
-                    Err(e) => this.error = Some(e.to_string()),
+                if let Err(e) = result {
+                    this.ask = Some(Ask::Error(t("Error"), e.to_string()));
                 }
                 cx.notify();
             })
@@ -247,6 +319,7 @@ impl ImportWizard {
         .detach();
     }
 
+    /// `selectFile`.
     fn select_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -278,34 +351,35 @@ impl ImportWizard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.clear_messages();
-        self.outcome = None;
-        self.selected = None;
         let Some(schema_name) = self.importer.as_ref().map(|i| i.schema_name.clone()) else {
             return;
         };
-        let text = match text {
-            Ok(text) => text,
-            Err(e) => {
-                self.error = Some(format!("{}: {e}", t("Cannot read file")));
-                cx.notify();
-                return;
-            }
+        let cannot_read = || {
+            Ask::Error(
+                t("Cannot read file"),
+                t("Bad import data, could not read file."),
+            )
+        };
+        let Ok(text) = text else {
+            self.ask = Some(cannot_read());
+            cx.notify();
+            return;
         };
         {
             let s = self.session.borrow();
-            // A new file starts from a new importer, as Books makes one when it is picked.
+            // A file is read into a new importer, as Books makes one for the type.
             let mut importer = match Importer::new(&schema_name, &s.fyo) {
                 Ok(importer) => importer,
                 Err(e) => {
-                    self.error = Some(e.to_string());
+                    self.ask = Some(Ask::Error(t("Error"), e.to_string()));
                     return;
                 }
             };
             if !importer.select_file(&s.fyo, &text) || importer.rows.is_empty() {
-                self.error = Some(t("Bad import data, could not read file."));
+                self.ask = Some(cannot_read());
             } else {
                 self.importer = Some(importer);
+                self.editing = None;
                 self.file_name = path.file_name().map(|n| n.to_string_lossy().to_string());
             }
         }
@@ -324,34 +398,38 @@ impl ImportWizard {
         if let Some(importer) = &mut self.importer {
             importer.remove_row(row);
         }
-        self.selected = None;
+        self.editing = None;
         cx.notify();
     }
 
-    fn select_cell(
+    /// Edits a cell in place.
+    fn edit_cell(
         &mut self,
         row: usize,
         column: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.selected = Some((row, column));
-        let raw = self
-            .importer
-            .as_ref()
-            .and_then(|i| i.rows.get(row))
-            .and_then(|r| r.get(column))
-            .map(|c| c.raw.clone())
-            .unwrap_or_default();
+        let Some(importer) = &self.importer else {
+            return;
+        };
+        let Some(cell) = importer.rows.get(row).and_then(|r| r.get(column)) else {
+            return;
+        };
+        let text = match (self.column_field(column), cell.error) {
+            (Some(f), false) => field::edit_text(&f, cell.value.as_ref()),
+            _ => cell.raw.clone(),
+        };
+        self.editing = Some((row, column));
         self.cell_input.update(cx, |input, cx| {
-            input.set_value(raw, window, cx);
+            input.set_value(text, window, cx);
             input.focus(window, cx);
         });
         cx.notify();
     }
 
     fn set_cell(&mut self, text: &str, cx: &mut Context<Self>) {
-        let Some((row, column)) = self.selected else {
+        let Some((row, column)) = self.editing.take() else {
             return;
         };
         let s = self.session.borrow();
@@ -368,189 +446,473 @@ impl ImportWizard {
         cx.notify();
     }
 
+    /// The field of a column, if it has one.
+    fn column_field(&self, column: usize) -> Option<latte_schema::Field> {
+        let importer = self.importer.as_ref()?;
+        let key = importer.assigned.get(column)?.as_ref()?;
+        Some(importer.fields.get(key)?.field.clone())
+    }
+
+    /// `importData`: the checks, then Submit asked when the type can be submitted.
     fn import(&mut self, cx: &mut Context<Self>) {
-        self.clear_messages();
-        let submit = self.submit;
-        let result: Result<ImportResult, String> = {
+        if self.making.is_some() || self.outcome.is_some() {
+            return;
+        }
+        let checked = {
+            let s = self.session.borrow();
+            let Some(importer) = &self.importer else {
+                return;
+            };
+            importer
+                .check(&s.fyo)
+                .map(|problem| (problem, importer.is_submittable(&s.fyo)))
+        };
+        match checked {
+            Err(e) => self.ask = Some(Ask::Error(t("Cannot Import"), e.to_string())),
+            Ok((Some(problem), _)) => self.ask = Some(Ask::Error(t("Cannot Import"), problem)),
+            Ok((None, true)) => self.ask = Some(Ask::Submit),
+            Ok((None, false)) => self.make_entries(false, cx),
+        }
+        cx.notify();
+    }
+
+    /// Saves the documents one by one, with the loader showing how many are made.
+    fn make_entries(&mut self, submit: bool, cx: &mut Context<Self>) {
+        let docs = {
             let mut s = self.session.borrow_mut();
             let Some(importer) = &self.importer else {
                 return;
             };
-            match importer.check(&s.fyo) {
-                Err(e) => Err(e.to_string()),
-                Ok(Some(message)) => Err(format!("{}: {message}", t("Cannot Import"))),
-                Ok(None) => importer
-                    .import(&mut s.fyo, submit)
-                    .map_err(|e| e.to_string()),
+            importer.docs(&mut s.fyo)
+        };
+        let docs = match docs {
+            Ok(docs) => docs,
+            Err(e) => {
+                self.ask = Some(Ask::Error(t("Cannot Import"), e.to_string()));
+                cx.notify();
+                return;
             }
         };
-        match result {
-            Ok(result) => {
-                if let Some(importer) = &mut self.importer {
-                    importer.keep_failed(&result);
-                }
-                self.selected = None;
-                self.outcome = Some(Outcome {
+        let total = docs.len();
+        self.making = Some((0, total));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let mut result = ImportResult::default();
+            for (i, doc) in docs.into_iter().enumerate() {
+                let Ok(()) = this.update(cx, |this, cx| {
+                    result.import_doc(&mut this.session.borrow_mut().fyo, doc, submit);
+                    this.making = Some((i + 1, total));
+                    cx.notify();
+                }) else {
+                    return;
+                };
+                cx.background_executor().timer(Duration::ZERO).await;
+            }
+            this.update(cx, |this, cx| {
+                this.making = None;
+                this.outcome = Some(Outcome {
                     success: result.success.clone(),
                     failed: result
                         .failed
                         .iter()
                         .map(|(name, e)| (name.clone(), e.to_string()))
                         .collect(),
+                    success_old_names: result.success_old_names.clone(),
                 });
-            }
-            Err(e) => self.error = Some(e),
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// `clearSuccessfullyImportedEntries`: only the rows that failed are left to fix.
+    fn fix_failed(&mut self, cx: &mut Context<Self>) {
+        if let (Some(outcome), Some(importer)) = (self.outcome.take(), &mut self.importer) {
+            let result = ImportResult {
+                success_old_names: outcome.success_old_names,
+                ..ImportResult::default()
+            };
+            importer.keep_failed(&result);
         }
+        self.file_name = None;
+        self.editing = None;
         cx.notify();
     }
 
-    fn render_picker(&self, cx: &mut Context<Self>) -> Div {
-        let Some(importer) = &self.importer else {
-            return div();
+    /// `showMe`: the list of what was imported.
+    fn show_me(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(schema) = self.importer.as_ref().map(|i| i.schema_name.clone()) else {
+            return;
         };
-        let picked = importer.picked.values().filter(|p| **p).count();
-        let theme = cx.theme().clone();
-        let toggle = Button::new("pick-columns")
-            .small()
-            .ghost()
-            .label(format!(
-                "{} · {picked} {}",
-                t("Pick Import Columns"),
-                t("fields selected")
-            ))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.show_picker = !this.show_picker;
-                cx.notify();
-            }));
-        let mut picker = div().v_flex().gap_2().child(toggle);
-        if self.show_picker {
-            let fields: Vec<(String, String, bool, bool)> = importer
-                .fields
-                .iter()
-                .map(|(key, field)| {
-                    (
-                        key.clone(),
-                        field.column_label(),
-                        importer.picked.get(key) == Some(&true),
-                        field.field.required,
-                    )
-                })
-                .collect();
-            picker = picker.child(
-                div()
-                    .h_flex()
-                    .flex_wrap()
-                    .gap_x_4()
-                    .gap_y_1()
-                    .p_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.border)
-                    .children(fields.into_iter().map(|(key, label, checked, required)| {
-                        let id = SharedString::from(format!("pick-{key}"));
-                        div().w(px(220.)).child(
-                            Checkbox::new(ElementId::Name(id))
-                                .checked(checked)
-                                .disabled(required)
-                                .label(label)
-                                .on_click(cx.listener(move |this, checked: &bool, window, cx| {
-                                    this.toggle_picked(&key, *checked, window, cx)
-                                })),
-                        )
-                    })),
-            );
-        }
-        picker
+        let title = self
+            .session
+            .borrow()
+            .fyo
+            .schema(&schema)
+            .map_or_else(|| schema.clone(), |s| s.label.clone());
+        self.clear(window, cx);
+        cx.emit(Navigate(Nav::Route(Route::list(&schema, &title, None))));
     }
 
-    fn render_table(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
+    /// The header's "…" (`DropdownWithActions.vue`): Select File or Change File once there
+    /// are rows, Pick Import Columns, and Cancel.
+    fn render_menu(&self, has_rows: bool, cx: &mut Context<Self>) -> Div {
+        let button = Button::new("import-menu")
+            .icon("more-horizontal")
+            .tooltip(t("More"))
+            .disabled(self.making.is_some())
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.menu = !this.menu;
+                cx.notify();
+            }));
+        let menu = self.menu.then(|| {
+            let file_label = if self.file_name.is_some() {
+                "Change File"
+            } else {
+                "Select File"
+            };
+            let mut items: Vec<(&'static str, bool, u8)> = Vec::new();
+            if has_rows {
+                items.push((file_label, false, 0));
+            }
+            items.push(("Pick Import Columns", false, 1));
+            items.push(("Cancel", true, 2));
+            deferred(
+                anchored().anchor(Anchor::TopRight).snap_to_window().child(
+                    popover_panel()
+                        .id("import-menu-panel")
+                        .occlude()
+                        .mt_2()
+                        .min_w(px(160.))
+                        .p_1()
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.menu = false;
+                            cx.notify();
+                        }))
+                        .children(items.into_iter().enumerate().map(
+                            |(i, (label, danger, action))| {
+                                let label = div()
+                                    .when(danger, |d| d.text_color(books::color("red", 700)))
+                                    .child(t(label));
+                                dropdown_item(("import-action", i), label)
+                                    .when(i > 0, |d| d.mt_1())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.menu = false;
+                                        match action {
+                                            0 => this.select_file(window, cx),
+                                            1 => this.show_picker = true,
+                                            _ => this.clear(window, cx),
+                                        }
+                                        cx.notify();
+                                    }))
+                            },
+                        )),
+                ),
+            )
+            .with_priority(1)
+        });
+        div().relative().child(button).children(menu)
+    }
+
+    /// The row of column pickers and the grid of values.
+    fn render_grid(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(importer) = &self.importer else {
             return div().into_any_element();
         };
+        let columns = self.column_count();
         let width = px(COLUMN_WIDTH);
-        let header = div()
+        // `.index-cell`.
+        let index_cell = || {
+            div()
+                .w(px(INDEX_WIDTH))
+                .flex_none()
+                .h_flex()
+                .justify_end()
+                .pr_4()
+                .self_stretch()
+                .border_r_1()
+                .border_color(gray(200))
+                .text_color(gray(600))
+        };
+        let assignment = div()
             .h_flex()
-            .gap_1()
-            .child(div().w(px(48.)).flex_none())
+            .flex_none()
+            .py_4()
+            .pr_4()
+            .gap_4()
+            .border_b_1()
+            .border_r_1()
+            .border_color(gray(200))
+            .bg(books::white())
+            .child(index_cell().my(px(-16.)).child("#"))
             .children(
                 self.columns
                     .iter()
+                    .take(columns)
                     .map(|c| div().w(width).flex_none().child(c.clone())),
             );
-        let rows = importer.rows.iter().enumerate().map(|(r, row)| {
+        let formatter = &self.session.borrow().formatter;
+        let rows: Vec<AnyElement> = importer
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(r, row)| {
+                let group = SharedString::from(format!("import-row-{r}"));
+                div()
+                    .h_flex()
+                    .gap_4()
+                    .child(
+                        index_cell()
+                            .id(("remove-row", r))
+                            .group(group.clone())
+                            .cursor_pointer()
+                            .child(
+                                div()
+                                    .group_hover(group.clone(), |d| d.invisible())
+                                    .child(format!("{}", r + 1)),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .invisible()
+                                    .group_hover(group.clone(), |d| d.visible())
+                                    .child(books::icon("x", px(16.), gray(600))),
+                            )
+                            .relative()
+                            .on_click(cx.listener(move |this, _, _, cx| this.remove_row(r, cx))),
+                    )
+                    .children((0..columns).map(|c| {
+                        let cell = row.get(c).cloned().unwrap_or_default();
+                        self.render_cell(r, c, &cell, formatter, cx)
+                            .w(width)
+                            .flex_none()
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+        let values = if rows.is_empty() {
             div()
                 .h_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .w(px(48.))
-                        .flex_none()
-                        .h_flex()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(
-                            Button::new(("remove-row", r))
-                                .xsmall()
-                                .ghost()
-                                .icon(IconName::Close)
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.remove_row(r, cx)),
-                                ),
-                        )
-                        .child(format!("{}", r + 1)),
-                )
-                .children((0..self.columns.len()).map(|c| {
-                    let cell = row.get(c);
-                    let raw = cell.map(|c| c.raw.clone()).unwrap_or_default();
-                    let error = cell.is_some_and(|c| c.error);
-                    let selected = self.selected == Some((r, c));
-                    div()
-                        .id(("cell", r * 1000 + c))
-                        .w(width)
-                        .flex_none()
-                        .h(px(28.))
-                        .px_2()
-                        .h_flex()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(if selected { theme.ring } else { theme.border })
-                        .when(error, |d| {
-                            d.bg(theme.red.opacity(0.12)).text_color(theme.red)
-                        })
-                        .cursor_pointer()
-                        .child(div().truncate().child(raw))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.select_cell(r, c, window, cx)
-                        }))
-                }))
-        });
+                .h(px(62.5))
+                .pl_4()
+                .text_color(gray(700))
+                .child(t("No rows added. Select a file or add rows."))
+        } else {
+            div()
+                .v_flex()
+                .flex_none()
+                .py_4()
+                .pr_4()
+                .gap_4()
+                .border_r_1()
+                .border_b_1()
+                .border_color(gray(200))
+                .children(rows)
+        };
         div()
-            .id("import-table")
-            .v_flex()
+            .id("import-grid")
+            .text_13()
             .flex_1()
-            .gap_1()
-            .px_4()
-            .pb_4()
+            .min_h_0()
             .overflow_scroll()
-            .child(header)
-            .children(rows)
             .child(
-                div().pt_1().child(
-                    Button::new("add-row")
-                        .small()
-                        .ghost()
-                        .label(t("Add Row"))
-                        .on_click(cx.listener(|this, _, _, cx| this.add_row(cx))),
-                ),
+                div()
+                    .v_flex()
+                    .w(px(INDEX_WIDTH
+                        + 16.
+                        + (COLUMN_WIDTH + 16.) * columns as f32))
+                    .child(assignment)
+                    .child(values),
             )
             .into_any_element()
     }
 
-    fn render_outcome(&self, cx: &App) -> Option<Div> {
+    /// A cell: an assigned column's value, red when it can't be read, edited in place on
+    /// a click; an unassigned column's text, read-only.
+    fn render_cell(
+        &self,
+        r: usize,
+        c: usize,
+        cell: &Cell,
+        formatter: &latte_core::fyo::format::Formatter,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let field = self.column_field(c);
+        let editing = self.editing == Some((r, c));
+        let title = field_title(cell, field.as_ref(), formatter);
+        let id = ("import-cell", r * 1000 + c);
+        let Some(field) = field else {
+            // `Data` read-only with the cell's text.
+            return control_frame(true, false)
+                .id(id)
+                .min_h(px(30.))
+                .px_2()
+                .child(div().truncate().child(cell.raw.clone()))
+                .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx));
+        };
+        let frame = control_frame(false, editing)
+            .id(id)
+            .min_h(px(30.))
+            .when(cell.error, |d| d.border_color(books::color("red", 300)));
+        if editing {
+            return frame.child(
+                Input::new(&self.cell_input)
+                    .appearance(false)
+                    .h(px(28.))
+                    .px_2()
+                    .text_13(),
+            );
+        }
+        let text = if cell.error {
+            String::new()
+        } else {
+            field::display(formatter, &field, cell.value.as_ref())
+        };
+        let numeric = matches!(
+            field.fieldtype,
+            Some(
+                latte_schema::FieldType::Int
+                    | latte_schema::FieldType::Float
+                    | latte_schema::FieldType::Currency
+            )
+        );
+        frame
+            .px_2()
+            .cursor_text()
+            .when(numeric, |d| d.justify_end())
+            .child(div().truncate().child(text))
+            .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+            .on_click(cx.listener(move |this, _, window, cx| this.edit_cell(r, c, window, cx)))
+    }
+
+    /// `Pick Import Columns`: the fields by schema, three to a row, and how many are
+    /// picked.
+    fn render_picker(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let importer = self.importer.as_ref()?;
+        // Each schema's fields: key, label, picked and required.
+        type Fields = Vec<(String, String, bool, bool)>;
+        let mut groups: Vec<(String, Fields)> = Vec::new();
+        for (key, tf) in &importer.fields {
+            let label = match &tf.parent_child_field {
+                Some(table) => format!(
+                    "{} ({})",
+                    table.label.as_deref().unwrap_or(&table.fieldname),
+                    tf.schema_label
+                ),
+                None => tf.schema_label.clone(),
+            };
+            let entry = (
+                key.clone(),
+                tf.label().to_owned(),
+                importer.picked.get(key) == Some(&true),
+                tf.field.required,
+            );
+            match groups.iter_mut().find(|(l, _)| *l == label) {
+                Some((_, fields)) => fields.push(entry),
+                None => groups.push((label, vec![entry])),
+            }
+        }
+        let picked = importer.picked.values().filter(|p| **p).count();
+        let hr = || div().w_full().h(px(1.)).flex_none().bg(gray(200));
+        Some(
+            div()
+                .v_flex()
+                .w(books::W_FORM)
+                .child(form_header(t("Pick Import Columns")))
+                .child(hr())
+                .child(
+                    div()
+                        .id("pick-columns")
+                        .max_h(px(480.))
+                        .overflow_y_scroll()
+                        .children(groups.into_iter().map(|(label, fields)| {
+                            div()
+                                .p_4()
+                                .child(
+                                    div()
+                                        .text_12()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(gray(800))
+                                        .child(label),
+                                )
+                                .child(
+                                    div()
+                                        .grid()
+                                        .grid_cols(3)
+                                        .mt_1()
+                                        .border_1()
+                                        .border_color(gray(200))
+                                        .rounded(books::RADIUS)
+                                        .children(fields.into_iter().map(
+                                            |(key, label, checked, required)| {
+                                                div()
+                                                    .id(SharedString::from(format!("pick-{key}")))
+                                                    .h_flex()
+                                                    .px_3()
+                                                    .py_2()
+                                                    .gap_2()
+                                                    .when(!required, |d| d.cursor_pointer())
+                                                    .child(check_box(checked))
+                                                    .child(
+                                                        div()
+                                                            .text_13()
+                                                            .text_color(gray(600))
+                                                            .truncate()
+                                                            .child(label),
+                                                    )
+                                                    .when(required, |d| {
+                                                        d.child(
+                                                            div()
+                                                                .text_color(books::color(
+                                                                    "red", 600,
+                                                                ))
+                                                                .child("*"),
+                                                        )
+                                                    })
+                                                    .when(!required, |d| {
+                                                        d.on_click(cx.listener(
+                                                            move |this, _, window, cx| {
+                                                                this.pick_column(
+                                                                    &key, !checked, window, cx,
+                                                                )
+                                                            },
+                                                        ))
+                                                    })
+                                            },
+                                        )),
+                                )
+                        })),
+                )
+                .child(hr())
+                .child(
+                    div()
+                        .h_flex()
+                        .p_4()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_12()
+                                .text_color(gray(600))
+                                .child(format!("{picked} {}", t("fields selected"))),
+                        )
+                        .child(
+                            Button::new("picker-done")
+                                .primary()
+                                .label(t("Done"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_picker = false;
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+        )
+    }
+
+    /// `Import Complete`: what was imported and what failed.
+    fn render_outcome(&self, cx: &mut Context<Self>) -> Option<Div> {
         let outcome = self.outcome.as_ref()?;
-        let theme = cx.theme();
+        let hr = || div().w_full().h(px(1.)).flex_none().bg(gray(200));
         let count = |n: usize, one: &str, many: &str| {
             if n == 1 {
                 format!("{n} {}", t(one))
@@ -558,52 +920,211 @@ impl ImportWizard {
                 format!("{n} {}", t(many))
             }
         };
-        let mut panel = div()
-            .v_flex()
-            .gap_1()
-            .mx_4()
-            .mt_2()
-            .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t("Import Complete")),
-            )
-            .child(count(
-                outcome.success.len(),
-                "entry imported",
-                "entries imported",
-            ));
-        if outcome.success.is_empty() && outcome.failed.is_empty() {
-            panel = panel.child(t("No entries were imported."));
-        }
-        if !outcome.success.is_empty() {
-            panel = panel.child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child(outcome.success.join(", ")),
-            );
-        }
-        if !outcome.failed.is_empty() {
-            panel = panel
-                .child(div().text_color(theme.red).child(count(
-                    outcome.failed.len(),
-                    "entry failed",
-                    "entries failed",
-                )))
-                .children(
-                    outcome
-                        .failed
-                        .iter()
-                        .map(|(name, e)| div().text_sm().child(format!("{name}: {e}"))),
-                );
-        }
-        Some(panel)
+        let section_header = |title: String, detail: String| {
+            div()
+                .h_flex()
+                .justify_between()
+                .px_4()
+                .pt_4()
+                .pb_1()
+                .child(
+                    div()
+                        .text_13()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(div().text_12().text_color(gray(600)).child(detail))
+        };
+        let success = (!outcome.success.is_empty()).then(|| {
+            div()
+                .v_flex()
+                .child(section_header(
+                    t("Success"),
+                    count(outcome.success.len(), "entry imported", "entries imported"),
+                ))
+                .child(
+                    div()
+                        .id("import-success")
+                        .max_h(px(160.))
+                        .overflow_y_scroll()
+                        .children(outcome.success.iter().enumerate().map(|(i, name)| {
+                            div()
+                                .h_flex()
+                                .px_4()
+                                .py_1()
+                                .gap_4()
+                                .text_13()
+                                .child(
+                                    div()
+                                        .w_4()
+                                        .flex_none()
+                                        .h_flex()
+                                        .justify_end()
+                                        .child(format!("{}.", i + 1)),
+                                )
+                                .child(div().truncate().child(name.clone()))
+                        })),
+                )
+                .child(hr())
+        });
+        let failed = (!outcome.failed.is_empty()).then(|| {
+            div()
+                .v_flex()
+                .child(section_header(
+                    t("Failed"),
+                    count(outcome.failed.len(), "entry failed", "entries failed"),
+                ))
+                .child(
+                    div()
+                        .id("import-failed")
+                        .max_h(px(160.))
+                        .overflow_y_scroll()
+                        .children(outcome.failed.iter().enumerate().map(|(i, (name, e))| {
+                            div()
+                                .h_flex()
+                                .px_4()
+                                .py_1()
+                                .gap_4()
+                                .text_13()
+                                .child(
+                                    div()
+                                        .w_4()
+                                        .flex_none()
+                                        .h_flex()
+                                        .justify_end()
+                                        .child(format!("{}.", i + 1)),
+                                )
+                                .child(div().w_32().flex_none().truncate().child(name.clone()))
+                                .child(div().truncate().child(e.clone()))
+                        })),
+                )
+                .child(hr())
+        });
+        let nothing = outcome.success.is_empty() && outcome.failed.is_empty();
+        let has_failed = !outcome.failed.is_empty();
+        let show_me = !has_failed && !outcome.success.is_empty();
+        Some(
+            div()
+                .v_flex()
+                .w(books::W_FORM)
+                .child(form_header(t("Import Complete")))
+                .child(hr())
+                .children(success)
+                .children(failed)
+                .when(nothing, |d| {
+                    d.child(div().p_4().text_13().child(t("No entries were imported.")))
+                })
+                .child(
+                    div()
+                        .h_flex()
+                        .justify_between()
+                        .p_4()
+                        .when(has_failed, |d| {
+                            d.child(
+                                Button::new("fix-failed")
+                                    .label(t("Fix Failed"))
+                                    .on_click(cx.listener(|this, _, _, cx| this.fix_failed(cx))),
+                            )
+                        })
+                        .when(show_me, |d| {
+                            d.child(Button::new("show-me").label(t("Show Me")).on_click(
+                                cx.listener(|this, _, window, cx| this.show_me(window, cx)),
+                            ))
+                        })
+                        .child(
+                            Button::new("import-done").label(t("Done")).on_click(
+                                cx.listener(|this, _, window, cx| this.clear(window, cx)),
+                            ),
+                        ),
+                ),
+        )
     }
+
+    fn render_ask(&self, window: &Window, cx: &mut Context<Self>) -> Option<Deferred> {
+        let ask = self.ask.as_ref()?;
+        Some(match ask {
+            Ask::Error(title, detail) => dialog(
+                title.clone(),
+                Some(detail.clone().into()),
+                Kind::Error,
+                vec![DialogButton::new(
+                    t("Okay"),
+                    false,
+                    cx.listener(|this, _, _, cx| {
+                        this.ask = None;
+                        cx.notify();
+                    }),
+                )],
+                window,
+            ),
+            // Books' `details` is a typo, so the dialog says no more than its title.
+            Ask::Submit => dialog(
+                t("Submit entries?"),
+                None,
+                Kind::Info,
+                vec![
+                    DialogButton::new(
+                        t("Yes"),
+                        true,
+                        cx.listener(|this, _, _, cx| {
+                            this.ask = None;
+                            this.make_entries(true, cx);
+                        }),
+                    ),
+                    DialogButton::new(
+                        t("No"),
+                        false,
+                        cx.listener(|this, _, _, cx| {
+                            this.ask = None;
+                            this.make_entries(false, cx);
+                        }),
+                    )
+                    .escape(),
+                ],
+                window,
+            ),
+        })
+    }
+}
+
+/// `FormHeader.vue`: a modal's title, 56px high.
+fn form_header(title: String) -> Div {
+    div()
+        .h_flex()
+        .h(px(56.))
+        .px_4()
+        .flex_none()
+        .text_18()
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(title)
+}
+
+/// `getFieldTitle`: a cell's value, its text and whether it couldn't be read.
+fn field_title(
+    cell: &Cell,
+    field: Option<&latte_schema::Field>,
+    formatter: &latte_core::fyo::format::Formatter,
+) -> SharedString {
+    let mut title = Vec::new();
+    if let (Some(field), Some(value)) = (field, cell.value.as_ref())
+        && !matches!(value, latte_db::DocValue::Null)
+    {
+        title.push(format!(
+            "{}: {}",
+            t("Value"),
+            field::display(formatter, field, Some(value))
+        ));
+    }
+    if !cell.raw.is_empty() {
+        title.push(format!("{}: {}", t("Raw Value"), cell.raw));
+    }
+    if cell.error {
+        title.push(t("Conversion Error"));
+    }
+    if title.is_empty() {
+        return t("No Value").into();
+    }
+    title.join(", ").into()
 }
 
 fn documents_dir() -> std::path::PathBuf {
@@ -614,151 +1135,155 @@ fn documents_dir() -> std::path::PathBuf {
 }
 
 impl Render for ImportWizard {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_type = self.importer.is_some();
         let has_rows = self.importer.as_ref().is_some_and(|i| !i.rows.is_empty());
-        let submittable = {
-            let s = self.session.borrow();
-            self.importer
-                .as_ref()
-                .is_some_and(|i| i.is_submittable(&s.fyo))
-        };
-        let header = page_header(t("Import Wizard"), cx).child(
+        let making = self.making.is_some();
+        let problem = self.importer.as_ref().and_then(|i| i.error_message());
+        // `ImportWizard.vue`'s header: More, Add Row and Save Template, then Import Data or
+        // Select File.
+        let header = crate::widgets::page_header(t("Import Wizard"), cx).child(
             div()
                 .h_flex()
                 .gap_2()
                 .when(has_type, |d| {
-                    d.child(
-                        Button::new("save-template")
-                            .small()
-                            .label(t("Save Template"))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.save_template(window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("select-file")
-                            .small()
-                            .label(if self.file_name.is_some() {
-                                t("Change File")
-                            } else {
-                                t("Select File")
-                            })
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.select_file(window, cx)),
-                            ),
-                    )
+                    d.child(self.render_menu(has_rows, cx))
+                        .child(
+                            Button::new("header-add-row")
+                                .icon("plus")
+                                .tooltip(t("Add Row"))
+                                .disabled(making)
+                                .on_click(cx.listener(|this, _, _, cx| this.add_row(cx))),
+                        )
+                        .child(
+                            Button::new("save-template")
+                                .icon("download")
+                                .tooltip(t("Save Template"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.save_template(window, cx)
+                                })),
+                        )
                 })
                 .when(has_rows, |d| {
                     d.child(
                         Button::new("import")
-                            .small()
                             .primary()
                             .label(t("Import Data"))
+                            .disabled(problem.is_some() || making)
                             .on_click(cx.listener(|this, _, _, cx| this.import(cx))),
+                    )
+                })
+                .when(has_type && !has_rows, |d| {
+                    d.child(
+                        Button::new("select-file")
+                            .primary()
+                            .label(t("Select File"))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.select_file(window, cx)),
+                            ),
                     )
                 }),
         );
 
-        let problems = self.importer.as_ref().and_then(|i| i.error_message());
-        let summary = self.importer.as_ref().map(|i| {
-            let n = i.rows.len();
-            if n == 0 {
-                t("No rows added. Select a file or add rows.")
-            } else if n == 1 {
-                format!("{n} {}", t("row added."))
-            } else {
-                format!("{n} {}", t("rows added."))
+        // The type, and what to do next or what is wrong.
+        let rows = self.importer.as_ref().map_or(0, |i| i.rows.len());
+        let message = match (&problem, &self.file_name) {
+            (Some(problem), _) => div()
+                .ml_2()
+                .text_13()
+                .text_color(books::color("red", 500))
+                .child(problem.clone()),
+            (None, file) => {
+                let mut parts = div().h_flex().ml_2().text_13().whitespace_nowrap();
+                parts = match file {
+                    Some(name) => parts
+                        .text_color(books::pick(gray(900), books::raw_gray(25)))
+                        .child(format!("{} ", t("Selected")))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("{name},")),
+                        )
+                        .child(format!(" {} ", t("check values and click on")))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(t("Import Data.")),
+                        ),
+                    None if !has_type => parts
+                        .text_color(books::pick(gray(700), books::raw_gray(200)))
+                        .child(t("Set an Import Type")),
+                    None => parts.text_color(books::pick(gray(700), books::raw_gray(200))),
+                };
+                parts.when(rows > 0, |d| {
+                    let added = if rows == 1 {
+                        format!(" {rows} {}", t("row added."))
+                    } else {
+                        format!(" {rows} {}", t("rows added."))
+                    };
+                    d.child(added)
+                })
             }
-        });
+        };
 
         div()
             .v_flex()
             .size_full()
+            .track_focus(&self.focus)
             .child(header)
-            .children(self.error.clone().map(|e| error_message(e, cx)))
-            .children(self.info.clone().map(|m| info_message(m, cx)))
-            .children(problems.map(|m| error_message(m, cx)))
-            .children(self.render_outcome(cx))
             .child(
                 div()
-                    .v_flex()
-                    .gap_3()
+                    .h_flex()
+                    .h(books::H_PAGE_HEADER)
+                    .flex_none()
                     .p_4()
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_end()
-                            .gap_4()
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .gap_1()
-                                    .w(px(240.))
-                                    .child(field_label(t("Import Type"), true, cx))
-                                    .child(self.type_input.clone()),
-                            )
-                            .children(
-                                self.file_name.clone().map(|name| {
-                                    div().text_color(theme.muted_foreground).child(name)
-                                }),
-                            )
-                            .when(submittable, |d| {
-                                d.child(
-                                    Checkbox::new("submit-on-import")
-                                        .checked(self.submit)
-                                        .label(t("Submit entries?"))
-                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                            this.submit = *checked;
-                                            cx.notify();
-                                        })),
-                                )
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(gray(200))
+                    .child(div().w(px(160.)).child(self.type_input.clone()))
+                    .child(message),
+            )
+            .when(has_type, |d| d.child(self.render_grid(cx)))
+            .children(self.making.map(|(done, total)| {
+                let percent = if total == 0 {
+                    0.
+                } else {
+                    done as f64 / total as f64
+                };
+                loading(
+                    format!("{done} entries made out of {total}..."),
+                    percent,
+                    window,
+                )
+            }))
+            .children(
+                self.show_picker
+                    .then(|| self.render_picker(cx))
+                    .flatten()
+                    .map(|picker| {
+                        modal(
+                            picker,
+                            cx.listener(|this, _, _, cx| {
+                                this.show_picker = false;
+                                cx.notify();
                             }),
-                    )
-                    .when(!has_type, |d| {
-                        d.child(
-                            div()
-                                .text_color(theme.muted_foreground)
-                                .child(t("Set an Import Type")),
-                        )
-                    })
-                    .child(self.render_picker(cx))
-                    .children(
-                        summary
-                            .map(|s| div().text_sm().text_color(theme.muted_foreground).child(s)),
-                    )
-                    .when(self.selected.is_some(), |d| {
-                        let (r, c) = self.selected.unwrap_or_default();
-                        let column = self
-                            .columns
-                            .get(c)
-                            .and_then(|input| input.read(cx).value().cloned())
-                            .and_then(|key| {
-                                self.importer
-                                    .as_ref()
-                                    .and_then(|i| i.fields.get(key.as_ref()))
-                                    .map(|f| f.column_label())
-                            })
-                            .unwrap_or_else(|| t("None"));
-                        d.child(
-                            div()
-                                .h_flex()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child(format!("{} {}, {column}", t("Row"), r + 1)),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(320.))
-                                        .child(Input::new(&self.cell_input).small()),
-                                ),
+                            window,
                         )
                     }),
             )
-            .when(has_type, |d| d.child(self.render_table(cx)))
+            .children(self.render_outcome(cx).map(|outcome| {
+                modal(
+                    outcome,
+                    cx.listener(|this, _, window, cx| this.clear(window, cx)),
+                    window,
+                )
+            }))
+            .children(self.render_ask(window, cx))
+    }
+}
+
+impl Focusable for ImportWizard {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
     }
 }

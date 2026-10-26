@@ -9,7 +9,7 @@ use crate::{Doc, Error, Fyo};
 
 /// The invoice test company, with cash and bank accounts and the Cash and Bank payment
 /// methods.
-pub(super) fn payments() -> Fyo {
+pub(crate) fn payments() -> Fyo {
     let mut fyo = books();
     let cash = map([("name", text("Cash")), ("accountType", text("Cash"))]);
     fyo.db.update("Account", &cash).unwrap();
@@ -45,7 +45,7 @@ pub(super) fn payments() -> Fyo {
 }
 
 /// A submitted sales invoice for `quantity` Widgets with 18% GST, for Acme.
-pub(super) fn submitted_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
+pub(crate) fn submitted_invoice(fyo: &mut Fyo, quantity: f64) -> Doc {
     let mut doc = sales_invoice(fyo, quantity);
     doc.sync(fyo).unwrap();
     doc.submit(fyo).unwrap();
