@@ -109,7 +109,7 @@ jobs:
 
       # Lets anyone check an installer was built here from this commit:
       # gh attestation verify <file> --repo bloomsynth/latte-books
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
 
