@@ -138,7 +138,7 @@ jobs:
           fi
           cat notes.md
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           draft: true
           # Never a pre-release, even for a beta: releases/latest, which the README's
