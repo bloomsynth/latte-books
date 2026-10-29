@@ -492,11 +492,7 @@ impl DatabaseCore {
         params: &[FilterValue],
     ) -> Result<Vec<IndexMap<String, RawValue>>, Error> {
         let mut statement = self.conn.prepare(sql)?;
-        let columns: Vec<String> = statement
-            .column_names()
-            .iter()
-            .map(|c| c.to_string())
-            .collect();
+        let columns: Vec<String> = statement.column_names().map(|c| c.to_string()).collect();
         let mut rows = statement.query(rusqlite::params_from_iter(params))?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
