@@ -28,7 +28,7 @@ jiff = "0.2"
 rusqlite = { version = "0.41", features = ["bundled"] }
 
 # GPUI, through gpui-kit. Pinned exactly: GPUI's API changes often (see docs/PLAN.md §9).
-gpui-kit = "=0.8.0"
+gpui-kit = "=0.8.1"
 
 # No LTO for now: this machine runs out of memory linking GPUI with it (spikes/gpui-startup).
 [profile.release]
