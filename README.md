@@ -70,9 +70,6 @@ What makes it this fast:
 - **Offline and private.** Everything runs on your computer, with no server and no
   internet needed, and your books never leave it unless you connect an AI assistant.
 
-How each number was measured, and how to time it yourself, is in
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-
 ## Your books, with your AI assistant
 
 Latte Books is made to be worked from an AI assistant as well as by hand. Open
