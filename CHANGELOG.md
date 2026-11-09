@@ -5,6 +5,13 @@ here.
 
 ## [Unreleased]
 
+## [0.1.0-beta.4] - 2026-11-10
+
+Latte Books now updates itself, prepares GSTR-1 and GSTR-3B for the GST portal, handles
+the reverse charge, and works with ChatGPT Codex.
+
+### Updates and AI assistants
+
 - **Updates:** Latte Books checks for a new version when it starts and once a day. A
   newer one shows at the foot of the sidebar, with its notes, and **Update and Restart**
   installs it and opens the app again. Each update is checked against Latte Books' signing
@@ -14,42 +21,11 @@ here.
 - AI Assistants lists **ChatGPT Codex**: ChatGPT and Codex share one setup, so Connect
   makes Latte Books available in the ChatGPT desktop app's Codex and Work chats as well as
   Codex. It shows as found when either is installed.
-- GSTR-1's JSON export is the whole return for the period, as the GST portal's offline
-  tool (V3.2.4) reads it: B2B, B2C-Large and B2C-Small, credit notes, nil rated and
-  exempt supplies, the HSN summary (Table 12) and the documents issued (Table 13).
-- GSTR-1 includes the invoices of the To Date. Frappe Books leaves them out,
-  so a quarter's return was missing its last day.
-- B2C-Large uses the ₹1 lakh limit in force since August 2024.
-- In the JSON, an invoice has one item per rate, numbered 1, 2 and so on; the place of
-  supply is the customer's; returns are credit notes; and B2C-Small is summed by place
-  and rate. Each of these was wrong in Frappe Books.
-- The export stops and names the row when a row has no GST tax or no HSN/SAC code.
-- Settings → System and the foot of the sidebar show Latte Books' version. The Frappe
-  Books version the company file is kept at is under Compatibility.
-- Change the company's name in Settings → General. The sidebar, window title and recent
-  files follow it.
-- The Show Sidebar button is always shown, and both sidebar buttons name Shift+H.
-- GSTR-1 picks a **Financial Year and a month**, or a **quarter** for companies
-  in the QRMP scheme, as the GST portal does, starting at the latest period that has
-  ended. Custom brings back From Date and To Date.
-- GSTR-1 shows when the return is due: the 11th of the next month, or the 13th after a
-  quarter. Its exports are named by the GSTIN and the period, such as
-  `GSTR1_29AABCA1234A1Z5_092026.json`.
-- Settings has a **GST** tab for Indian companies: the GSTIN, Return Filing (Monthly or
-  Quarterly) and a link to the Tax Templates.
-- **Settings** is at the foot of the sidebar, and Ctrl+, (⌘,) opens it. The Setup group
-  is gone: Chart of Accounts and Tax Templates are in Common, and Import Wizard, Print
-  Templates, Customize Form and AI Assistants are a new Tools group.
-- New Indian companies get GST-40 and IGST-40 tax templates, for GST 2.0's 40% rate.
 - AI assistants see GSTR-1 only for companies with a GSTIN.
-- GSTR-2 is removed. The return hasn't been filed since 2017; input tax credit is
-  claimed from the GSTR-2B the GST portal makes.
-- A report wider than the window scrolls sideways to its other columns: drag the
-  scrollbar under the rows, use Shift and the wheel, or swipe on a trackpad. The wheel
-  alone scrolls sideways too when the rows all fit. They were cut off before.
-- Printed reports keep each GSTIN and amount whole: a column is never narrower than its
-  longest word, and ₹ stays on the amount's line. GSTR's "Intergrated Tax" column is
-  now "Integrated Tax".
+- An AI assistant can give a number for a text field, such as an item's HSN/SAC code.
+
+### GST
+
 - **Reverse charge** for Indian companies: purchases on which you pay the GST, such as
   software and cloud services bought from abroad. Give the item the IGST-18-RCM tax
   template (GST-18-RCM within your state, and 5% templates for goods transport). The
@@ -63,11 +39,51 @@ here.
   input tax credit (4(A)), exempt purchases (5) and the reverse charge to pay in cash
   (6.1), with the return's due date. Rows with no GST tax template are listed below,
   to put right.
+- GSTR-1's JSON export is the whole return for the period, as the GST portal's offline
+  tool (V3.2.4) reads it: B2B, B2C-Large and B2C-Small, credit notes, nil rated and
+  exempt supplies, the HSN summary (Table 12) and the documents issued (Table 13).
+- GSTR-1 includes the invoices of the To Date. Frappe Books leaves them out,
+  so a quarter's return was missing its last day.
+- B2C-Large uses the ₹1 lakh limit in force since August 2024.
+- In the JSON, an invoice has one item per rate, numbered 1, 2 and so on; the place of
+  supply is the customer's; returns are credit notes; and B2C-Small is summed by place
+  and rate. Each of these was wrong in Frappe Books.
+- The export stops and names the row when a row has no GST tax or no HSN/SAC code.
+- GSTR-1 picks a **Financial Year and a month**, or a **quarter** for companies
+  in the QRMP scheme, as the GST portal does, starting at the latest period that has
+  ended. Custom brings back From Date and To Date.
+- GSTR-1 shows when the return is due: the 11th of the next month, or the 13th after a
+  quarter. Its exports are named by the GSTIN and the period, such as
+  `GSTR1_29AABCA1234A1Z5_092026.json`.
+- Settings has a **GST** tab for Indian companies: the GSTIN, Return Filing (Monthly or
+  Quarterly) and a link to the Tax Templates.
+- New Indian companies get GST-40 and IGST-40 tax templates, for GST 2.0's 40% rate.
+- GSTR-2 is removed. The return hasn't been filed since 2017; input tax credit is
+  claimed from the GSTR-2B the GST portal makes.
 - GSTR-1's Reverse Chrg. column is N. Frappe Books shows Y for every customer without
   a GSTIN.
 - A tax row that is taken off, such as a reverse charge's, comes off the invoice's total
   and posts on the other side of the ledger. Frappe Books adds it to the total.
-- An AI assistant can give a number for a text field, such as an item's HSN/SAC code.
+
+### Settings and the sidebar
+
+- **Settings** is at the foot of the sidebar, and Ctrl+, (⌘,) opens it. The Setup group
+  is gone: Chart of Accounts and Tax Templates are in Common, and Import Wizard, Print
+  Templates, Customize Form and AI Assistants are a new Tools group.
+- Settings → System and the foot of the sidebar show Latte Books' version. The Frappe
+  Books version the company file is kept at is under Compatibility.
+- Change the company's name in Settings → General. The sidebar, window title and recent
+  files follow it.
+- The Show Sidebar button is always shown, and both sidebar buttons name Shift+H.
+
+### Reports
+
+- A report wider than the window scrolls sideways to its other columns: drag the
+  scrollbar under the rows, use Shift and the wheel, or swipe on a trackpad. The wheel
+  alone scrolls sideways too when the rows all fit. They were cut off before.
+- Printed reports keep each GSTIN and amount whole: a column is never narrower than its
+  longest word, and ₹ stays on the amount's line. GSTR's "Intergrated Tax" column is
+  now "Integrated Tax".
 
 ## [0.1.0-beta.3] - 2026-10-26
 

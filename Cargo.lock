@@ -4095,7 +4095,7 @@ dependencies = [
 
 [[package]]
 name = "latte-app"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "embed-resource",
  "gpui-kit",
@@ -4105,7 +4105,7 @@ dependencies = [
 
 [[package]]
 name = "latte-core"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "fastrand",
  "indexmap",
@@ -4119,7 +4119,7 @@ dependencies = [
 
 [[package]]
 name = "latte-db"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "fastrand",
  "indexmap",
@@ -4131,14 +4131,14 @@ dependencies = [
 
 [[package]]
 name = "latte-i18n"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "jiff",
 ]
 
 [[package]]
 name = "latte-mcp"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "embed-resource",
  "jiff",
@@ -4151,7 +4151,7 @@ dependencies = [
 
 [[package]]
 name = "latte-print"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "base64 0.23.1",
  "jiff",
@@ -4168,7 +4168,7 @@ dependencies = [
 
 [[package]]
 name = "latte-printer"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "ashpd",
  "objc2 0.6.5",
@@ -4181,14 +4181,14 @@ dependencies = [
 
 [[package]]
 name = "latte-regional"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "latte-core",
 ]
 
 [[package]]
 name = "latte-schema"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "indexmap",
  "rusqlite",
@@ -4198,7 +4198,7 @@ dependencies = [
 
 [[package]]
 name = "latte-ui"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "base64 0.23.1",
  "cargo-packager-updater",
