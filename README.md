@@ -39,7 +39,7 @@
 
 - **Built for speed.** Made to be one of the fastest accounting apps you can install.
   Written from scratch in Rust, Latte Books opens in under a second.
-- **Built for AI.** Connect Claude, Codex or Cursor in one click, and ask your books
+- **Built for AI.** Connect <img src="https://cdn.simpleicons.org/claude/D97757" alt="" height="14" align="middle"> Claude, <img src="https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.102.0/icons/codex-color.svg" alt="" height="14" align="middle"> Codex or <img src="https://cdn.simpleicons.org/cursor/000000/ffffff" alt="" height="14" align="middle"> Cursor in one click, and ask your books
   questions, draft invoices or record a month of bills in plain words. The assistant
   asks you before anything is posted to your accounts.
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
@@ -71,8 +71,8 @@ What makes it this fast:
 ## Your books, with your AI assistant
 
 Latte Books is made to be worked from an AI assistant as well as by hand. Open
-**Tools → AI Assistants**, press **Connect** beside Claude Desktop, Claude Code, Codex or
-Cursor, and talk to your books:
+**Tools → AI Assistants**, press **Connect** beside <img src="https://cdn.simpleicons.org/claude/D97757" alt="" height="14" align="middle"> Claude Desktop, <img src="https://cdn.simpleicons.org/claude/D97757" alt="" height="14" align="middle"> Claude Code,
+<img src="https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.102.0/icons/codex-color.svg" alt="" height="14" align="middle"> Codex or <img src="https://cdn.simpleicons.org/cursor/000000/ffffff" alt="" height="14" align="middle"> Cursor, and talk to your books:
 
 - *"What does Acme owe us, and since when?"*
 - *"Invoice Acme for 10 chairs at ₹2,500, with 18% GST."*
