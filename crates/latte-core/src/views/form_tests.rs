@@ -317,3 +317,50 @@ fn the_rate_box_keeps_the_rate_as_entered() {
         assert!((back - rate).abs() <= rate * 1e-12, "{back} for {rate}");
     }
 }
+
+#[test]
+fn system_settings_shows_lattes_version_and_the_files_under_compatibility() {
+    let mut fyo = books();
+    let doc = fyo.get_doc("SystemSettings", None).unwrap();
+    let formatter = Formatter::new(&fyo).unwrap();
+    let ctx = field::context(&fyo, &doc, None);
+    let tabs = field::form_layout(&fyo, &doc);
+    let sections = &tabs[0].sections;
+    let names = |s: &field::Section| {
+        s.fields
+            .iter()
+            .map(|f| f.fieldname.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // Latte's version is where Books shows its own.
+    assert_eq!(
+        names(&sections[0])[..3],
+        ["dateFormat", "hideGetStarted", field::APP_VERSION]
+    );
+    let app = &sections[0].fields[2];
+    assert_eq!(app.label.as_deref(), Some("Version"));
+    assert!(field::is_read_only(app, &ctx));
+    assert_eq!(doc.get(field::APP_VERSION), None);
+    assert_eq!(display(&formatter, app, None, &ctx), crate::VERSION);
+
+    // The Frappe Books version the file keeps for Frappe Books comes last.
+    let last = sections.last().unwrap();
+    assert_eq!(last.name, "Compatibility");
+    assert_eq!(names(last), ["version"]);
+    let file = &last.fields[0];
+    assert_eq!(file.label.as_deref(), Some("Frappe Books Version"));
+    assert_eq!(
+        display(&formatter, file, doc.get("version"), &ctx),
+        latte_db::BOOKS_VERSION
+    );
+    // Each is shown once.
+    let all: Vec<String> = sections.iter().flat_map(names).collect();
+    for fieldname in ["version", field::APP_VERSION] {
+        assert_eq!(
+            all.iter().filter(|f| *f == fieldname).count(),
+            1,
+            "{fieldname}"
+        );
+    }
+}

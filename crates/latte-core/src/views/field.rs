@@ -9,6 +9,8 @@
 //   open a calendar (`latte-ui`'s `date_picker.rs`).
 // - AccountingSettings' Company Name can be changed. Books makes it read-only, though
 //   nothing in the books refers to it: it is only shown, as the company's name.
+// - System Settings' Version is Latte Books' own ([`APP_VERSION`]). The version the file
+//   stores, the Frappe Books version its tables match, is shown last, under Compatibility.
 
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -86,9 +88,53 @@ pub struct Section {
     pub fields: Vec<Field>,
 }
 
+/// The field System Settings shows Latte Books' version in. It isn't in the schema, so it
+/// is never saved; [`super::form::display`] gives its value.
+pub const APP_VERSION: &str = "latteVersion";
+
+/// System Settings' `version`: the Frappe Books version whose tables the file matches,
+/// which Frappe Books reads to know what to bring up to date.
+const FILE_VERSION: &str = "version";
+
 /// `getFieldsGroupedByTabAndSection`: the fields a form shows, by tab and section, in
 /// schema order. Empty tabs and sections are left out.
 pub fn form_layout(fyo: &Fyo, doc: &Doc) -> Vec<Tab> {
+    let mut tabs = schema_layout(fyo, doc);
+    if doc.schema_name() == "SystemSettings" {
+        show_app_version(&mut tabs);
+    }
+    tabs
+}
+
+/// System Settings' Version becomes Latte Books' own, in the same place, and the file's
+/// Frappe Books version moves to a Compatibility section at the end.
+fn show_app_version(tabs: &mut [Tab]) {
+    let Some(tab) = tabs.first_mut() else {
+        return;
+    };
+    let found = tab.sections.iter_mut().find_map(|section| {
+        let i = section
+            .fields
+            .iter()
+            .position(|f| f.fieldname == FILE_VERSION)?;
+        Some((section, i))
+    });
+    let Some((section, i)) = found else {
+        return;
+    };
+    let mut file_version = section.fields[i].clone();
+    let app_version = &mut section.fields[i];
+    app_version.fieldname = APP_VERSION.to_owned();
+    app_version.read_only = true;
+    file_version.label = Some("Frappe Books Version".to_owned());
+    file_version.section = Some("Compatibility".to_owned());
+    tab.sections.push(Section {
+        name: "Compatibility".to_owned(),
+        fields: vec![file_version],
+    });
+}
+
+fn schema_layout(fyo: &Fyo, doc: &Doc) -> Vec<Tab> {
     let ctx = context(fyo, doc, None);
     let mut tabs: Vec<Tab> = Vec::new();
     for field in &doc.schema().fields {

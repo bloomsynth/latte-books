@@ -15,6 +15,11 @@ here.
   supply is the customer's; returns are credit notes; and B2C-Small is summed by place
   and rate. Each of these was wrong in Frappe Books.
 - The export stops and names the row when a row has no GST tax or no HSN/SAC code.
+- Settings → System and the foot of the sidebar show Latte Books' version. The Frappe
+  Books version the company file is kept at is under Compatibility.
+- Change the company's name in Settings → General. The sidebar, window title and recent
+  files follow it.
+- The Show Sidebar button is always shown, and both sidebar buttons name Shift+H.
 
 ## [0.1.0-beta.3] - 2026-10-26
 

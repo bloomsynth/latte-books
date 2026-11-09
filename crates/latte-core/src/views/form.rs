@@ -331,6 +331,9 @@ pub fn display(
     value: Option<&DocValue>,
     ctx: &DocContext<'_>,
 ) -> String {
+    if f.fieldname == field::APP_VERSION {
+        return crate::VERSION.to_owned();
+    }
     if let Some(DocValue::Money(money)) = value
         && let Some(currency) = ctx.doc.model().currency(&f.fieldname, ctx)
     {

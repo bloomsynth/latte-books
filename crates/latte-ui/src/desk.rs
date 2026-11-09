@@ -11,6 +11,8 @@
 //! Not in Books: the Show Sidebar button is always shown, not only when hovered, and the
 //! sidebar buttons name Shift+H in a tooltip.
 //!
+//! Not in Books: the sidebar's foot shows Latte Books' version, under Report Issue.
+//!
 //! Not in Books: every two seconds the desk looks for changes another device, such as an AI
 //! assistant, wrote to the file, and shows the page again when it may show them.
 //!
@@ -607,6 +609,13 @@ impl Desk {
                             let info = crate::widgets::report_info();
                             cx.open_url(&latte_core::views::report::issue_url(None, &info))
                         }),
+                    )
+                    // Where Books shows "dev mode": `text-xs text-gray-500`.
+                    .child(
+                        div()
+                            .text_12()
+                            .text_color(pick(raw_gray(500), raw_gray(600)))
+                            .child(format!("v{}", latte_core::VERSION)),
                     ),
             )
             .child(

@@ -10,6 +10,8 @@
 //! - There is no ERPNext Sync tab.
 //! - The company's name can be changed in General; the window title and the recent files
 //!   follow it.
+//! - System's Version is Latte Books' own; the Frappe Books version the file is kept at is
+//!   under Compatibility, at the end (`latte_core::views::field::form_layout`).
 
 use std::collections::HashMap;
 

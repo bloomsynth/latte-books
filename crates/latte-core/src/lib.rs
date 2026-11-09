@@ -21,6 +21,9 @@ pub use crate::fyo::model::types::{
     BaseModel, DocContext, Formula, FormulaFn, FormulaValue, Model,
 };
 
+/// Latte Books' version, as the app shows it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// `fyo/utils/errors.ts`, for the errors documents raise.
 #[derive(Debug)]
 pub enum Error {
