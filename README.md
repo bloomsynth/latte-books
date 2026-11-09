@@ -53,16 +53,13 @@
 
 ## Built for speed
 
-Latte Books is optimized from the ground up. On a Windows 11 desktop (Ryzen 7 3700X, SSD):
+Latte Books is optimized from the ground up:
 
-| | Latte Books |
-|---|---|
-| Window on screen | **0.48 s** |
-| Company open and ready to use | **0.79 s** |
-| Memory, as Task Manager shows it | **18 MB** |
-| Processes | **1** |
-| Windows installer | **25 MB** |
-| Installed on disk | **87 MB** |
+- **Opens in under a second,** ready to work.
+- **Uses about 18 MB of memory,** less than a single browser tab.
+- **A 25 MB download,** under 90 MB once installed.
+
+What makes it this fast:
 
 - **Native code.** Rust compiles to machine code: no JavaScript engine, no browser, and
   nothing to warm up.
