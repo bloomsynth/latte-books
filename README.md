@@ -68,7 +68,7 @@ What makes it this fast:
 - **One small process.** The whole app is a single program in a fraction of the memory a
   web-based app needs.
 - **Offline and private.** Everything runs on your computer, with no server and no
-  internet needed, and your books never leave it unless you connect an AI assistant.
+  internet needed, and your books never leave it.
 
 ## Your books, with your AI assistant
 
