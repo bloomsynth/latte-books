@@ -92,16 +92,12 @@ Then talk to your books:
 - *"Run the Profit and Loss for this quarter and tell me what changed."*
 - *"What do I need to file in GSTR-3B for October?"*
 
-You stay in charge:
+The assistant works through the app, so it can't do anything you couldn't do yourself.
+An invoice with missing details or a journal entry that doesn't balance won't save. New
+documents start as drafts, and it asks you before posting anything to your accounts.
 
-- **No shortcuts.** The assistant can only do what the app lets you do. It can't save an
-  invoice with details missing, or a journal entry that doesn't balance.
-- **Drafts first.** New documents are saved as drafts for you to look over, and the
-  assistant asks before it submits anything to your accounts.
-- **Your assistant, your choice.** Latte Books runs no AI of its own and has no AI fees.
-  Bring the assistant you already use; it reaches your books on your computer, while the
-  app is open or closed.
-- **Optional.** Nothing is connected until you connect it, and Disconnect removes it.
+Latte Books doesn't come with an AI or charge for one. You use the assistant you already
+have, and nothing is connected until you press Connect.
 
 ## Features
 
