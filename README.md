@@ -11,7 +11,7 @@
 
 <p align="center">
   <strong>Accounting software for the AI era.</strong><br>
-  Free, open source and fast, on your own desktop. Keep your books yourself, or let your
+  Fast, free and open source, on your own desktop. Keep your books yourself, or let your
   AI assistant keep them with you.
 </p>
 
@@ -28,23 +28,52 @@
 </p>
 
 <p align="center">
+  <strong>0.8 s</strong> to open a company &nbsp;·&nbsp; <strong>18 MB</strong> of memory &nbsp;·&nbsp; <strong>25 MB</strong> to download
+</p>
+
+<p align="center">
   <img src="docs/images/dashboard.png" alt="The Latte Books dashboard for a made-up coffee roaster: a year of cash in and out, paid and unpaid invoices, monthly profit and loss, with a loss over a January campaign, and a donut of the top expenses" width="100%">
 </p>
 
 ## Why Latte Books
 
+- **Built for speed.** Made to be one of the fastest accounting apps you can install:
+  native code written from scratch in Rust, drawn on the GPU, with no browser inside. A
+  company opens in under a second, in 18 MB of memory.
 - **Built for AI.** Connect Claude, Codex or Cursor in one click, and ask your books
   questions, draft invoices or record a month of bills in plain words. The assistant
   works under the same rules as you do, and asks before anything is posted.
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
   the reports your accountant asks for, in one app.
-- **Fast and native.** Written from scratch in Rust and drawn on the GPU, with no browser
-  inside. It opens a company in under a second, in 18 MB of memory.
 - **Your books, on your computer.** Each company is a single file you own. There's no
   account, no telemetry and no cloud, unless you connect an AI assistant.
 - **Free and open source.** Nothing to pay for, now or later, under the AGPL.
 - **Actively developed.** New features and fixes land every week: see the
   [changelog](CHANGELOG.md).
+
+## Built for speed
+
+Latte Books is optimized from the ground up. On a Windows 11 desktop (Ryzen 7 3700X, SSD):
+
+| | Latte Books |
+|---|---|
+| Window on screen | **0.48 s** |
+| Company open and ready to use | **0.79 s** |
+| Memory, as Task Manager shows it | **18 MB** |
+| Processes | **1** |
+| Windows installer | **25 MB** |
+| Installed on disk | **87 MB** |
+
+- **Native code.** Rust compiles to machine code: no JavaScript engine, no browser, and
+  nothing to warm up.
+- **Drawn on the GPU** by [GPUI](https://www.gpui.rs/), the framework behind the Zed
+  editor. Long lists and reports draw only the rows on screen, so they scroll smoothly.
+- **One small process.** The whole app is a single program in a fraction of the memory a
+  web-based app needs.
+- **Your company is one local file.** Nothing waits on a server or the network.
+
+How each number was measured, and how to time it yourself, is in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Your books, with your AI assistant
 
@@ -86,19 +115,6 @@ You stay in charge:
 - **Print to PDF** with templates you can edit, rendered by [Typst](https://typst.app/)
 - **Import** parties, items and documents from CSV files
 - **18 languages,** with community translations
-
-## Performance
-
-Latte Books is native code, drawn on the GPU, in a single process. On a Windows PC:
-
-| | Latte Books |
-|---|---|
-| Open a company, until ready | **0.8 s** |
-| Memory, as Task Manager shows it | **18 MB** |
-| Windows installer | **25 MB** |
-| Installed on disk | **87 MB** |
-
-How each number was measured is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Status
 
