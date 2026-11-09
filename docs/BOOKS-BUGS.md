@@ -272,6 +272,94 @@ what Books already saved is left as it is.
 - **How we know:** from the code.
 - **Test:** `gstr_1_lists_each_sale_with_its_gst_once`.
 
+### GSTR leaves out the last day of the period
+
+- **In Books:** an invoice's date is stored as an instant in UTC, such as
+  `2026-09-15T06:07:04.000Z`, and the report compares it as text with the To Date
+  `2026-09-15`, which counts it as later.
+- **What it does to your books:** every invoice dated on the To Date is missing from the
+  report and from the JSON you upload, so a quarter's return leaves out its last day. In
+  India, an invoice entered before 5:30 in the morning on the From Date is missing too.
+- **In Latte:** the period is the dates the invoices show.
+- **How we know:** from the code, and seen with Latte's port of it on a real company
+  file, 2026-11-09: a period ending 15 September left out that day's invoice.
+- **Test:** `gstr_includes_the_invoices_of_both_ends_of_the_period`.
+
+### GSTR's B2C-Large limit is out of date
+
+- **In Books:** an inter-state sale to an unregistered buyer is B2C-Large at ₹2.5 lakh or
+  more.
+- **What it does to your books:** since 1 August 2024 (Notification 12/2024-Central Tax)
+  the limit is more than ₹1 lakh, so a sale between the two is filed in B2C-Small, summed
+  away, instead of invoice by invoice.
+- **In Latte:** more than ₹1 lakh from 1 August 2024, more than ₹2.5 lakh before.
+- **How we know:** from the code.
+- **Test:** `gstr_1_export_sums_small_b2c_sales_and_lists_large_ones`.
+
+### GSTR's JSON numbers each item with its HSN code
+
+- **In Books:** an invoice's item rows in the JSON have the HSN code as their `num`, where
+  the portal wants the row's serial number.
+- **In Latte:** the rows are numbered 1, 2, and so on.
+- **How we know:** from the code.
+- **Test:** `gstr_1_export_has_an_item_per_rate_and_the_customers_place_of_supply`.
+
+### GSTR's JSON lists every invoice row separately
+
+- **In Books:** each invoice row is an item of its own in the JSON, so an invoice with two
+  rows at 18% has two items at 18%.
+- **What it does to your books:** the portal wants one item per rate on an invoice.
+- **In Latte:** an invoice has one item per rate, with the rows' amounts added up.
+- **How we know:** from the code.
+- **Test:** `gstr_1_export_has_an_item_per_rate_and_the_customers_place_of_supply`.
+
+### GSTR's JSON takes the place of supply from the GSTIN
+
+- **In Books:** the report shows the customer address's place of supply, but the JSON
+  always gives the state of the customer's GSTIN.
+- **What it does to your books:** a supply to a customer registered in one state and
+  supplied in another is filed for the wrong state.
+- **In Latte:** the JSON has the place of supply the report shows.
+- **How we know:** from the code.
+- **Test:** `gstr_1_export_has_an_item_per_rate_and_the_customers_place_of_supply`.
+
+### GSTR's JSON has a B2C-Small row per invoice
+
+- **In Books:** B2C-Small has a row for each invoice, at the invoice's total rate.
+- **What it does to your books:** the portal wants one row per place of supply, rate and
+  type of supply; an invoice with two rates is filed at their sum.
+- **In Latte:** the rows are summed by place, rate and type of supply.
+- **How we know:** from the code.
+- **Test:** `gstr_1_export_sums_small_b2c_sales_and_lists_large_ones`.
+
+### GSTR files returns as negative invoices
+
+- **In Books:** a return is a sales invoice too, so the report and its JSON list it as an
+  invoice of negative value.
+- **What it does to your books:** the portal doesn't take negative invoices; a return is
+  a credit note.
+- **In Latte:** the JSON files a return as a credit note: CDNR for a registered customer,
+  CDNUR for a return of a B2C-Large sale, and otherwise taken off B2C-Small.
+- **How we know:** from the code.
+- **Test:** `gstr_1_export_files_returns_as_credit_notes`.
+
+### GSTR's JSON gives a foreign-currency invoice's value in that currency
+
+- **In Books:** the items' taxable values are in rupees, but the invoice value is the
+  grand total in the invoice's own currency.
+- **In Latte:** the invoice value is in rupees too.
+- **How we know:** from the code.
+- **Test:** `gstr_1_export_takes_rates_from_the_tax_and_values_in_rupees`.
+
+### GSTR's JSON reads the rate from the tax's name
+
+- **In Books:** an item's rate comes from its tax's name, such as GST-18 or IGST-18.
+- **What it does to your books:** a tax named any other way, such as "Standard 18%", is
+  filed with no rate and no tax.
+- **In Latte:** the rate and the taxes come from the tax's CGST, SGST and IGST accounts.
+- **How we know:** from the code.
+- **Test:** `gstr_1_export_takes_rates_from_the_tax_and_values_in_rupees`.
+
 ## Invoice rows
 
 ### "Discounted Amount" shows the discount

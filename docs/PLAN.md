@@ -326,7 +326,11 @@ CI runs the parity suite on every PR. Any difference fails the build.
 - Create Demo. *2026-10-23: `latte_core::dummy` with Books' items, parties and logo, and
   the button in the company list. Three Books bugs are fixed.*
 - GST: check one GSTR-1 JSON export, B2B rows included, with the GST portal's offline
-  tool before 1.0.
+  tool before 1.0. *2026-11-09: GSTR-1's export is the period's whole return for the
+  offline tool V3.2.4 (B2B, B2C-Large and Small, credit notes, Table 8, the HSN summary
+  and the documents issued), and fixes nine Books bugs. Its B2B, HSN and document tables
+  match, invoice by invoice, a return prepared outside Latte from the same company file
+  for one quarter. Not yet loaded into the offline tool.*
 - **Exit: 1.0.** Parity suite is green for everything Books v0.36.0 does, except the non-goals in §1.
 
 ### Phase 5 — Latte Cloud (after 1.0)

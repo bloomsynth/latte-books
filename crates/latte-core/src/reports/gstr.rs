@@ -1,6 +1,6 @@
-// Port of reports/GoodsAndServiceTax/ @ v0.36.0: BaseGSTR.ts, GSTR1.ts, GSTR2.ts and the
-// JSON export of gstExporter.ts. GSTR-1 lists the sales invoices of a period and GSTR-2
-// the purchase invoices, with each one's GST.
+// Port of reports/GoodsAndServiceTax/ @ v0.36.0: BaseGSTR.ts, GSTR1.ts and GSTR2.ts.
+// GSTR-1 lists the sales invoices of a period and GSTR-2 the purchase invoices, with each
+// one's GST. The JSON export of gstExporter.ts is in gstr/export.rs.
 //
 // Books bugs Latte fixes:
 // - The rate of an invoice is its taxes' rates added up once. Books adds them twice, so
@@ -9,22 +9,29 @@
 // - Each tax account sets only its own amount. Books' `switch` has no `break`s, so an
 //   IGST account also sets the central and state tax, a CGST one also the state tax, and
 //   every GST account marks the invoice nil rated, exempt and non-GST.
+// - The period is the invoices' dates as the app shows them. Books compares the stored
+//   date and time with the period's dates as text, which leaves out the invoices of the
+//   To Date, and in India those of the From Date entered before 5:30 in the morning.
+// - B2C-Large is an inter-state sale to an unregistered buyer of more than ₹1 lakh, the
+//   limit since 1 August 2024 (Notification 12/2024-Central Tax), and of more than
+//   ₹2.5 lakh before. Books uses ₹2.5 lakh or more throughout.
 //
 // Deviation: the exports are what the app calls (`can_export` and `export_json` of
 // `Report`), not actions of the report.
 
-use jiff::civil::Date;
+mod export;
+
+use jiff::civil::{Date, date};
 use jiff::{Timestamp, ToSpan, Zoned};
 use latte_db::{
     DocValue, DocValueMap, Filter as DbFilter, FilterOperand, FilterValue as DbFilterValue,
     GetAllOptions, QueryFilter,
 };
-use serde_json::{Map, Value, json};
 
 use crate::Error;
 use crate::fyo::Fyo;
 use crate::fyo::format::{Formatter, local_date};
-use crate::fyo::model::helpers::js_number_string;
+use crate::fyo::model::helpers::{is_truthy, js_number_string};
 use crate::models::base_models::address::CODE_STATE_MAP;
 use crate::reports::stock_ledger::{date_filter, text_filter};
 use crate::reports::{
@@ -75,6 +82,16 @@ pub struct Gstr {
     pub rows: Vec<GstrRow>,
 }
 
+/// A submitted invoice of the period.
+#[derive(Debug, Clone)]
+struct PeriodInvoice {
+    name: String,
+    /// The date the invoice shows.
+    date: Date,
+    cancelled: bool,
+    is_return: bool,
+}
+
 /// The kind of value a column shows, as its `fieldtype`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -119,6 +136,47 @@ fn number_value(map: &DocValueMap, fieldname: &str) -> Option<f64> {
         Some(DocValue::Number(number)) => Some(*number),
         _ => None,
     }
+}
+
+/// The date a Date field's value shows.
+fn shown_date(value: Option<&DocValue>) -> Option<Date> {
+    match value? {
+        DocValue::Date(timestamp) => Some(local_date(*timestamp)),
+        DocValue::Text(text) => text.get(..10)?.parse().ok(),
+        _ => None,
+    }
+}
+
+/// The value over which an inter-state sale to an unregistered buyer is B2C-Large: ₹1
+/// lakh from 1 August 2024 (Notification 12/2024-Central Tax), ₹2.5 lakh before.
+fn b2cl_limit(invoice_date: Option<Date>) -> f64 {
+    match invoice_date {
+        Some(invoice_date) if invoice_date < date(2024, 8, 1) => 250_000.0,
+        _ => 100_000.0,
+    }
+}
+
+/// A party's GSTIN, and the state supplied to: its address's place of supply, or else
+/// the state of its GSTIN.
+fn party_place(fyo: &Fyo, party: &str) -> Result<(String, String), Error> {
+    let party = fyo.db.get_doc("Party", party)?;
+    let gstin = text_value(&party, "gstin");
+    let address = text_value(&party, "address");
+    let place = if !address.is_empty() {
+        match fyo.get_value("Address", Some(&address), "pos") {
+            Some(DocValue::Text(pos)) => pos,
+            _ => String::new(),
+        }
+    } else if !gstin.is_empty() {
+        gstin
+            .get(..2)
+            .and_then(state)
+            .unwrap_or_default()
+            .to_owned()
+    } else {
+        String::new()
+    };
+    Ok((gstin, place))
 }
 
 impl Gstr {
@@ -174,31 +232,36 @@ impl Gstr {
         {
             return false;
         }
+        let large = row.inv_amt > b2cl_limit(row.inv_date.map(local_date));
         match self.transfer_type.as_deref() {
             Some("B2B") => !row.gstin.is_empty(),
-            Some("B2CL") => row.gstin.is_empty() && !row.in_state && row.inv_amt >= 250000.0,
-            Some("B2CS") => row.gstin.is_empty() && (row.in_state || row.inv_amt < 250000.0),
+            Some("B2CL") => row.gstin.is_empty() && !row.in_state && large,
+            Some("B2CS") => row.gstin.is_empty() && (row.in_state || !large),
             Some("NR") => row.rate == 0.0,
             _ => true,
         }
     }
 
-    /// `getEntries`: the submitted invoices of the period.
-    fn entries(&self, fyo: &Fyo) -> Result<Vec<String>, Error> {
-        let to = self.to_date.map(|d| DbFilterValue::Text(d.to_string()));
-        let from = self.from_date.map(|d| DbFilterValue::Text(d.to_string()));
-        let mut filters = QueryFilter::from([
-            ("submitted".to_owned(), DbFilter::from(true)),
-            ("cancelled".to_owned(), DbFilter::from(false)),
-        ]);
-        let date = match (to, from) {
+    /// The period's submitted invoices, cancelled ones too if asked, by the dates they
+    /// show. The dates are stored as instants, so the query takes a day more on each side
+    /// and the dates are then compared as the app shows them.
+    fn period_invoices(&self, fyo: &Fyo, cancelled: bool) -> Result<Vec<PeriodInvoice>, Error> {
+        let bound = |date: Option<Date>, days: i64| {
+            date.and_then(|d| d.checked_add(days.days()).ok())
+                .map(|d| DbFilterValue::Text(d.to_string()))
+        };
+        let mut filters = QueryFilter::from([("submitted".to_owned(), DbFilter::from(true))]);
+        if !cancelled {
+            filters.insert("cancelled".to_owned(), DbFilter::from(false));
+        }
+        let date = match (bound(self.to_date, 2), bound(self.from_date, -1)) {
             (Some(to), Some(from)) => Some(DbFilter::Two(
-                "<=".to_owned(),
+                "<".to_owned(),
                 FilterOperand::One(to),
                 ">=".to_owned(),
                 FilterOperand::One(from),
             )),
-            (Some(to), None) => Some(DbFilter::op("<=", to)),
+            (Some(to), None) => Some(DbFilter::op("<", to)),
             (None, Some(from)) => Some(DbFilter::op(">=", from)),
             (None, None) => None,
         };
@@ -206,14 +269,40 @@ impl Gstr {
             filters.insert("date".to_owned(), date);
         }
         let options = GetAllOptions {
+            fields: Some(
+                ["name", "date", "cancelled", "returnAgainst"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            ),
             filters,
             ..GetAllOptions::default()
         };
-        Ok(fyo
-            .db
-            .get_all_docs(self.schema_name(), &options)?
-            .iter()
-            .map(|row| text_value(row, "name"))
+        let mut invoices = Vec::new();
+        for row in fyo.db.get_all_docs(self.schema_name(), &options)? {
+            let Some(date) = shown_date(row.get("date")) else {
+                continue;
+            };
+            if self.from_date.is_some_and(|from| date < from)
+                || self.to_date.is_some_and(|to| date > to)
+            {
+                continue;
+            }
+            invoices.push(PeriodInvoice {
+                name: text_value(&row, "name"),
+                date,
+                cancelled: is_truthy(row.get("cancelled")),
+                is_return: is_truthy(row.get("returnAgainst")),
+            });
+        }
+        Ok(invoices)
+    }
+
+    /// `getEntries`: the submitted invoices of the period.
+    fn entries(&self, fyo: &Fyo) -> Result<Vec<String>, Error> {
+        Ok(self
+            .period_invoices(fyo, false)?
+            .into_iter()
+            .map(|invoice| invoice.name)
             .collect())
     }
 
@@ -225,24 +314,7 @@ impl Gstr {
             _ => String::new(),
         };
         let party_name = text_value(&entry, "party");
-        let party = fyo.db.get_doc("Party", &party_name)?;
-        let party_gstin = text_value(&party, "gstin");
-
-        let address = text_value(&party, "address");
-        let place = if !address.is_empty() {
-            match fyo.get_value("Address", Some(&address), "pos") {
-                Some(DocValue::Text(pos)) => pos,
-                _ => String::new(),
-            }
-        } else if !party_gstin.is_empty() {
-            party_gstin
-                .get(..2)
-                .and_then(state)
-                .unwrap_or_default()
-                .to_owned()
-        } else {
-            String::new()
-        };
+        let (party_gstin, place) = party_place(fyo, &party_name)?;
 
         let in_state = !gstin.is_empty() && gstin.get(..2).and_then(state) == Some(place.as_str());
         let mut row = GstrRow {
@@ -367,178 +439,9 @@ impl Gstr {
         }
     }
 
-    /// `getGstrJsonData`: the last run's rows as the GST portal's JSON.
+    /// `getGstrJsonData`: the period's return as the GST portal's JSON (gstr/export.rs).
     pub fn gstr_json(&self, fyo: &Fyo) -> Result<String, Error> {
-        let gstin = Self::company_gstin(fyo)?;
-        let fp = self
-            .to_date
-            .map(|date| date.strftime("%m%Y").to_string())
-            .unwrap_or_default();
-        let mut data = Map::new();
-        data.insert("version".into(), json!("GST3.0.4"));
-        data.insert("hash".into(), json!("hash"));
-        data.insert("gstin".into(), json!(gstin));
-        data.insert("fp".into(), json!(fp));
-        match self.transfer_type() {
-            "B2B" => {
-                data.insert("b2b".into(), self.b2b_data(fyo)?);
-            }
-            "B2CL" => {
-                data.insert("b2cl".into(), self.b2cl_data(fyo)?);
-            }
-            "B2CS" => {
-                data.insert("b2cs".into(), self.b2cs_data());
-            }
-            _ => {}
-        }
-        Ok(Value::Object(data).to_string())
-    }
-
-    /// The rows' items as `(hsnCode, tax, amount in the company's currency)`.
-    fn items(&self, fyo: &Fyo, invoice: &str) -> Result<Vec<(Value, String, f64)>, Error> {
-        let item_schema = match self.gstr_type {
-            GstrType::Gstr1 => "SalesInvoiceItem",
-            GstrType::Gstr2 => "PurchaseInvoiceItem",
-        };
-        let exchange_rate = match fyo.get_value(self.schema_name(), Some(invoice), "exchangeRate") {
-            Some(DocValue::Number(rate)) => rate,
-            _ => 1.0,
-        };
-        let options = GetAllOptions {
-            fields: Some(vec!["amount".into(), "tax".into(), "hsnCode".into()]),
-            filters: QueryFilter::from([("parent".to_owned(), DbFilter::from(invoice))]),
-            ..GetAllOptions::default()
-        };
-        let mut items = Vec::new();
-        for item in fyo.db.get_all_docs(item_schema, &options)? {
-            let amount = match item.get("amount") {
-                Some(DocValue::Money(amount)) => amount.mul(exchange_rate)?.float(),
-                _ => 0.0,
-            };
-            let hsn_code = number_value(&item, "hsnCode").map_or(Value::Null, num);
-            items.push((hsn_code, text_value(&item, "tax"), amount));
-        }
-        Ok(items)
-    }
-
-    /// `generateB2bData`: the invoices by the party's GSTIN.
-    fn b2b_data(&self, fyo: &Fyo) -> Result<Value, Error> {
-        let mut customers: Vec<(String, Vec<Value>)> = Vec::new();
-        for row in &self.rows {
-            let mut itms = Vec::new();
-            for (hsn_code, tax, amount) in self.items(fyo, &row.inv_no)? {
-                let part = |rate: Option<f64>| (rate.unwrap_or(0.0) * amount) / 100.0;
-                let mut itm_det = Map::new();
-                itm_det.insert("txval".into(), num(amount));
-                if let Some(rate) = gst_rate(&tax) {
-                    itm_det.insert("rt".into(), num(rate));
-                }
-                itm_det.insert("csamt".into(), num(0.0));
-                itm_det.insert("camt".into(), num(part(csgst_rate(&tax))));
-                itm_det.insert("samt".into(), num(part(csgst_rate(&tax))));
-                itm_det.insert("iamt".into(), num(part(igst_rate(&tax))));
-                itms.push(json!({ "num": hsn_code, "itm_det": itm_det }));
-            }
-            let inv = json!({
-                "inum": row.inv_no,
-                "idt": invoice_date(row),
-                "val": num(row.inv_amt),
-                "pos": row.gstin.get(..2).unwrap_or_default(),
-                "rchrg": row.reverse_charge,
-                "inv_typ": "R",
-                "itms": itms,
-            });
-            match customers.iter_mut().find(|(ctin, _)| *ctin == row.gstin) {
-                Some((_, invs)) => invs.push(inv),
-                None => customers.push((row.gstin.clone(), vec![inv])),
-            }
-        }
-        Ok(Value::Array(
-            customers
-                .into_iter()
-                .map(|(ctin, inv)| json!({ "ctin": ctin, "inv": inv }))
-                .collect(),
-        ))
-    }
-
-    /// `generateB2clData`: the invoices by the state supplied to.
-    fn b2cl_data(&self, fyo: &Fyo) -> Result<Value, Error> {
-        let mut states: Vec<(Option<&str>, Vec<Value>)> = Vec::new();
-        for row in &self.rows {
-            let mut itms = Vec::new();
-            for (hsn_code, tax, amount) in self.items(fyo, &row.inv_no)? {
-                itms.push(json!({
-                    "num": hsn_code,
-                    "itm_det": {
-                        "txval": num(amount),
-                        "rt": num(gst_rate(&tax).unwrap_or(0.0)),
-                        "csamt": 0,
-                        "iamt": num(row.rate * amount / 100.0),
-                    },
-                }));
-            }
-            let inv = json!({
-                "inum": row.inv_no,
-                "idt": invoice_date(row),
-                "val": num(row.inv_amt),
-                "itms": itms,
-            });
-            let pos = state_code(&row.place);
-            match states.iter_mut().find(|(p, _)| *p == pos) {
-                Some((_, invs)) => invs.push(inv),
-                None => states.push((pos, vec![inv])),
-            }
-        }
-        Ok(Value::Array(
-            states
-                .into_iter()
-                .map(|(pos, inv)| {
-                    let mut record = Map::new();
-                    if let Some(pos) = pos {
-                        record.insert("pos".into(), json!(pos));
-                    }
-                    record.insert("inv".into(), Value::Array(inv));
-                    Value::Object(record)
-                })
-                .collect(),
-        ))
-    }
-
-    /// `generateB2csData`: a record per invoice.
-    fn b2cs_data(&self) -> Value {
-        Value::Array(
-            self.rows
-                .iter()
-                .map(|row| {
-                    let mut record = Map::new();
-                    let supply = if row.in_state { "INTRA" } else { "INTER" };
-                    record.insert("sply_ty".into(), json!(supply));
-                    if let Some(pos) = state_code(&row.place) {
-                        record.insert("pos".into(), json!(pos));
-                    }
-                    record.insert("typ".into(), json!("OE"));
-                    record.insert("txval".into(), num(row.tax_val));
-                    record.insert("rt".into(), num(row.rate));
-                    let iamt = if row.in_state {
-                        0.0
-                    } else {
-                        row.tax_val * row.rate / 100.0
-                    };
-                    let local = |amount: Option<f64>| {
-                        if row.in_state {
-                            amount.unwrap_or(0.0)
-                        } else {
-                            0.0
-                        }
-                    };
-                    record.insert("iamt".into(), num(iamt));
-                    record.insert("camt".into(), num(local(row.cgst_amt)));
-                    record.insert("samt".into(), num(local(row.sgst_amt)));
-                    record.insert("csamt".into(), num(0.0));
-                    Value::Object(record)
-                })
-                .collect(),
-        )
+        export::gstr_json(self, fyo)
     }
 }
 
@@ -586,50 +489,6 @@ fn currency_cell(
     };
     let money = fyo.pesa().from_f64(value)?;
     Ok((formatter.currency(&money), RawValue::Number(value)))
-}
-
-/// The invoice date as dd-MM-yyyy.
-fn invoice_date(row: &GstrRow) -> String {
-    row.inv_date
-        .map(|date| local_date(date).strftime("%d-%m-%Y").to_string())
-        .unwrap_or_default()
-}
-
-/// A JSON number as JavaScript writes it: whole numbers without a fraction.
-fn num(value: f64) -> Value {
-    if value.fract() == 0.0 && value.abs() < 9e15 {
-        json!(value as i64)
-    } else {
-        json!(value)
-    }
-}
-
-/// `GST`: a tax's whole rate.
-fn gst_rate(tax: &str) -> Option<f64> {
-    let rate = tax
-        .strip_prefix("IGST-")
-        .or_else(|| tax.strip_prefix("GST-"))?;
-    is_gst_rate(rate).then(|| rate.parse().ok()).flatten()
-}
-
-/// `CSGST`: the central (and the state) part of a GST rate.
-fn csgst_rate(tax: &str) -> Option<f64> {
-    let rate = tax.strip_prefix("GST-")?;
-    is_gst_rate(rate)
-        .then(|| rate.parse::<f64>().ok().map(|rate| rate / 2.0))
-        .flatten()
-}
-
-/// `IGST`: an IGST rate. Books' map has no IGST-0, which comes to the same.
-fn igst_rate(tax: &str) -> Option<f64> {
-    let rate = tax.strip_prefix("IGST-")?;
-    (is_gst_rate(rate) && rate != "0")
-        .then(|| rate.parse().ok())
-        .flatten()
-}
-
-fn is_gst_rate(rate: &str) -> bool {
-    matches!(rate, "0" | "0.25" | "3" | "5" | "6" | "12" | "18" | "28")
 }
 
 impl Report for Gstr {

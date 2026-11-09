@@ -5,6 +5,17 @@ here.
 
 ## [Unreleased]
 
+- GSTR-1's JSON export is the whole return for the period, as the GST portal's offline
+  tool (V3.2.4) reads it: B2B, B2C-Large and B2C-Small, credit notes, nil rated and
+  exempt supplies, the HSN summary (Table 12) and the documents issued (Table 13).
+- GSTR-1 and GSTR-2 include the invoices of the To Date. Frappe Books leaves them out,
+  so a quarter's return was missing its last day.
+- B2C-Large uses the ₹1 lakh limit in force since August 2024.
+- In the JSON, an invoice has one item per rate, numbered 1, 2 and so on; the place of
+  supply is the customer's; returns are credit notes; and B2C-Small is summed by place
+  and rate. Each of these was wrong in Frappe Books.
+- The export stops and names the row when a row has no GST tax or no HSN/SAC code.
+
 ## [0.1.0-beta.3] - 2026-10-26
 
 Latte now looks and works like Frappe Books on every screen.

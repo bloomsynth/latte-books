@@ -1,10 +1,13 @@
 // Tests of India's regional models, the Address model and the GSTR reports.
 
 use jiff::civil::date;
+use jiff::tz::TimeZone;
 use latte_db::DocValue;
+use serde_json::{Value, json};
 
 use crate::fyo::format::Formatter;
 use crate::fyo::model::types::DocContext;
+use crate::models::base_models::invoice::get_return_doc;
 use crate::reports::Report;
 use crate::reports::gstr::{Gstr, GstrType};
 use crate::setup_tests::{TempFile, indian_company};
@@ -119,19 +122,104 @@ fn customer(fyo: &mut Fyo, name: &str, gstin: Option<&str>, state: Option<&str>)
     fyo.get_new_doc("Party", values).unwrap().sync(fyo).unwrap();
 }
 
-/// A submitted sales invoice of `quantity` Widgets at 100 with the tax.
-fn sale(fyo: &mut Fyo, party: &str, quantity: f64, tax: &str) -> Doc {
-    let values = map([("party", text(party)), ("date", text("2026-10-01"))]);
+/// A submitted sales invoice on `date` of `rows`: item, quantity and tax.
+fn invoice(fyo: &mut Fyo, party: &str, date: DocValue, rows: &[(&str, f64, &str)]) -> Doc {
+    let values = map([("party", text(party)), ("date", date)]);
     let mut doc = fyo.get_new_doc("SalesInvoice", values).unwrap();
-    doc.append(fyo, "items", Default::default()).unwrap();
-    doc.set_child(fyo, "items", 0, "item", text("Widget"))
-        .unwrap();
-    doc.set_child(fyo, "items", 0, "quantity", DocValue::Number(quantity))
-        .unwrap();
-    doc.set_child(fyo, "items", 0, "tax", text(tax)).unwrap();
+    for (idx, (item, quantity, tax)) in rows.iter().enumerate() {
+        doc.append(fyo, "items", Default::default()).unwrap();
+        doc.set_child(fyo, "items", idx, "item", text(item))
+            .unwrap();
+        doc.set_child(fyo, "items", idx, "quantity", DocValue::Number(*quantity))
+            .unwrap();
+        if !tax.is_empty() {
+            doc.set_child(fyo, "items", idx, "tax", text(tax)).unwrap();
+        }
+    }
     doc.sync(fyo).unwrap();
     doc.submit(fyo).unwrap();
     doc
+}
+
+/// A submitted sales invoice of `quantity` Widgets at 100 with the tax.
+fn sale(fyo: &mut Fyo, party: &str, quantity: f64, tax: &str) -> Doc {
+    invoice(fyo, party, text("2026-10-01"), &[("Widget", quantity, tax)])
+}
+
+/// A submitted return on `day` of `quantity` of the first row of `name`.
+fn return_of(fyo: &mut Fyo, name: &str, quantity: f64, day: jiff::civil::Date) -> Doc {
+    let invoice = fyo.get_doc("SalesInvoice", Some(name)).unwrap();
+    let mut doc = get_return_doc(&invoice, fyo).unwrap().unwrap();
+    let midnight = day.to_zoned(TimeZone::system()).unwrap().timestamp();
+    doc.set(fyo, "date", DocValue::Date(midnight)).unwrap();
+    doc.set_child(fyo, "items", 0, "quantity", DocValue::Number(-quantity))
+        .unwrap();
+    doc.sync(fyo).unwrap();
+    doc.submit(fyo).unwrap();
+    doc
+}
+
+/// An item at `rate` with an HSN/SAC code, if any, sold in `unit`.
+fn item(fyo: &mut Fyo, name: &str, rate: f64, hsn: Option<&str>, unit: &str) {
+    let mut values = map([
+        ("name", text(name)),
+        ("rate", DocValue::Number(rate)),
+        ("unit", text(unit)),
+    ]);
+    if let Some(hsn) = hsn {
+        values.insert("hsnCode".into(), text(hsn));
+    }
+    fyo.get_new_doc("Item", values).unwrap().sync(fyo).unwrap();
+}
+
+/// A company in Karnataka with a GSTIN.
+fn registered_company(file: &TempFile) -> Fyo {
+    let mut fyo = indian_company(file);
+    fyo.db
+        .update(
+            "AccountingSettings",
+            &map([("gstin", text("29AABCA1234A1Z5"))]),
+        )
+        .unwrap();
+    fyo
+}
+
+/// Stores an invoice's date as Books does: the instant, in UTC, of that hour of the day
+/// in the computer's time zone.
+fn store_date_as_books(fyo: &Fyo, name: &str, day: jiff::civil::Date, hour: i8) {
+    let zoned = day.at(hour, 0, 0, 0).to_zoned(TimeZone::system()).unwrap();
+    let stored = zoned
+        .timestamp()
+        .strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string();
+    fyo.db
+        .core()
+        .connection()
+        .execute(
+            "update `SalesInvoice` set `date` = ?1 where `name` = ?2",
+            [stored.as_str(), name],
+        )
+        .unwrap();
+}
+
+/// The report's rows for the period, and its GSTR-1 export.
+fn gstr_1(
+    fyo: &Fyo,
+    from: jiff::civil::Date,
+    to: jiff::civil::Date,
+) -> (Vec<String>, Result<Value, String>) {
+    let mut report = Gstr::new(GstrType::Gstr1);
+    report.from_date = Some(from);
+    report.to_date = Some(to);
+    let formatter = Formatter::new(fyo).unwrap();
+    report.run(fyo, &formatter).unwrap();
+    let names = report.rows.iter().map(|row| row.inv_no.clone()).collect();
+    let json = report.export_json(fyo).unwrap();
+    (
+        names,
+        json.map(|json| serde_json::from_str(&json).unwrap())
+            .map_err(|e| e.to_string()),
+    )
 }
 
 /// A company in Karnataka that has sold to a registered customer there and one in
@@ -209,6 +297,7 @@ fn gstr_1_lists_each_sale_with_its_gst_once() {
 
     let json: serde_json::Value =
         serde_json::from_str(&report.export_json(&fyo).unwrap().unwrap()).unwrap();
+    assert_eq!(json["version"], "GST3.2.4");
     assert_eq!(json["gstin"], "29AABCA1234A1Z5");
     assert_eq!(json["fp"], "102026");
     let b2b = json["b2b"].as_array().unwrap();
@@ -218,12 +307,19 @@ fn gstr_1_lists_each_sale_with_its_gst_once() {
     assert_eq!(inv["idt"], "01-10-2026");
     assert_eq!(inv["pos"], "29");
     assert_eq!(inv["val"], 236);
+    // The row's serial number, not its HSN code, and no integrated tax within the state.
     assert_eq!(
         inv["itms"][0],
-        serde_json::json!({
-            "num": 8471,
-            "itm_det": { "txval": 200, "rt": 18, "csamt": 0, "camt": 18, "samt": 18, "iamt": 0 },
+        json!({
+            "num": 1,
+            "itm_det": { "rt": 18, "txval": 200, "camt": 18, "samt": 18, "csamt": 0 },
         })
+    );
+    let mumbai = b2b.iter().find(|c| c["ctin"] == "27AABCM1234A1Z5").unwrap();
+    assert_eq!(mumbai["inv"][0]["pos"], "27");
+    assert_eq!(
+        mumbai["inv"][0]["itms"][0]["itm_det"],
+        json!({ "rt": 18, "txval": 100, "iamt": 18, "csamt": 0 })
     );
 
     // Unregistered and in the state, so a small B2C supply.
@@ -235,12 +331,14 @@ fn gstr_1_lists_each_sale_with_its_gst_once() {
     let json: serde_json::Value =
         serde_json::from_str(&report.export_json(&fyo).unwrap().unwrap()).unwrap();
     assert_eq!(
-        json["b2cs"][0],
-        serde_json::json!({
-            "sply_ty": "INTRA", "pos": "29", "typ": "OE", "txval": 100, "rt": 5,
-            "iamt": 0, "camt": 2.5, "samt": 2.5, "csamt": 0,
-        })
+        json["b2cs"],
+        json!([{
+            "sply_ty": "INTRA", "pos": "29", "typ": "OE", "rt": 5, "txval": 100,
+            "camt": 2.5, "samt": 2.5, "csamt": 0,
+        }])
     );
+    // The export is the whole return, whichever transfer type the report shows.
+    assert_eq!(json["b2b"].as_array().unwrap().len(), 2);
 
     // A place filters by its state code.
     let mut report = gstr("B2B");
@@ -261,4 +359,432 @@ fn gstr_can_be_exported_only_with_the_company_gstin() {
         "Cannot Export: Please set GSTIN in General Settings."
     );
     assert!(report.export_json(&fyo).unwrap().is_err());
+}
+
+#[test]
+fn gstr_includes_the_invoices_of_both_ends_of_the_period() {
+    let file = TempFile::new("regional-gstr-period");
+    let mut fyo = registered_company(&file);
+    item(&mut fyo, "Widget", 100.0, Some("8471"), "Unit");
+    customer(&mut fyo, "Local Co", Some("29AABCL1234A1Z5"), None);
+    let rows = [("Widget", 1.0, "GST-18")];
+    // Early on the From Date, which is still the day before in UTC east of it, and late
+    // on the To Date, which Books stores after that day's midnight in UTC.
+    for (name, day, hour) in [
+        ("SINV-1001", date(2026, 7, 1), 1),
+        ("SINV-1002", date(2026, 9, 30), 18),
+        ("SINV-1003", date(2026, 6, 30), 23),
+        ("SINV-1004", date(2026, 10, 1), 1),
+    ] {
+        invoice(&mut fyo, "Local Co", text("2026-08-01"), &rows);
+        store_date_as_books(&fyo, name, day, hour);
+    }
+
+    let (mut names, json) = gstr_1(&fyo, date(2026, 7, 1), date(2026, 9, 30));
+    names.sort();
+    assert_eq!(names, ["SINV-1001", "SINV-1002"]);
+    let json = json.unwrap();
+    assert_eq!(json["fp"], "092026");
+    let invoices = json["b2b"][0]["inv"].as_array().unwrap();
+    let dates: Vec<_> = invoices
+        .iter()
+        .map(|inv| (&inv["inum"], &inv["idt"]))
+        .collect();
+    assert_eq!(
+        dates,
+        [
+            (&json!("SINV-1001"), &json!("01-07-2026")),
+            (&json!("SINV-1002"), &json!("30-09-2026")),
+        ]
+    );
+    assert_eq!(json["doc_issue"]["doc_det"][0]["docs"][0]["totnum"], 2);
+}
+
+#[test]
+fn gstr_1_export_has_an_item_per_rate_and_the_customers_place_of_supply() {
+    let file = TempFile::new("regional-gstr-rates");
+    let mut fyo = registered_company(&file);
+    item(&mut fyo, "Widget", 100.0, Some("8471"), "Unit");
+    item(&mut fyo, "Gadget", 50.0, Some("8517"), "Unit");
+    item(&mut fyo, "Consulting", 1000.0, Some("998314"), "Hour");
+    customer(&mut fyo, "Local Co", Some("29AABCL1234A1Z5"), None);
+    // Registered in Karnataka, supplied in Maharashtra.
+    customer(
+        &mut fyo,
+        "Branch Co",
+        Some("29AABCB1234A1Z5"),
+        Some("Maharashtra"),
+    );
+    let day = text("2026-08-10");
+    invoice(
+        &mut fyo,
+        "Local Co",
+        day.clone(),
+        &[
+            ("Widget", 2.0, "GST-18"),
+            ("Gadget", 1.0, "GST-5"),
+            ("Widget", 1.0, "GST-18"),
+        ],
+    );
+    invoice(
+        &mut fyo,
+        "Branch Co",
+        day,
+        &[("Consulting", 2.0, "IGST-18")],
+    );
+
+    let json = gstr_1(&fyo, date(2026, 7, 1), date(2026, 9, 30)).1.unwrap();
+    assert_eq!(
+        json["b2b"],
+        json!([
+            {
+                "ctin": "29AABCB1234A1Z5",
+                "inv": [{
+                    "inum": "SINV-1002", "idt": "10-08-2026", "val": 2360, "pos": "27",
+                    "rchrg": "N", "inv_typ": "R",
+                    "itms": [
+                        { "num": 1, "itm_det": { "rt": 18, "txval": 2000, "iamt": 360, "csamt": 0 } },
+                    ],
+                }],
+            },
+            {
+                "ctin": "29AABCL1234A1Z5",
+                "inv": [{
+                    "inum": "SINV-1001", "idt": "10-08-2026", "val": 406.5, "pos": "29",
+                    "rchrg": "N", "inv_typ": "R",
+                    "itms": [
+                        { "num": 1, "itm_det": { "rt": 5, "txval": 50, "camt": 1.25, "samt": 1.25, "csamt": 0 } },
+                        { "num": 2, "itm_det": { "rt": 18, "txval": 300, "camt": 27, "samt": 27, "csamt": 0 } },
+                    ],
+                }],
+            },
+        ])
+    );
+    // A service's unit is NA and its quantity 0.
+    assert_eq!(
+        json["hsn"],
+        json!({ "hsn_b2b": [
+            {
+                "num": 1, "hsn_sc": "8471", "desc": "Widget", "uqc": "UNT", "qty": 3, "rt": 18,
+                "txval": 300, "camt": 27, "samt": 27, "csamt": 0,
+            },
+            {
+                "num": 2, "hsn_sc": "8517", "desc": "Gadget", "uqc": "UNT", "qty": 1, "rt": 5,
+                "txval": 50, "camt": 1.25, "samt": 1.25, "csamt": 0,
+            },
+            {
+                "num": 3, "hsn_sc": "998314", "desc": "Consulting", "uqc": "NA", "qty": 0,
+                "rt": 18, "txval": 2000, "iamt": 360, "csamt": 0,
+            },
+        ] })
+    );
+    assert_eq!(
+        json["doc_issue"],
+        json!({ "doc_det": [{ "doc_num": 1, "docs": [{
+            "num": 1, "from": "SINV-1001", "to": "SINV-1002", "totnum": 2, "cancel": 0,
+            "net_issue": 2,
+        }] }] })
+    );
+    assert!(json.get("b2cs").is_none() && json.get("nil").is_none());
+}
+
+#[test]
+fn gstr_1_export_sums_small_b2c_sales_and_lists_large_ones() {
+    let file = TempFile::new("regional-gstr-b2c");
+    let mut fyo = registered_company(&file);
+    item(&mut fyo, "Widget", 100.0, Some("8471"), "Unit");
+    item(&mut fyo, "Laptop", 60000.0, Some("8471"), "Unit");
+    customer(&mut fyo, "Walk In", None, Some("Karnataka"));
+    customer(&mut fyo, "Delhi Buyer", None, Some("Delhi"));
+    let day = text("2026-08-10");
+    invoice(
+        &mut fyo,
+        "Walk In",
+        day.clone(),
+        &[("Widget", 1.0, "GST-5")],
+    );
+    invoice(
+        &mut fyo,
+        "Walk In",
+        day.clone(),
+        &[("Widget", 3.0, "GST-5")],
+    );
+    // ₹1,41,600 between states: over the ₹1 lakh limit.
+    invoice(
+        &mut fyo,
+        "Delhi Buyer",
+        day.clone(),
+        &[("Laptop", 2.0, "IGST-18")],
+    );
+    invoice(&mut fyo, "Delhi Buyer", day, &[("Widget", 1.0, "IGST-18")]);
+
+    let (mut names, json) = gstr_1(&fyo, date(2026, 7, 1), date(2026, 9, 30));
+    names.sort();
+    // The report shows B2B by default, and none of these are.
+    assert!(names.is_empty());
+    let json = json.unwrap();
+    assert_eq!(
+        json["b2cl"],
+        json!([{ "pos": "07", "inv": [{
+            "inum": "SINV-1003", "idt": "10-08-2026", "val": 141600,
+            "itms": [{ "num": 1, "itm_det": { "rt": 18, "txval": 120000, "iamt": 21600, "csamt": 0 } }],
+        }] }])
+    );
+    assert_eq!(
+        json["b2cs"],
+        json!([
+            { "sply_ty": "INTER", "pos": "07", "typ": "OE", "rt": 18, "txval": 100, "iamt": 18, "csamt": 0 },
+            { "sply_ty": "INTRA", "pos": "29", "typ": "OE", "rt": 5, "txval": 400, "camt": 10, "samt": 10, "csamt": 0 },
+        ])
+    );
+    // The laptops and widgets share a code and a rate.
+    assert_eq!(json["hsn"]["hsn_b2b"], json!([]));
+    assert_eq!(json["hsn"]["hsn_b2c"].as_array().unwrap().len(), 2);
+    assert_eq!(json["hsn"]["hsn_b2c"][1]["desc"], "Laptop, Widget");
+
+    let mut report = gstr("B2CL");
+    report.from_date = Some(date(2026, 7, 1));
+    report.to_date = Some(date(2026, 9, 30));
+    let formatter = Formatter::new(&fyo).unwrap();
+    report.run(&fyo, &formatter).unwrap();
+    assert_eq!(report.rows.len(), 1);
+    assert_eq!(report.rows[0].inv_no, "SINV-1003");
+
+    // Before August 2024 the limit was ₹2.5 lakh.
+    invoice(
+        &mut fyo,
+        "Delhi Buyer",
+        text("2024-07-15"),
+        &[("Laptop", 2.0, "IGST-18")],
+    );
+    let json = gstr_1(&fyo, date(2024, 7, 1), date(2024, 7, 31)).1.unwrap();
+    assert!(json.get("b2cl").is_none());
+    assert_eq!(json["b2cs"][0]["txval"], 120000);
+}
+
+#[test]
+fn gstr_1_export_files_returns_as_credit_notes() {
+    let file = TempFile::new("regional-gstr-returns");
+    let mut fyo = registered_company(&file);
+    item(&mut fyo, "Widget", 100.0, Some("8471"), "Unit");
+    item(&mut fyo, "Laptop", 60000.0, Some("8471"), "Unit");
+    customer(&mut fyo, "Local Co", Some("29AABCL1234A1Z5"), None);
+    customer(&mut fyo, "Walk In", None, Some("Karnataka"));
+    customer(&mut fyo, "Delhi Buyer", None, Some("Delhi"));
+    let sold = text("2026-08-10");
+    let returned = date(2026, 8, 20);
+    invoice(
+        &mut fyo,
+        "Local Co",
+        sold.clone(),
+        &[("Widget", 3.0, "GST-18")],
+    );
+    return_of(&mut fyo, "SINV-1001", 1.0, returned);
+    invoice(
+        &mut fyo,
+        "Walk In",
+        sold.clone(),
+        &[("Widget", 2.0, "GST-5")],
+    );
+    return_of(&mut fyo, "SINV-1003", 1.0, returned);
+    invoice(
+        &mut fyo,
+        "Delhi Buyer",
+        sold.clone(),
+        &[("Laptop", 2.0, "IGST-18")],
+    );
+    return_of(&mut fyo, "SINV-1005", 1.0, returned);
+    let mut cancelled = invoice(&mut fyo, "Local Co", sold, &[("Widget", 1.0, "GST-18")]);
+    cancelled.cancel(&mut fyo).unwrap();
+
+    let json = gstr_1(&fyo, date(2026, 7, 1), date(2026, 9, 30)).1.unwrap();
+    // The invoice keeps its value; the return is a credit note of its own.
+    assert_eq!(json["b2b"][0]["inv"][0]["val"], 354);
+    assert_eq!(json["b2b"][0]["inv"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["cdnr"],
+        json!([{ "ctin": "29AABCL1234A1Z5", "nt": [{
+            "ntty": "C", "nt_num": "SINV-1002", "nt_dt": "20-08-2026", "val": 118,
+            "pos": "29", "rchrg": "N", "inv_typ": "R",
+            "itms": [{ "num": 1, "itm_det": { "rt": 18, "txval": 100, "camt": 9, "samt": 9, "csamt": 0 } }],
+        }] }])
+    );
+    // A return of a B2C-Large sale, though for less than the limit itself.
+    assert_eq!(
+        json["cdnur"],
+        json!([{
+            "typ": "B2CL", "ntty": "C", "nt_num": "SINV-1006", "nt_dt": "20-08-2026",
+            "val": 70800, "pos": "07",
+            "itms": [{ "num": 1, "itm_det": { "rt": 18, "txval": 60000, "iamt": 10800, "csamt": 0 } }],
+        }])
+    );
+    // A small sale's return comes off B2C-Small.
+    assert_eq!(
+        json["b2cs"],
+        json!([{
+            "sply_ty": "INTRA", "pos": "29", "typ": "OE", "rt": 5, "txval": 100,
+            "camt": 2.5, "samt": 2.5, "csamt": 0,
+        }])
+    );
+    assert_eq!(json["hsn"]["hsn_b2b"][0]["qty"], 2);
+    assert_eq!(json["hsn"]["hsn_b2b"][0]["txval"], 200);
+    assert_eq!(
+        json["doc_issue"],
+        json!({ "doc_det": [
+            { "doc_num": 1, "docs": [{
+                "num": 1, "from": "SINV-1001", "to": "SINV-1007", "totnum": 4, "cancel": 1,
+                "net_issue": 3,
+            }] },
+            { "doc_num": 5, "docs": [{
+                "num": 1, "from": "SINV-1002", "to": "SINV-1006", "totnum": 3, "cancel": 0,
+                "net_issue": 3,
+            }] },
+        ] })
+    );
+}
+
+#[test]
+fn gstr_1_export_lists_nil_rated_and_exempt_supplies() {
+    let file = TempFile::new("regional-gstr-nil");
+    let mut fyo = registered_company(&file);
+    item(&mut fyo, "Rice", 50.0, Some("1006"), "Kg");
+    // Chapter 04, stored as a number without its leading zero.
+    item(&mut fyo, "Milk", 50.0, Some("0401"), "Unit");
+    customer(&mut fyo, "Local Co", Some("29AABCL1234A1Z5"), None);
+    customer(&mut fyo, "Walk In", None, Some("Karnataka"));
+    let day = text("2026-08-10");
+    invoice(
+        &mut fyo,
+        "Walk In",
+        day.clone(),
+        &[("Rice", 2.0, "GST-0"), ("Milk", 1.0, "Exempt-GST-0")],
+    );
+    invoice(&mut fyo, "Local Co", day, &[("Rice", 1.0, "GST-0")]);
+
+    let json = gstr_1(&fyo, date(2026, 7, 1), date(2026, 9, 30)).1.unwrap();
+    assert!(json.get("b2b").is_none() && json.get("b2cs").is_none());
+    assert_eq!(
+        json["nil"],
+        json!({ "inv": [
+            { "sply_ty": "INTRAB2B", "nil_amt": 50, "expt_amt": 0, "ngsup_amt": 0 },
+            { "sply_ty": "INTRAB2C", "nil_amt": 100, "expt_amt": 50, "ngsup_amt": 0 },
+        ] })
+    );
+    assert_eq!(
+        json["hsn"]["hsn_b2c"],
+        json!([
+            {
+                "num": 1, "hsn_sc": "0401", "desc": "Milk", "uqc": "UNT", "qty": 1, "rt": 0,
+                "txval": 50, "camt": 0, "samt": 0, "csamt": 0,
+            },
+            {
+                "num": 2, "hsn_sc": "1006", "desc": "Rice", "uqc": "KGS", "qty": 2, "rt": 0,
+                "txval": 100, "camt": 0, "samt": 0, "csamt": 0,
+            },
+        ])
+    );
+    assert_eq!(json["doc_issue"]["doc_det"][0]["docs"][0]["totnum"], 2);
+}
+
+#[test]
+fn gstr_1_export_takes_rates_from_the_tax_and_values_in_rupees() {
+    let file = TempFile::new("regional-gstr-tax");
+    let mut fyo = registered_company(&file);
+    item(&mut fyo, "Widget", 100.0, Some("8471"), "Unit");
+    let details = DocValue::Table(vec![
+        map([("account", text("CGST")), ("rate", DocValue::Number(9.0))]),
+        map([("account", text("SGST")), ("rate", DocValue::Number(9.0))]),
+    ]);
+    let tax = map([("name", text("Standard 18%")), ("details", details)]);
+    fyo.get_new_doc("Tax", tax).unwrap().sync(&mut fyo).unwrap();
+    customer(&mut fyo, "Local Co", Some("29AABCL1234A1Z5"), None);
+    invoice(
+        &mut fyo,
+        "Local Co",
+        text("2026-08-10"),
+        &[("Widget", 1.0, "Standard 18%")],
+    );
+
+    let values = map([
+        ("name", text("US Co")),
+        ("role", text("Customer")),
+        ("gstType", text("Registered Regular")),
+        ("gstin", text("29AABCU1234A1Z5")),
+        ("currency", text("USD")),
+    ]);
+    fyo.get_new_doc("Party", values)
+        .unwrap()
+        .sync(&mut fyo)
+        .unwrap();
+    let values = map([("party", text("US Co")), ("date", text("2026-08-11"))]);
+    let mut doc = fyo.get_new_doc("SalesInvoice", values).unwrap();
+    doc.set(&mut fyo, "exchangeRate", DocValue::Number(80.0))
+        .unwrap();
+    doc.append(&mut fyo, "items", Default::default()).unwrap();
+    doc.set_child(&mut fyo, "items", 0, "item", text("Widget"))
+        .unwrap();
+    doc.set_child(&mut fyo, "items", 0, "quantity", DocValue::Number(2.0))
+        .unwrap();
+    doc.set_child(&mut fyo, "items", 0, "tax", text("GST-18"))
+        .unwrap();
+    doc.sync(&mut fyo).unwrap();
+    doc.submit(&mut fyo).unwrap();
+    assert_eq!(crate::tests::money(&doc, "grandTotal"), "2.95");
+
+    let json = gstr_1(&fyo, date(2026, 8, 1), date(2026, 8, 31)).1.unwrap();
+    assert_eq!(json["b2b"][0]["ctin"], "29AABCL1234A1Z5");
+    assert_eq!(
+        json["b2b"][0]["inv"][0]["itms"],
+        json!([{ "num": 1, "itm_det": { "rt": 18, "txval": 100, "camt": 9, "samt": 9, "csamt": 0 } }])
+    );
+    // $2.95 at 80 rupees to the dollar.
+    let usd = &json["b2b"][1]["inv"][0];
+    assert_eq!(usd["val"], 236);
+    assert_eq!(
+        usd["itms"][0]["itm_det"],
+        json!({ "rt": 18, "txval": 200, "camt": 18, "samt": 18, "csamt": 0 })
+    );
+}
+
+#[test]
+fn gstr_1_export_needs_a_gst_tax_and_an_hsn_code_on_every_row() {
+    let file = TempFile::new("regional-gstr-missing");
+    let mut fyo = registered_company(&file);
+    item(&mut fyo, "Widget", 100.0, Some("8471"), "Unit");
+    item(&mut fyo, "Gizmo", 100.0, None, "Unit");
+    customer(&mut fyo, "Local Co", Some("29AABCL1234A1Z5"), None);
+    invoice(
+        &mut fyo,
+        "Local Co",
+        text("2026-08-10"),
+        &[("Gizmo", 1.0, "GST-18")],
+    );
+    invoice(
+        &mut fyo,
+        "Local Co",
+        text("2026-09-10"),
+        &[("Widget", 1.0, "")],
+    );
+
+    let august = || gstr_1(&fyo, date(2026, 8, 1), date(2026, 8, 31)).1;
+    assert_eq!(
+        august().unwrap_err(),
+        "Cannot Export: Gizmo on SINV-1001 has no HSN/SAC code. Set it on the item."
+    );
+    let september = gstr_1(&fyo, date(2026, 9, 1), date(2026, 9, 30)).1;
+    assert_eq!(
+        september.unwrap_err(),
+        "Cannot Export: row 1 of SINV-1002 (Widget) has no tax, so it can't be filed as \
+         taxed, nil rated, exempt or non-GST."
+    );
+
+    // The item's code is used once it is set.
+    fyo.db
+        .update(
+            "Item",
+            &map([("name", text("Gizmo")), ("hsnCode", text("8471"))]),
+        )
+        .unwrap();
+    let json = gstr_1(&fyo, date(2026, 8, 1), date(2026, 8, 31)).1.unwrap();
+    assert_eq!(json["hsn"]["hsn_b2b"][0]["hsn_sc"], "8471");
 }

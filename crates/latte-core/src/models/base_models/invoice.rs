@@ -178,25 +178,12 @@ pub(crate) fn get_tax_items(doc: &Doc, fyo: &Fyo) -> Result<Vec<TaxItem>, Error>
             Some(DocValue::Table(details)) => details.as_slice(),
             _ => &[],
         };
+        if details.is_empty() {
+            continue;
+        }
 
+        let amount = tax_base(doc, fyo, item)?;
         for details in details {
-            let mut amount = required_money(item, "amount")?;
-            if is_return(doc) && amount.is_positive() {
-                amount = amount.neg()?;
-            }
-
-            if !is_truthy(doc.get("discountAfterTax")) {
-                let mut item_discount_amount = get_discount_amount(doc, fyo, item)?;
-                if is_return(doc) && item_discount_amount.is_negative() {
-                    item_discount_amount = item_discount_amount.abs()?;
-                }
-                amount = if is_return(doc) {
-                    amount.add(&item_discount_amount)?
-                } else {
-                    amount.sub(&item_discount_amount)?
-                };
-            }
-
             let rate = match details.get("rate") {
                 Some(DocValue::Number(rate)) => *rate,
                 _ => f64::NAN,
@@ -219,6 +206,28 @@ pub(crate) fn get_tax_items(doc: &Doc, fyo: &Fyo) -> Result<Vec<TaxItem>, Error>
         }
     }
     Ok(tax_items)
+}
+
+/// What a row's taxes are taken on, in the invoice's currency: its amount less its
+/// discount, or its whole amount when the discount is applied after tax. A return's is
+/// negative.
+pub(crate) fn tax_base(doc: &Doc, fyo: &Fyo, item: &Doc) -> Result<Money, Error> {
+    let mut amount = required_money(item, "amount")?;
+    if is_return(doc) && amount.is_positive() {
+        amount = amount.neg()?;
+    }
+    if is_truthy(doc.get("discountAfterTax")) {
+        return Ok(amount);
+    }
+    let mut item_discount_amount = get_discount_amount(doc, fyo, item)?;
+    if is_return(doc) && item_discount_amount.is_negative() {
+        item_discount_amount = item_discount_amount.abs()?;
+    }
+    Ok(if is_return(doc) {
+        amount.add(&item_discount_amount)?
+    } else {
+        amount.sub(&item_discount_amount)?
+    })
 }
 
 /// `getTaxSummary`: the taxes by account, as TaxSummary rows, less those that come to
