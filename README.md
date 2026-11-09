@@ -77,13 +77,14 @@ Everything in Frappe Books v0.36.0:
 - **Inventory:** stock, shipments and receipts
 - **Point of sale,** pricing rules, coupons and loyalty points
 - **Reports:** General Ledger, Profit and Loss, Balance Sheet, Trial Balance and more
-- **India GST** with GSTR-1 and GSTR-2, and **Switzerland**. GSTR-1 exports the whole
-  return for the GST portal, HSN summary and documents issued included
+- **India GST** with GSTR-1 by month, or by quarter for QRMP, as the GST
+  portal files them, and **Switzerland**. GSTR-1 exports the whole return for the GST
+  portal, HSN summary and documents issued included
 - **Print to PDF** with Frappe Books' templates, rendered by [Typst](https://typst.app/)
 - **18 languages,** Frappe Books' community translations
 - **AI assistants,** optional: Claude, Codex or Cursor can look things up and draft
   documents in your books, under the same rules as the app, and ask before submitting.
-  Connect one under **Setup → Set up AI assistants**.
+  Connect one under **Tools → AI Assistants**.
 
 
 ## Coming from Frappe Books

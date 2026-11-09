@@ -24,7 +24,7 @@
 //   exempt and non-GST supplies (Table 8), the HSN summary (Table 12, split into B2B and
 //   B2C) and the documents issued (Table 13). Tables 12 and 13 cover every supply, so the
 //   return is one file. Books exports the chosen transfer type only, with no Tables 8, 9B,
-//   12 or 13. GSTR-2's export is its B2B invoices and its credit notes.
+//   12 or 13.
 // - The version is GST3.2.4, the offline tool's current one. Books writes GST3.0.4.
 // - A row has the taxes that apply only: central and state tax within the state,
 //   integrated tax between states. Books writes all three.
@@ -42,7 +42,7 @@ use latte_db::DocValue;
 use latte_db::pesa::Money;
 use serde_json::{Map, Value, json};
 
-use super::{Gstr, GstrType, PeriodInvoice, b2cl_limit, party_place, shown_date, state_code};
+use super::{Gstr, PeriodInvoice, b2cl_limit, party_place, shown_date, state_code};
 use crate::Error;
 use crate::fyo::Fyo;
 use crate::fyo::model::doc::Doc;
@@ -295,7 +295,6 @@ fn supply(
     company_state: &str,
     kinds: &mut HashMap<String, Option<RowKind>>,
 ) -> Result<Supply, Error> {
-    let strict = gstr.gstr_type == GstrType::Gstr1;
     let schema = gstr.schema_name();
     let doc = Doc::read(fyo, schema, &invoice.name)?;
     let (gstin, place) = party_place(fyo, text(&doc, "party").unwrap_or_default())?;
@@ -322,9 +321,6 @@ fn supply(
             None => None,
         };
         let Some(kind) = kind else {
-            if !strict {
-                continue;
-            }
             return Err(cannot_export(match tax {
                 Some(tax) => format!("the tax {tax} on {row} has no GST account."),
                 None => format!(
@@ -370,7 +366,7 @@ fn supply(
             RowKind::NonGst => non_gst = non_gst.add(&base)?,
         }
 
-        if strict {
+        {
             // The row's code is a number; the item's is text, with its leading zero.
             let item_hsn = hsn_code(fyo.get_value("Item", Some(item_name), "hsnCode").as_ref());
             let hsn = match (hsn_code(item.get("hsnCode")), item_hsn) {
@@ -785,28 +781,20 @@ pub(super) fn gstr_json(gstr: &Gstr, fyo: &Fyo) -> Result<String, Error> {
     data.insert("hash".into(), json!("hash"));
     data.insert("gstin".into(), json!(gstin));
     data.insert("fp".into(), json!(fp));
-    match gstr.gstr_type {
-        GstrType::Gstr1 => {
-            section(&mut data, "b2b", b2b(&supplies)?);
-            section(&mut data, "b2cl", b2cl(&supplies)?);
-            section(&mut data, "b2cs", b2cs(fyo, &supplies)?);
-            section(&mut data, "cdnr", cdnr(&supplies)?);
-            section(&mut data, "cdnur", cdnur(&supplies)?);
-            let nil = nil(fyo, &supplies)?;
-            if !nil.is_empty() {
-                data.insert("nil".into(), json!({ "inv": nil }));
-            }
-            if let Some(hsn) = hsn(fyo, &supplies)? {
-                data.insert("hsn".into(), hsn);
-            }
-            if let Some(doc_issue) = doc_issue(&invoices) {
-                data.insert("doc_issue".into(), doc_issue);
-            }
-        }
-        GstrType::Gstr2 => {
-            data.insert("b2b".into(), Value::Array(b2b(&supplies)?));
-            section(&mut data, "cdnr", cdnr(&supplies)?);
-        }
+    section(&mut data, "b2b", b2b(&supplies)?);
+    section(&mut data, "b2cl", b2cl(&supplies)?);
+    section(&mut data, "b2cs", b2cs(fyo, &supplies)?);
+    section(&mut data, "cdnr", cdnr(&supplies)?);
+    section(&mut data, "cdnur", cdnur(&supplies)?);
+    let nil = nil(fyo, &supplies)?;
+    if !nil.is_empty() {
+        data.insert("nil".into(), json!({ "inv": nil }));
+    }
+    if let Some(hsn) = hsn(fyo, &supplies)? {
+        data.insert("hsn".into(), hsn);
+    }
+    if let Some(doc_issue) = doc_issue(&invoices) {
+        data.insert("doc_issue".into(), doc_issue);
     }
     Ok(Value::Object(data).to_string())
 }

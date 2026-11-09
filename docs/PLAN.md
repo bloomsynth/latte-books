@@ -293,12 +293,12 @@ CI runs the parity suite on every PR. Any difference fails the build.
   Ledger and Stock Balance reports are in `latte_core::reports`. Eight Books bugs are
   fixed (see BOOKS-BUGS.md). The barcode scanner and the inventory list filters aren't
   ported yet. Not yet checked against Books by hand.*
-- India: GSTIN fields, GST types, state codes, GSTR-1 and GSTR-2 reports.
+- India: GSTIN fields, GST types, state codes, the GSTR-1 report (GSTR-2 is left out, see DEVIATIONS.md).
 - Switzerland regional fields.
 - Point of Sale: profiles, shifts, checkout, barcodes.
 - Pricing rules, price lists, coupons, loyalty programs, leads, quotes.
   *Regional, pricing and sales 2026-10-23: India's Address and Party models, and the
-  GSTR-1 and GSTR-2 reports with their JSON export, are in `latte_core`; Switzerland's
+  GSTR-1 report with its JSON export, are in `latte_core`; Switzerland's
   fields come with the schemas. Pricing rules, price lists, coupons, loyalty programs,
   leads and quotes are ported, with Make Customer and Make Sales Quote on a lead and
   Make Sales Invoice on a quote. Eleven Books bugs are fixed (see BOOKS-BUGS.md). Loyalty

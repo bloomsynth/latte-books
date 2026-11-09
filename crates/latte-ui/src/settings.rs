@@ -12,6 +12,10 @@
 //!   follow it.
 //! - System's Version is Latte Books' own; the Frappe Books version the file is kept at is
 //!   under Compatibility, at the end (`latte_core::views::field::form_layout`).
+//! - An Indian company has a GST tab: the GSTIN, which Books has in General, and Return
+//!   Filing, monthly or quarterly, which the GSTR reports follow. It is the GST tab of
+//!   AccountingSettings, so General and GST are one document, saved together. It links to
+//!   the Tax Templates.
 
 use std::collections::HashMap;
 
@@ -24,19 +28,65 @@ use gpui_kit::*;
 use crate::i18n::t;
 use latte_core::fyo::model::helpers::is_truthy;
 
-use crate::Navigate;
 use crate::form::FormPage;
 use crate::session::Shared;
 use crate::widgets::page_header;
+use crate::{Nav, Navigate};
+use latte_core::views::sidebar::Route;
 
-const TABS: [(&str, &str); 6] = [
-    ("AccountingSettings", "General"),
-    ("InventorySettings", "Inventory"),
-    ("Defaults", "Defaults"),
-    ("POSSettings", "POS Settings"),
-    ("PrintSettings", "Print"),
-    ("SystemSettings", "System"),
+/// A tab of Settings: its id, which a route names, the settings schema it shows, and its
+/// label.
+struct Tab {
+    id: &'static str,
+    schema: &'static str,
+    label: &'static str,
+}
+
+/// The tab id of GST, which shows AccountingSettings' GST tab.
+pub const GST: &str = "GST";
+
+const TABS: [Tab; 7] = [
+    Tab {
+        id: "AccountingSettings",
+        schema: "AccountingSettings",
+        label: "General",
+    },
+    Tab {
+        id: GST,
+        schema: "AccountingSettings",
+        label: "GST",
+    },
+    Tab {
+        id: "InventorySettings",
+        schema: "InventorySettings",
+        label: "Inventory",
+    },
+    Tab {
+        id: "Defaults",
+        schema: "Defaults",
+        label: "Defaults",
+    },
+    Tab {
+        id: "POSSettings",
+        schema: "POSSettings",
+        label: "POS Settings",
+    },
+    Tab {
+        id: "PrintSettings",
+        schema: "PrintSettings",
+        label: "Print",
+    },
+    Tab {
+        id: "SystemSettings",
+        schema: "SystemSettings",
+        label: "System",
+    },
 ];
+
+/// The field whose tab of the form a Settings tab shows: GST's, or the form's first.
+fn tab_field(id: &str) -> Option<&'static str> {
+    (id == GST).then_some("gstin")
+}
 
 pub struct SettingsPage {
     session: Shared,
@@ -50,7 +100,7 @@ pub struct SettingsPage {
 impl EventEmitter<Navigate> for SettingsPage {}
 
 impl SettingsPage {
-    /// Settings at the tab for `tab`, a settings schema, or at the first tab.
+    /// Settings at the tab `tab` names (a settings schema, or GST), or at the first tab.
     pub fn new(
         session: Shared,
         tab: Option<&str>,
@@ -59,39 +109,49 @@ impl SettingsPage {
     ) -> Self {
         let mut page = Self {
             session,
-            tab: TABS[0].0,
+            tab: TABS[0].id,
             forms: HashMap::new(),
             error: None,
             focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         };
-        let tab = TABS
-            .iter()
-            .find(|(schema, _)| Some(*schema) == tab)
-            .map_or(TABS[0].0, |(schema, _)| schema);
+        let tab = page
+            .tabs()
+            .into_iter()
+            .find(|t| Some(t.id) == tab)
+            .map_or(TABS[0].id, |t| t.id);
         page.show(tab, window, cx);
         page
     }
 
-    /// The tabs shown: Inventory only with inventory on, POS only with POS on.
-    fn tabs(&self) -> Vec<(&'static str, &'static str)> {
+    /// The tabs shown: GST only for an Indian company, Inventory only with inventory on,
+    /// POS only with POS on.
+    fn tabs(&self) -> Vec<&'static Tab> {
         let s = self.session.borrow();
         let setting =
             |schema: &str, field: &str| is_truthy(s.fyo.get_value(schema, None, field).as_ref());
         let inventory = setting("AccountingSettings", "enableInventory");
         let pos = setting("InventorySettings", "enablePointOfSale");
-        TABS.into_iter()
-            .filter(|(schema, _)| match *schema {
+        let gst = s
+            .fyo
+            .schema("AccountingSettings")
+            .is_some_and(|schema| schema.field("gstin").is_some());
+        TABS.iter()
+            .filter(|t| match t.id {
+                GST => gst,
                 "InventorySettings" => inventory,
                 "POSSettings" => pos,
                 _ => true,
             })
-            .filter(|(schema, _)| s.fyo.schema(schema).is_some())
+            .filter(|t| s.fyo.schema(t.schema).is_some())
             .collect()
     }
 
-    fn show(&mut self, schema: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        self.tab = schema;
+    fn show(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(schema) = TABS.iter().find(|t| t.id == id).map(|t| t.schema) else {
+            return;
+        };
+        self.tab = id;
         if !self.forms.contains_key(schema) {
             match FormPage::build(&self.session, schema, None, latte_db::DocValueMap::new()) {
                 Ok(doc) => {
@@ -107,7 +167,50 @@ impl SettingsPage {
                 Err(e) => self.error = Some(e),
             }
         }
+        if let Some(form) = self.forms.get(schema) {
+            form.update(cx, |form, cx| form.show_tab_of(tab_field(id), window, cx));
+        }
         cx.notify();
+    }
+
+    /// The schema the shown tab shows.
+    fn schema(&self) -> &'static str {
+        TABS.iter()
+            .find(|t| t.id == self.tab)
+            .map_or(TABS[0].schema, |t| t.schema)
+    }
+
+    /// GST's link to the Tax Templates, which the invoices' taxes come from.
+    fn tax_templates(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .v_flex()
+            .p_4()
+            .gap_2()
+            .border_t_1()
+            .border_color(gray(200))
+            .child(
+                div()
+                    .text_13()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gray(900))
+                    .child(t("Tax Templates")),
+            )
+            .child(div().text_12().text_color(gray(600)).child(t(
+                "The rates an item's tax is worked out at: GST-18, IGST-18 and the others.",
+            )))
+            .child(
+                div().h_flex().child(
+                    Button::new("open-tax-templates")
+                        .label(t("Open Tax Templates"))
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(Navigate(Nav::Route(Route::list(
+                                "Tax",
+                                "Tax Templates",
+                                None,
+                            ))))
+                        })),
+                ),
+            )
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -161,8 +264,8 @@ impl Render for SettingsPage {
         let tabs = self.tabs();
         let title = tabs
             .iter()
-            .find(|(schema, _)| *schema == self.tab)
-            .map(|(_, label)| t(label))
+            .find(|tab| tab.id == self.tab)
+            .map(|tab| t(tab.label))
             .unwrap_or_default();
         // `FormHeader.vue`: the tab's name, and "Settings" on the right.
         let form_header = div()
@@ -188,10 +291,10 @@ impl Render for SettingsPage {
                 .border_t_1()
                 .border_color(gray(200))
                 .bg(white())
-                .children(tabs.into_iter().map(|(schema, label)| {
-                    let active = schema == self.tab;
+                .children(tabs.into_iter().map(|tab| {
+                    let (id, active) = (tab.id, tab.id == self.tab);
                     div()
-                        .id(schema)
+                        .id(id)
                         .text_12()
                         .cursor_pointer()
                         .when(active, |d| {
@@ -202,10 +305,8 @@ impl Render for SettingsPage {
                                 .text_color(gray(900))
                         })
                         .when(!active, |d| d.pt_4().text_color(gray(700)))
-                        .child(t(label))
-                        .on_click(
-                            cx.listener(move |this, _, window, cx| this.show(schema, window, cx)),
-                        )
+                        .child(t(tab.label))
+                        .on_click(cx.listener(move |this, _, window, cx| this.show(id, window, cx)))
                 }))
         });
         let card = div()
@@ -227,7 +328,8 @@ impl Render for SettingsPage {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .children(self.forms.get(self.tab).cloned()),
+                    .children(self.forms.get(self.schema()).cloned())
+                    .when(self.tab == GST, |d| d.child(self.tax_templates(cx))),
             )
             .children(tab_bar);
 

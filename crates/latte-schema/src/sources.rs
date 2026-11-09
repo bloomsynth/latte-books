@@ -120,3 +120,22 @@ pub(crate) fn regional(country_code: &str) -> &'static [Source] {
         _ => &[],
     }
 }
+
+/// Latte's own additions to the regional schemas, in `crates/latte-schema/schemas/`, laid
+/// over Books' as Books lays its regional schemas over the app's.
+///
+/// India's AccountingSettings puts the GSTIN on a GST tab, and adds Return Filing (monthly
+/// or quarterly). Being a setting, Return Filing is a row of `SingleValue`, so the file's
+/// tables don't change; Frappe Books loads only its schema's fields and leaves the row be.
+const LATTE_REGIONAL_IN: &[Source] = &[(
+    "latte/regional/in/AccountingSettings.json",
+    include_str!("../schemas/regional/in/AccountingSettings.json"),
+)];
+
+/// Latte's regional additions by country code.
+pub(crate) fn latte_regional(country_code: &str) -> &'static [Source] {
+    match country_code {
+        "in" => LATTE_REGIONAL_IN,
+        _ => &[],
+    }
+}

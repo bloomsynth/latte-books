@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use crate::fyo::format::Formatter;
 use crate::fyo::model::types::DocContext;
 use crate::models::base_models::invoice::get_return_doc;
-use crate::reports::Report;
-use crate::reports::gstr::{Gstr, GstrType};
+use crate::reports::gstr::{Filing, Gstr, Period};
+use crate::reports::{FilterValue, Report};
 use crate::setup_tests::{TempFile, indian_company};
 use crate::tests::{map, text};
 use crate::{Doc, Fyo};
@@ -208,7 +208,7 @@ fn gstr_1(
     from: jiff::civil::Date,
     to: jiff::civil::Date,
 ) -> (Vec<String>, Result<Value, String>) {
-    let mut report = Gstr::new(GstrType::Gstr1);
+    let mut report = Gstr::new();
     report.from_date = Some(from);
     report.to_date = Some(to);
     let formatter = Formatter::new(fyo).unwrap();
@@ -246,7 +246,7 @@ fn gst_company() -> (TempFile, Fyo) {
 }
 
 fn gstr(transfer_type: &str) -> Gstr {
-    let mut report = Gstr::new(GstrType::Gstr1);
+    let mut report = Gstr::new();
     report.transfer_type = Some(transfer_type.to_owned());
     report.from_date = Some(date(2026, 7, 1));
     report.to_date = Some(date(2026, 10, 31));
@@ -356,7 +356,7 @@ fn gstr_can_be_exported_only_with_the_company_gstin() {
     report.run(&fyo, &formatter).unwrap();
     assert_eq!(
         report.can_export(&fyo).unwrap_err().to_string(),
-        "Cannot Export: Please set GSTIN in General Settings."
+        "Cannot Export: Please set GSTIN in GST Settings."
     );
     assert!(report.export_json(&fyo).unwrap().is_err());
 }
@@ -787,4 +787,153 @@ fn gstr_1_export_needs_a_gst_tax_and_an_hsn_code_on_every_row() {
         .unwrap();
     let json = gstr_1(&fyo, date(2026, 8, 1), date(2026, 8, 31)).1.unwrap();
     assert_eq!(json["hsn"]["hsn_b2b"][0]["hsn_sc"], "8471");
+}
+
+#[test]
+fn gstr_starts_at_the_latest_period_that_has_ended() {
+    let today = date(2026, 11, 9);
+    let mut report = Gstr::new();
+    report.set_default_filters(Filing::Monthly, today);
+    assert_eq!(report.fiscal_year, Some(2026));
+    assert_eq!(report.period, Some(Period::Month(10)));
+    assert_eq!(
+        (report.from_date, report.to_date),
+        (Some(date(2026, 10, 1)), Some(date(2026, 10, 31)))
+    );
+    assert_eq!(report.due_date(), Some(date(2026, 11, 11)));
+
+    let mut report = Gstr::new();
+    report.set_default_filters(Filing::Quarterly, today);
+    assert_eq!(report.period, Some(Period::Quarter(2)));
+    assert_eq!(
+        (report.from_date, report.to_date),
+        (Some(date(2026, 7, 1)), Some(date(2026, 9, 30)))
+    );
+    assert_eq!(report.due_date(), Some(date(2026, 10, 13)));
+
+    // Dates alone are a Custom period, which has no due date.
+    let mut report = Gstr::new();
+    report.from_date = Some(date(2026, 8, 5));
+    report.set_default_filters(Filing::Monthly, today);
+    assert_eq!(report.period, Some(Period::Custom));
+    assert_eq!(report.to_date, Some(today));
+    assert_eq!(report.due_date(), None);
+}
+
+#[test]
+fn gstr_filing_follows_the_return_filing_setting() {
+    let file = TempFile::new("regional-gstr-filing");
+    let mut fyo = registered_company(&file);
+    assert_eq!(Filing::of(&fyo), Filing::Monthly);
+    let fieldnames = |report: &Gstr, fyo: &Fyo| -> Vec<String> {
+        report
+            .filters(fyo)
+            .into_iter()
+            .map(|f| f.fieldname)
+            .collect()
+    };
+    let periods = |report: &Gstr, fyo: &Fyo| -> Vec<(String, String)> {
+        match report.filters(fyo).remove(1).kind {
+            crate::reports::FilterKind::Select(options) => options,
+            kind => panic!("{kind:?}"),
+        }
+    };
+
+    let mut report = Gstr::new();
+    report.set("fiscalYear", FilterValue::Text("2025-26".into()));
+    report.set("period", FilterValue::Text("05".into()));
+    assert_eq!(
+        (report.from_date, report.to_date),
+        (Some(date(2025, 5, 1)), Some(date(2025, 5, 31)))
+    );
+    assert_eq!(
+        fieldnames(&report, &fyo),
+        ["fiscalYear", "period", "transferType", "place"]
+    );
+    let options = periods(&report, &fyo);
+    assert_eq!(options.len(), 13);
+    assert_eq!(options[0], ("April 2025".to_owned(), "04".to_owned()));
+    assert_eq!(options[11], ("March 2026".to_owned(), "03".to_owned()));
+    assert_eq!(options[12], ("Custom".to_owned(), "custom".to_owned()));
+    assert_eq!(
+        report.get("fiscalYear"),
+        FilterValue::Text("2025-26".into())
+    );
+
+    // Another year keeps the month.
+    report.set("fiscalYear", FilterValue::Text("2024-25".into()));
+    assert_eq!(report.from_date, Some(date(2024, 5, 1)));
+
+    // Typing a date makes the period Custom, which shows the dates.
+    report.set("toDate", FilterValue::Date(date(2024, 6, 15)));
+    assert_eq!(report.period, Some(Period::Custom));
+    assert_eq!(report.from_date, Some(date(2024, 5, 1)));
+    assert_eq!(
+        fieldnames(&report, &fyo),
+        [
+            "fiscalYear",
+            "period",
+            "transferType",
+            "place",
+            "fromDate",
+            "toDate"
+        ]
+    );
+
+    fyo.db
+        .update(
+            "AccountingSettings",
+            &map([("gstReturnFiling", text("Quarterly"))]),
+        )
+        .unwrap();
+    assert_eq!(Filing::of(&fyo), Filing::Quarterly);
+    let mut report = Gstr::new();
+    report.set("fiscalYear", FilterValue::Text("2025-26".into()));
+    report.set("period", FilterValue::Text("Q3".into()));
+    assert_eq!(
+        (report.from_date, report.to_date),
+        (Some(date(2025, 10, 1)), Some(date(2025, 12, 31)))
+    );
+    let labels: Vec<String> = periods(&report, &fyo).into_iter().map(|(l, _)| l).collect();
+    assert_eq!(
+        labels,
+        [
+            "Apr–Jun 2025",
+            "Jul–Sep 2025",
+            "Oct–Dec 2025",
+            "Jan–Mar 2026",
+            "Custom"
+        ]
+    );
+}
+
+#[test]
+fn gstr_1_for_a_quarter_is_filed_for_its_last_month() {
+    let (_file, mut fyo) = gst_company();
+    fyo.db
+        .update(
+            "AccountingSettings",
+            &map([("gstin", text("29AABCA1234A1Z5"))]),
+        )
+        .unwrap();
+    let mut report = Gstr::new();
+    report.set("fiscalYear", FilterValue::Text("2026-27".into()));
+    report.set("period", FilterValue::Text("Q3".into()));
+    let formatter = Formatter::new(&fyo).unwrap();
+    report.run(&fyo, &formatter).unwrap();
+    // The sales of 1 October 2026.
+    assert_eq!(report.rows.len(), 2);
+    let json: Value = serde_json::from_str(&report.export_json(&fyo).unwrap().unwrap()).unwrap();
+    assert_eq!(json["fp"], "122026");
+    assert_eq!(
+        report.file_name(&fyo).as_deref(),
+        Some("GSTR1_29AABCA1234A1Z5_122026")
+    );
+
+    report.set("fromDate", FilterValue::Date(date(2026, 10, 1)));
+    report.set("toDate", FilterValue::Date(date(2026, 10, 15)));
+    assert_eq!(
+        report.file_name(&fyo).as_deref(),
+        Some("GSTR1_29AABCA1234A1Z5_2026-10-01_2026-10-15")
+    );
 }

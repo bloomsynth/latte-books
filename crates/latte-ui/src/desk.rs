@@ -11,7 +11,9 @@
 //! Not in Books: the Show Sidebar button is always shown, not only when hovered, and the
 //! sidebar buttons name Shift+H in a tooltip.
 //!
-//! Not in Books: the sidebar's foot shows Latte Books' version, under Report Issue.
+//! Not in Books: the sidebar's foot shows Latte Books' version, under Report Issue, and
+//! starts with Settings, which Ctrl+, (⌘,) opens too. Books has Settings in the Setup group,
+//! which Latte doesn't have (`latte_core::views::sidebar`).
 //!
 //! Not in Books: every two seconds the desk looks for changes another device, such as an AI
 //! assistant, wrote to the file, and shows the page again when it may show them.
@@ -588,6 +590,20 @@ impl Desk {
                     .gap_2()
                     .py_2()
                     .px_4()
+                    // Latte's own: Settings, a click away. Books has it in the Setup group.
+                    .child({
+                        let active = matches!(self.highlight, Route::Settings { .. });
+                        link("settings", "settings", "Settings")
+                            .when(active, |d| d.text_color(link_hover))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open(
+                                    Nav::Route(Route::Settings { tab: None }),
+                                    true,
+                                    window,
+                                    cx,
+                                )
+                            }))
+                    })
                     .child(
                         link("help", "help-circle", "Help")
                             .on_click(cx.listener(|this, _, _, cx| this.open_docs(cx))),
@@ -748,6 +764,9 @@ impl Render for Desk {
                     // `Sidebar.vue`: Shift+H, unless typing.
                     this.sidebar_hidden = !this.sidebar_hidden;
                     cx.notify();
+                } else if k.key == "," && pmod && !open_modal {
+                    // Latte's own: Ctrl+, (⌘,) opens Settings, as in most desktop apps.
+                    this.open(Nav::Route(Route::Settings { tab: None }), true, window, cx);
                 } else if k.key == "f1" {
                     this.open_docs(cx);
                 } else {

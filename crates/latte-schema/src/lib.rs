@@ -209,6 +209,8 @@ fn get_app_schemas(country_code: &str) -> Result<StubMap, Error> {
     let app_schema_map = get_map_from_list(sources::APP)?;
     let regional_schema_map = get_map_from_list(sources::regional(country_code))?;
     let combined_schemas = get_regional_combined_schemas(app_schema_map, regional_schema_map);
+    let latte_schema_map = get_map_from_list(sources::latte_regional(country_code))?;
+    let combined_schemas = get_regional_combined_schemas(combined_schemas, latte_schema_map);
     let schema_map = get_abstract_combined_schemas(combined_schemas);
     Ok(clean_schemas(schema_map))
 }

@@ -194,3 +194,69 @@ fn an_assistant_invoices_a_customer() {
     );
     assert_eq!(invoice["cancelled"], true);
 }
+
+#[test]
+fn an_assistant_has_the_gst_returns_only_with_a_gstin() {
+    let file = company();
+    let reports = |server: &mut Server| -> Vec<String> {
+        ok(server, "list_reports", json!({}))
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["report"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    let mut server = Server::new(Some(file.0.clone()));
+    assert!(!reports(&mut server).contains(&"gstr-1".to_owned()));
+    let (text, is_error) = call(&mut server, "run_report", json!({ "report": "gstr-1" }));
+    assert!(is_error);
+    assert!(text.contains("no GSTIN"), "{text}");
+    drop(server);
+
+    let mut db = latte_db::Database::open(&file.0, "test").unwrap();
+    let gstin = latte_db::DocValue::Text("29AABCA1234A1Z5".into());
+    db.update(
+        "AccountingSettings",
+        &latte_db::DocValueMap::from([("gstin".to_owned(), gstin)]),
+    )
+    .unwrap();
+    drop(db);
+
+    let mut server = Server::new(Some(file.0.clone()));
+    let listed = ok(&mut server, "list_reports", json!({}));
+    let gstr_1 = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["report"] == "gstr-1")
+        .unwrap();
+    let filters: Vec<&str> = gstr_1["filters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        filters,
+        [
+            "fiscalYear",
+            "period",
+            "transferType",
+            "place",
+            "fromDate",
+            "toDate"
+        ]
+    );
+    // A period, or dates.
+    ok(
+        &mut server,
+        "run_report",
+        json!({ "report": "gstr-1", "filters": { "fiscalYear": "2026-27", "period": "Q2" } }),
+    );
+    ok(
+        &mut server,
+        "run_report",
+        json!({ "report": "gstr-1", "filters": { "fromDate": "2026-07-01", "toDate": "2026-09-30" } }),
+    );
+}

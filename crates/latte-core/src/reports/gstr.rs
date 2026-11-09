@@ -1,6 +1,7 @@
-// Port of reports/GoodsAndServiceTax/ @ v0.36.0: BaseGSTR.ts, GSTR1.ts and GSTR2.ts.
-// GSTR-1 lists the sales invoices of a period and GSTR-2 the purchase invoices, with each
-// one's GST. The JSON export of gstExporter.ts is in gstr/export.rs.
+// Port of reports/GoodsAndServiceTax/ @ v0.36.0: BaseGSTR.ts and GSTR1.ts.
+// GSTR-1 lists the sales invoices of a period, with each one's GST. Books' GSTR-2, the
+// purchase invoices, is left out: the return hasn't been filed since 2017, and input tax
+// credit is claimed from the GSTR-2B the portal makes. The JSON export of gstExporter.ts is in gstr/export.rs.
 //
 // Books bugs Latte fixes:
 // - The rate of an invoice is its taxes' rates added up once. Books adds them twice, so
@@ -18,8 +19,17 @@
 //
 // Deviation: the exports are what the app calls (`can_export` and `export_json` of
 // `Report`), not actions of the report.
+//
+// Not in Books: the period is a Financial Year and a Period, as the GST portal asks for a
+// return: a month, or a quarter for a company that files quarterly (Return Filing, in GST
+// Settings), or Custom, which shows From Date and To Date. It starts at the latest period
+// that has ended. GSTR-1 says when it is due, and the exports are named by the GSTIN and
+// the period (gstr/period.rs).
 
 mod export;
+pub mod period;
+
+pub use period::{Filing, Period};
 
 use jiff::civil::{Date, date};
 use jiff::{Timestamp, ToSpan, Zoned};
@@ -33,19 +43,11 @@ use crate::fyo::Fyo;
 use crate::fyo::format::{Formatter, local_date};
 use crate::fyo::model::helpers::{is_truthy, js_number_string};
 use crate::models::base_models::address::CODE_STATE_MAP;
+use crate::models::helpers::single_text;
 use crate::reports::stock_ledger::{date_filter, text_filter};
 use crate::reports::{
     Align, Column, Filter, FilterKind, FilterValue, RawValue, Report, ReportCell, ReportRow,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GstrType {
-    /// Sales.
-    #[default]
-    Gstr1,
-    /// Purchases.
-    Gstr2,
-}
 
 /// `GSTRRow`.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -68,12 +70,15 @@ pub struct GstrRow {
     pub nil_rated: bool,
 }
 
-/// `BaseGSTR`, with GSTR1 and GSTR2 as its two types.
+/// `BaseGSTR`, as GSTR1.
 #[derive(Debug, Clone, Default)]
 pub struct Gstr {
-    pub gstr_type: GstrType,
     /// A GST state code.
     pub place: Option<String>,
+    /// The financial year, by the year it begins in.
+    pub fiscal_year: Option<i16>,
+    /// The return period of the financial year; Custom is From Date to To Date.
+    pub period: Option<Period>,
     pub from_date: Option<Date>,
     pub to_date: Option<Date>,
     /// B2B, B2CL, B2CS or NR.
@@ -147,6 +152,12 @@ fn shown_date(value: Option<&DocValue>) -> Option<Date> {
     }
 }
 
+/// Whether the company is registered for GST: it has a GSTIN. Only then are the GST
+/// reports shown.
+pub fn is_gst_registered(fyo: &Fyo) -> bool {
+    single_text(fyo, "AccountingSettings", "gstin").is_some()
+}
+
 /// The value over which an inter-state sale to an unregistered buyer is B2C-Large: ₹1
 /// lakh from 1 August 2024 (Notification 12/2024-Central Tax), ₹2.5 lakh before.
 fn b2cl_limit(invoice_date: Option<Date>) -> f64 {
@@ -180,18 +191,12 @@ fn party_place(fyo: &Fyo, party: &str) -> Result<(String, String), Error> {
 }
 
 impl Gstr {
-    pub fn new(gstr_type: GstrType) -> Self {
-        Self {
-            gstr_type,
-            ..Self::default()
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// `transferTypeMap`, as `(value, label)`.
     pub fn transfer_types(&self) -> Vec<(&'static str, &'static str)> {
-        if self.gstr_type == GstrType::Gstr2 {
-            return vec![("B2B", "B2B")];
-        }
         vec![
             ("B2B", "B2B"),
             ("B2CL", "B2C-Large"),
@@ -202,27 +207,114 @@ impl Gstr {
 
     /// `schemaName`.
     pub fn schema_name(&self) -> &'static str {
-        match self.gstr_type {
-            GstrType::Gstr1 => "SalesInvoice",
-            GstrType::Gstr2 => "PurchaseInvoice",
-        }
+        "SalesInvoice"
     }
 
     fn transfer_type(&self) -> &str {
         self.transfer_type.as_deref().unwrap_or("B2B")
     }
 
-    /// `setDefaultFilters`: the last three months, B2B.
-    pub fn set_default_filters(&mut self, today: Date) {
-        if self.to_date.is_none() {
-            self.to_date = Some(today);
+    /// `setDefaultFilters`, for a return period: the latest period that has ended, a month
+    /// or a quarter as the company files, and B2B. A report given only dates is for those
+    /// dates (Custom), and Custom without them is Books' last three months.
+    pub fn set_default_filters(&mut self, filing: Filing, today: Date) {
+        if self.period.is_none() {
+            if self.from_date.is_some() || self.to_date.is_some() {
+                self.period = Some(Period::Custom);
+            } else {
+                let (year, period) = period::last_ended(filing, today);
+                let fiscal_year = *self.fiscal_year.get_or_insert(year);
+                let all = Period::all(filing);
+                self.period = Some(match fiscal_year.cmp(&year) {
+                    std::cmp::Ordering::Equal => period,
+                    std::cmp::Ordering::Less => all[all.len() - 1],
+                    std::cmp::Ordering::Greater => all[0],
+                });
+            }
         }
-        if self.from_date.is_none() {
-            self.from_date = today.checked_sub(3.months()).ok();
+        match self.period {
+            Some(Period::Custom) | None => {
+                if self.to_date.is_none() {
+                    self.to_date = Some(today);
+                }
+                if self.from_date.is_none() {
+                    self.from_date = today.checked_sub(3.months()).ok();
+                }
+                if self.fiscal_year.is_none() {
+                    self.fiscal_year = self.from_date.map(period::fiscal_year_of);
+                }
+            }
+            Some(period) => {
+                self.fiscal_year
+                    .get_or_insert_with(|| period::latest_fiscal_year(period, today));
+                self.set_period_dates();
+            }
         }
         if self.transfer_type.is_none() {
             self.transfer_type = Some("B2B".to_owned());
         }
+    }
+
+    /// From Date and To Date as the period's, unless it is Custom.
+    fn set_period_dates(&mut self) {
+        if let (Some(period), Some(year)) = (self.period, self.fiscal_year)
+            && let Some((from, to)) = period.dates(year)
+        {
+            self.from_date = Some(from);
+            self.to_date = Some(to);
+        }
+    }
+
+    /// The day GSTR-1 for the period is due; none for a Custom period.
+    pub fn due_date(&self) -> Option<Date> {
+        self.period?.gstr1_due_date(self.fiscal_year?)
+    }
+
+    /// The Financial Year filter's options, latest first: the years since GST began.
+    fn fiscal_years(&self, today: Date) -> Vec<(String, String)> {
+        let mut years: Vec<i16> =
+            (period::FIRST_FISCAL_YEAR..=period::fiscal_year_of(today)).collect();
+        if let Some(year) = self.fiscal_year
+            && !years.contains(&year)
+        {
+            years.push(year);
+            years.sort_unstable();
+        }
+        years
+            .into_iter()
+            .rev()
+            .map(|year| {
+                let label = period::fiscal_year_label(year);
+                (label.clone(), label)
+            })
+            .collect()
+    }
+
+    /// The Period filter's options: the year's months or quarters that have begun, as the
+    /// company files, then Custom.
+    fn periods(&self, filing: Filing, today: Date) -> Vec<(String, String)> {
+        let year = self
+            .fiscal_year
+            .unwrap_or_else(|| period::fiscal_year_of(today));
+        let mut periods: Vec<Period> = Period::all(filing)
+            .into_iter()
+            .filter(|period| {
+                period.dates(year).is_some_and(|(first, last)| {
+                    first <= today && last >= date(period::FIRST_FISCAL_YEAR, 7, 1)
+                })
+            })
+            .collect();
+        if let Some(period) = self.period
+            && period != Period::Custom
+            && !periods.contains(&period)
+        {
+            periods.push(period);
+        }
+        periods.push(Period::Custom);
+        periods
+            .into_iter()
+            .map(|period| (period.label(year), period.value()))
+            .collect()
     }
 
     /// `filterGstrRows` and `transferFilterFunction`.
@@ -374,7 +466,7 @@ impl Gstr {
             column("Rate", "rate", Kind::None, 0.5),
             column("Taxable Value", "taxVal", Kind::Currency, 1.0),
             column("Reverse Chrg.", "reverseCharge", Kind::Data, 1.0),
-            column("Intergrated Tax", "igstAmt", Kind::Currency, 1.0),
+            column("Integrated Tax", "igstAmt", Kind::Currency, 1.0),
             column("Central Tax", "cgstAmt", Kind::Currency, 1.0),
             column("State Tax", "sgstAmt", Kind::Currency, 1.0),
         ];
@@ -429,12 +521,12 @@ impl Gstr {
         })
     }
 
-    /// `getCanExport`: the export needs the company's GSTIN.
+    /// `getCanExport`: the export needs the company's GSTIN, which is in GST Settings.
     pub fn company_gstin(fyo: &Fyo) -> Result<String, Error> {
         match fyo.get_value("AccountingSettings", None, "gstin") {
             Some(DocValue::Text(gstin)) if !gstin.is_empty() => Ok(gstin),
             _ => Err(Error::Validation(
-                "Cannot Export: Please set GSTIN in General Settings.".to_owned(),
+                "Cannot Export: Please set GSTIN in GST Settings.".to_owned(),
             )),
         }
     }
@@ -493,20 +585,15 @@ fn currency_cell(
 
 impl Report for Gstr {
     fn title(&self) -> &'static str {
-        match self.gstr_type {
-            GstrType::Gstr1 => "GSTR1",
-            GstrType::Gstr2 => "GSTR2",
-        }
+        "GSTR1"
     }
 
     fn report_name(&self) -> &'static str {
-        match self.gstr_type {
-            GstrType::Gstr1 => "gstr-1",
-            GstrType::Gstr2 => "gstr-2",
-        }
+        "gstr-1"
     }
 
-    fn filters(&self, _fyo: &Fyo) -> Vec<Filter> {
+    fn filters(&self, fyo: &Fyo) -> Vec<Filter> {
+        let today = Zoned::now().date();
         let transfer_types = self
             .transfer_types()
             .into_iter()
@@ -516,20 +603,41 @@ impl Report for Gstr {
             .iter()
             .map(|(code, state)| ((*state).to_owned(), (*code).to_owned()))
             .collect();
-        vec![
+        let mut filters = vec![
+            Filter::new(
+                "fiscalYear",
+                "Financial Year",
+                FilterKind::Select(self.fiscal_years(today)),
+            ),
+            Filter::new(
+                "period",
+                "Period",
+                FilterKind::Select(self.periods(Filing::of(fyo), today)),
+            ),
             Filter::new(
                 "transferType",
                 "Transfer Type",
                 FilterKind::Select(transfer_types),
             ),
             Filter::new("place", "Place", FilterKind::Select(places)),
-            Filter::new("fromDate", "From Date", FilterKind::Date),
-            Filter::new("toDate", "To Date", FilterKind::Date),
-        ]
+        ];
+        // Before the first run there is no period yet, and the dates can be given instead,
+        // as an AI assistant may.
+        if !matches!(self.period, Some(Period::Month(_) | Period::Quarter(_))) {
+            filters.extend([
+                Filter::new("fromDate", "From Date", FilterKind::Date),
+                Filter::new("toDate", "To Date", FilterKind::Date),
+            ]);
+        }
+        filters
     }
 
     fn get(&self, fieldname: &str) -> FilterValue {
         match fieldname {
+            "fiscalYear" => {
+                FilterValue::text(self.fiscal_year.map(period::fiscal_year_label).as_deref())
+            }
+            "period" => FilterValue::text(self.period.map(Period::value).as_deref()),
             "transferType" => FilterValue::text(self.transfer_type.as_deref()),
             "place" => FilterValue::text(self.place.as_deref()),
             "fromDate" => FilterValue::date(self.from_date),
@@ -538,12 +646,33 @@ impl Report for Gstr {
         }
     }
 
+    /// A Financial Year or Period sets the dates to the period's; a date makes the period
+    /// Custom. A cleared period is the latest that has ended again.
     fn set(&mut self, fieldname: &str, value: FilterValue) {
         match fieldname {
+            "fiscalYear" => {
+                self.fiscal_year = text_filter(&value)
+                    .as_deref()
+                    .and_then(period::parse_fiscal_year);
+                self.set_period_dates();
+            }
+            "period" => {
+                self.period = text_filter(&value).as_deref().and_then(Period::parse);
+                if self.period.is_none() {
+                    (self.from_date, self.to_date) = (None, None);
+                }
+                self.set_period_dates();
+            }
             "transferType" => self.transfer_type = text_filter(&value),
             "place" => self.place = text_filter(&value),
-            "fromDate" => self.from_date = date_filter(&value),
-            "toDate" => self.to_date = date_filter(&value),
+            "fromDate" => {
+                self.from_date = date_filter(&value);
+                self.period = Some(Period::Custom);
+            }
+            "toDate" => {
+                self.to_date = date_filter(&value);
+                self.period = Some(Period::Custom);
+            }
             _ => {}
         }
     }
@@ -553,7 +682,7 @@ impl Report for Gstr {
     }
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
-        self.set_default_filters(Zoned::now().date());
+        self.set_default_filters(Filing::of(fyo), Zoned::now().date());
         self.rows = self.gstr_rows(fyo)?;
         let columns = self.kinded_columns();
         self.rows
@@ -572,5 +701,27 @@ impl Report for Gstr {
 
     fn can_export(&self, fyo: &Fyo) -> Result<(), Error> {
         Self::company_gstin(fyo).map(|_| ())
+    }
+
+    /// When GSTR-1 for the period is due, or was.
+    fn note(&self, _fyo: &Fyo, formatter: &Formatter) -> Option<String> {
+        let due = self.due_date()?;
+        let shown = formatter.date(due);
+        Some(if Zoned::now().date() > due {
+            format!("GSTR-1 was due on {shown}")
+        } else {
+            format!("GSTR-1 is due on {shown}")
+        })
+    }
+
+    /// GSTR1_<GSTIN>_<MMYYYY>: the return's GSTIN and its `fp`, the period's last month;
+    /// a Custom period's dates.
+    fn file_name(&self, fyo: &Fyo) -> Option<String> {
+        let gstin = Self::company_gstin(fyo).ok()?;
+        let period = match self.period? {
+            Period::Custom => format!("{}_{}", self.from_date?, self.to_date?),
+            _ => self.to_date?.strftime("%m%Y").to_string(),
+        };
+        Some(format!("{}_{gstin}_{period}", self.title()))
     }
 }

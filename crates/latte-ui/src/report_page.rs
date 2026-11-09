@@ -9,9 +9,16 @@
 //! A date filter opens the calendar of `date_picker.rs` when clicked, as Books' date
 //! input opens the browser's; it can be typed as YYYY-MM-DD too.
 //!
+//! A report wider than the window scrolls sideways under its filters: with the scrollbar
+//! under its rows, Shift and the wheel, or a trackpad. The wheel alone scrolls the rows,
+//! or the columns when the rows all fit.
+//!
 //! Differences from Books:
 //! - Dates are typed as YYYY-MM-DD or picked from a calendar.
 //! - The JSON export names the software "Latte Books".
+//! - The filters can change as they are set: GSTR shows From Date and To Date only for a
+//!   Custom period. A report can say something under its title, as GSTR-1 says when it is
+//!   due, and name its exports, as GSTR names them by the GSTIN and the period.
 
 use std::collections::{HashMap, HashSet};
 
@@ -52,6 +59,8 @@ pub struct ReportPage {
     rows: Vec<ReportRow>,
     error: Option<String>,
     info: Option<String>,
+    /// The report's note of its last run, such as when a GSTR-1 is due.
+    note: Option<String>,
     /// The Export menu is open.
     menu: bool,
     /// The group rows folded, by index.
@@ -61,6 +70,10 @@ pub struct ReportPage {
     count: usize,
     /// The calendar open under a date filter, by its fieldname.
     picker: Option<(String, Entity<DatePicker>, [Subscription; 2])>,
+    /// Where the columns are scrolled to, sideways.
+    columns_scroll: ScrollHandle,
+    /// Where the rows are scrolled to.
+    rows_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -96,21 +109,23 @@ impl ReportPage {
         for (fieldname, value) in preset {
             report.set(fieldname, FilterValue::Text(value.clone()));
         }
-        let filters = report.filters(&session.borrow().fyo);
         let mut page = Self {
             session,
             report,
-            filters: filters.clone(),
+            filters: Vec::new(),
             controls: HashMap::new(),
             columns: Vec::new(),
             rows: Vec::new(),
             error: None,
             info: None,
+            note: None,
             menu: false,
             folded: HashSet::new(),
             page: 1,
             count: 50,
             picker: None,
+            columns_scroll: ScrollHandle::new(),
+            rows_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         };
@@ -134,10 +149,22 @@ impl ReportPage {
             }));
         // The first run sets the default filters, which the controls then show.
         page.run(window, cx);
-        for filter in &filters {
-            page.make_control(filter, window, cx);
-        }
+        page.sync_filters(window, cx);
         page
+    }
+
+    /// The report's filters as they are now, a control for each: a filter can show others
+    /// or offer other options, as GSTR's Custom period shows From Date and To Date.
+    fn sync_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let filters = self.report.filters(&self.session.borrow().fyo);
+        self.controls
+            .retain(|name, _| filters.iter().any(|f| &f.fieldname == name));
+        for filter in &filters {
+            if !self.controls.contains_key(&filter.fieldname) {
+                self.make_control(filter, window, cx);
+            }
+        }
+        self.filters = filters;
     }
 
     /// The names a Link filter offers: the documents of its schema.
@@ -266,8 +293,10 @@ impl ReportPage {
             return;
         }
         self.report.set(fieldname, value);
-        // A filter can change others (a reference type clears its name), so all are shown
-        // again.
+        self.run(window, cx);
+        self.sync_filters(window, cx);
+        // A filter can change others (a reference type clears its name, a GSTR period its
+        // dates), so all are shown again.
         for filter in self.filters.clone() {
             let value = self.report.get(&filter.fieldname);
             match self.controls.get(&filter.fieldname) {
@@ -293,7 +322,6 @@ impl ReportPage {
                 _ => {}
             }
         }
-        self.run(window, cx);
     }
 
     fn run(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -313,6 +341,7 @@ impl ReportPage {
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+        self.note = self.report.note(&s.fyo, &s.formatter);
         cx.notify();
     }
 
@@ -348,7 +377,11 @@ impl ReportPage {
             }
         };
         let extension = if json { "json" } else { "csv" };
-        let file_name = format!("{}.{extension}", self.report.report_name());
+        let name = self
+            .report
+            .file_name(&self.session.borrow().fyo)
+            .unwrap_or_else(|| self.report.report_name().to_owned());
+        let file_name = format!("{name}.{extension}");
         let dir = std::env::var_os("USERPROFILE")
             .or_else(|| std::env::var_os("HOME"))
             .map(|home| std::path::PathBuf::from(home).join("Documents"))
@@ -521,7 +554,7 @@ impl ReportPage {
     fn paginated(&self) -> bool {
         matches!(
             self.report.report_name(),
-            "general-ledger" | "stock-ledger" | "gstr-1" | "gstr-2"
+            "general-ledger" | "stock-ledger" | "gstr-1"
         )
     }
 
@@ -748,6 +781,11 @@ impl Render for ReportPage {
             div()
                 .h_flex()
                 .gap_2()
+                .children(
+                    self.note
+                        .clone()
+                        .map(|note| div().mr_2().text_12().text_color(gray(600)).child(note)),
+                )
                 .child(
                     div()
                         .relative()
@@ -842,7 +880,13 @@ impl Render for ReportPage {
                     .collect()
             }),
         )
-        .flex_1();
+        .track_scroll(&self.rows_scroll)
+        .flex_1()
+        .min_h_0()
+        .min_w(px(width))
+        .w_full();
+        // Whether there are rows to scroll to, as of the last frame.
+        let rows_overflow = self.rows_scroll.0.borrow().base_handle.max_offset().y > px(0.);
         let empty = self.rows.is_empty();
 
         let toast = self.info.clone().map(|message| {
@@ -890,15 +934,38 @@ impl Render for ReportPage {
                             .child(t("No Values to be Displayed")),
                     )
                 } else {
+                    // The columns, as wide as they need, scroll sideways under the filters;
+                    // the rows scroll down within them. The wheel alone scrolls the rows
+                    // when there are more than fit, and the columns when there aren't;
+                    // Shift and the wheel, a trackpad and the scrollbar always go sideways.
                     d.child(
                         div()
-                            .id("report-body")
                             .flex_1()
                             .min_h_0()
+                            .relative()
                             .v_flex()
-                            .overflow_x_scroll()
-                            .child(column_header)
-                            .child(body),
+                            .child(
+                                div()
+                                    .id("report-body")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    .v_flex()
+                                    .overflow_x_scroll()
+                                    .when(rows_overflow, |d| d.restrict_scroll_to_axis())
+                                    .track_scroll(&self.columns_scroll)
+                                    .child(column_header)
+                                    .child(body),
+                            )
+                            .child(
+                                div().absolute().inset_0().child(
+                                    scroll::Scrollbar::new(&self.columns_scroll)
+                                        .id("report-columns-scrollbar")
+                                        .axis(scroll::ScrollbarAxis::Horizontal)
+                                        .mode(scroll::ScrollbarMode::Always)
+                                        .viewport_from_layout(),
+                                ),
+                            ),
                     )
                 }
             })

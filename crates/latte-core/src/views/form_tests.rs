@@ -364,3 +364,25 @@ fn system_settings_shows_lattes_version_and_the_files_under_compatibility() {
         );
     }
 }
+
+#[test]
+fn an_indian_companys_settings_have_a_gst_tab() {
+    let file = crate::setup_tests::TempFile::new("form-gst-tab");
+    let mut fyo = crate::setup_tests::indian_company(&file);
+    let doc = fyo.get_doc("AccountingSettings", None).unwrap();
+    let tabs = field::form_layout(&fyo, &doc);
+    let names: Vec<&str> = tabs.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["Main", "GST"]);
+    let gst: Vec<&str> = tabs[1]
+        .sections
+        .iter()
+        .flat_map(|s| s.fields.iter().map(|f| f.fieldname.as_str()))
+        .collect();
+    assert_eq!(gst, ["gstin", "gstReturnFiling"]);
+    assert!(
+        tabs[0]
+            .sections
+            .iter()
+            .all(|s| s.fields.iter().all(|f| f.fieldname != "gstin"))
+    );
+}

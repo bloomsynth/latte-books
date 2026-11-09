@@ -239,6 +239,99 @@ fn a_report_prints() {
     assert!(printout.page_sizes()[0].0 > printout.page_sizes()[0].1);
 }
 
+/// Each run of text on the first page: where it starts (x, y), its width and its text, in
+/// points.
+fn runs(printout: &crate::Printout) -> Vec<(f64, f64, f64, String)> {
+    use typst::layout::{Frame, FrameItem, Point};
+    fn walk(frame: &Frame, at: Point, out: &mut Vec<(f64, f64, f64, String)>) {
+        for (pos, item) in frame.items() {
+            let p = at + *pos;
+            match item {
+                FrameItem::Group(group) => walk(&group.frame, p, out),
+                FrameItem::Text(text) => out.push((
+                    p.x.to_pt(),
+                    p.y.to_pt(),
+                    text.width().to_pt(),
+                    text.text.to_string(),
+                )),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&printout.document.pages()[0].frame, Point::zero(), &mut out);
+    out
+}
+
+#[test]
+fn a_wide_report_keeps_its_codes_and_amounts_whole() {
+    use crate::report::{ReportColumn, ReportPrint, print_report};
+    let column = |label: &str, align| ReportColumn {
+        label: label.to_owned(),
+        align,
+    };
+    let amount = "\u{20b9} 59,000.00";
+    let report = ReportPrint {
+        company_name: "Latte Test Co".to_owned(),
+        title: "GSTR1".to_owned(),
+        columns: vec![
+            column("GSTIN No.", "left"),
+            column("Party", "left"),
+            column("Invoice No.", "left"),
+            column("Invoice Value", "right"),
+            column("Invoice Date", "left"),
+            column("Place of supply", "left"),
+            column("Rate", "left"),
+            column("Taxable Value", "right"),
+            column("Reverse Chrg.", "left"),
+            column("Integrated Tax", "right"),
+            column("Central Tax", "right"),
+            column("State Tax", "right"),
+        ],
+        rows: vec![
+            [
+                "29ADAFS5183M1ZH",
+                "Nuvelar Motorcycles (Bangalore) Private Limited",
+                "SINV-1022",
+                amount,
+                "Sep 15, 2026",
+                "Karnataka",
+                "18",
+                amount,
+                "N",
+                "",
+                amount,
+                amount,
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        ],
+        printed: "Nov 9, 2026 15:46".to_owned(),
+        width: 21.0,
+        height: 29.7,
+    };
+    let runs = runs(&print_report(&report).unwrap());
+    let find = |text: &str| {
+        runs.iter()
+            .find(|r| r.3.starts_with(text))
+            .unwrap_or_else(|| panic!("{text}: {runs:?}"))
+    };
+    // The GSTIN ends before the party's name starts.
+    let gstin = find("29ADAFS5183M1ZH");
+    let party = find("Nuvelar");
+    assert!(gstin.0 + gstin.2 <= party.0, "{gstin:?} {party:?}");
+    // Each amount is on the line of its rupee sign.
+    let amounts: Vec<_> = runs.iter().filter(|r| r.3.contains("59,000.00")).collect();
+    assert_eq!(amounts.len(), 4, "{runs:?}");
+    for figure in amounts {
+        assert!(
+            runs.iter()
+                .any(|r| r.3.contains('\u{20b9}') && r.1 == figure.1 && r.0 <= figure.0),
+            "{figure:?}: {runs:?}"
+        );
+    }
+}
+
 /// What Print sends a printer that takes pictures: each page on white, as BGRA.
 #[test]
 fn a_page_is_drawn_for_the_printer() {

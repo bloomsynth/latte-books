@@ -430,6 +430,30 @@ impl FormPage {
         self
     }
 
+    /// Shows the tab holding `fieldname`, or the first tab. Settings shows the tabs of
+    /// AccountingSettings as tabs of its own: General, and GST for an Indian company.
+    pub fn show_tab_of(
+        &mut self,
+        fieldname: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = fieldname
+            .and_then(|name| {
+                self.tabs.iter().position(|tab| {
+                    tab.sections
+                        .iter()
+                        .any(|s| s.fields.iter().any(|f| f.fieldname == name))
+                })
+            })
+            .unwrap_or(0);
+        if tab != self.tab {
+            self.commit_typed(window, cx);
+            self.tab = tab;
+            self.refresh(window, cx);
+        }
+    }
+
     /// Saves the document if it has changes (Settings' Save).
     pub fn save_if_dirty(
         &mut self,

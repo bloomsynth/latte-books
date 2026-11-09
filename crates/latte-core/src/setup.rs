@@ -580,11 +580,15 @@ fn set_default_account(fyo: &mut Fyo, key: &str, account: &str) -> Result<bool, 
 }
 
 /// `createRegionalRecords`: India's GST taxes.
+///
+/// Not in Books: GST-40 and IGST-40, for the 40% rate of GST 2.0 (from 22 September 2025,
+/// when 5% and 18% became the main rates). The older rates stay, for the invoices made at
+/// them and for the goods still taxed at 28%.
 fn create_regional_records(country: &str, fyo: &mut Fyo) -> Result<(), Error> {
     if country != "India" {
         return Ok(());
     }
-    let rates = [28.0, 18.0, 12.0, 6.0, 5.0, 3.0, 0.25, 0.0];
+    let rates = [40.0, 28.0, 18.0, 12.0, 6.0, 5.0, 3.0, 0.25, 0.0];
     let types: [(&str, &[f64]); 4] = [
         ("GST", &rates),
         ("IGST", &rates),

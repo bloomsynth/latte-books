@@ -1,0 +1,32 @@
+{
+  "name": "AccountingSettings",
+  "fields": [
+    {
+      "fieldname": "gstin",
+      "label": "GSTIN",
+      "fieldtype": "Data",
+      "placeholder": "27AAAAA0000A1Z5",
+      "section": "Default",
+      "tab": "GST"
+    },
+    {
+      "fieldname": "gstReturnFiling",
+      "label": "Return Filing",
+      "fieldtype": "Select",
+      "options": [
+        {
+          "value": "Monthly",
+          "label": "Monthly"
+        },
+        {
+          "value": "Quarterly",
+          "label": "Quarterly (QRMP)"
+        }
+      ],
+      "default": "Monthly",
+      "description": "How often GSTR-1 is filed, as chosen on the GST portal. The GSTR reports offer months or quarters to match.",
+      "section": "Default",
+      "tab": "GST"
+    }
+  ]
+}

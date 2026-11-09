@@ -37,6 +37,8 @@ pub const GROUPS: [ShortcutGroup; 6] = [
             s(&[PMOD, "K"], "Open Quick Search"),
             s(&[SHIFT, DELETE], "Go back to the previous page"),
             s(&[SHIFT, "H"], "Toggle sidebar"),
+            // Latte's own.
+            s(&[PMOD, ","], "Open Settings"),
             s(&["F1"], "Open Documentation"),
         ],
     },

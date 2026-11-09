@@ -1,8 +1,13 @@
 // Port of src/utils/sidebarConfig.ts @ v0.36.0: the sidebar's groups and items, and which
 // of them a company's settings hide.
+//
+// Differences from Books: there is no Setup group. Chart of Accounts and Tax Templates are
+// in Common, with the other records; Import Wizard, Print Templates, Customize Form and AI
+// Assistants are a Tools group; Settings is at the sidebar's foot, with Help.
 
 use crate::fyo::Fyo;
 use crate::models::helpers::single_is_truthy;
+use crate::reports::gstr::is_gst_registered;
 
 /// Where a sidebar item goes. Books' routes, as values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +199,11 @@ pub fn sidebar(fyo: &Fyo) -> Vec<SidebarGroup> {
             Route::list("PriceList", "Price List", None),
         ));
     }
+    common.push(item("Chart of Accounts", Route::ChartOfAccounts));
+    common.push(item(
+        "Tax Templates",
+        Route::list("Tax", "Tax Templates", None),
+    ));
     groups.push(group(
         "Common",
         "common-entries",
@@ -239,22 +249,16 @@ pub fn sidebar(fyo: &Fyo) -> Vec<SidebarGroup> {
         groups.push(group("POS", "pos", Route::Pos, vec![]));
     }
 
-    let has_gstin = matches!(
-        fyo.get_value("AccountingSettings", None, "gstin"),
-        Some(latte_db::DocValue::Text(gstin)) if !gstin.is_empty()
-    );
-    if has_gstin {
+    if is_gst_registered(fyo) {
         groups.push(group(
             "GST",
             "gst",
             Route::Report("gstr-1".to_owned()),
-            vec![report("GSTR1", "gstr-1"), report("GSTR2", "gstr-2")],
+            vec![report("GSTR1", "gstr-1")],
         ));
     }
 
-    let mut setup = vec![
-        item("Chart of Accounts", Route::ChartOfAccounts),
-        item("Tax Templates", Route::list("Tax", "Tax Templates", None)),
+    let mut tools = vec![
         item("Import Wizard", Route::ImportWizard),
         item(
             "Print Templates",
@@ -262,14 +266,67 @@ pub fn sidebar(fyo: &Fyo) -> Vec<SidebarGroup> {
         ),
     ];
     if accounting("enableFormCustomization") {
-        setup.push(item(
+        tools.push(item(
             "Customize Form",
             Route::list("CustomForm", "Customize Form", None),
         ));
     }
-    setup.push(item("Settings", Route::Settings { tab: None }));
     // Latte's own (Dime): connect AI assistants to this company.
-    setup.push(item("AI Assistants", Route::AiAssistants));
-    groups.push(group("Setup", "settings", Route::ChartOfAccounts, setup));
+    tools.push(item("AI Assistants", Route::AiAssistants));
+    groups.push(group("Tools", "settings", Route::ImportWizard, tools));
     groups
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setup_tests::{TempFile, indian_company};
+    use crate::tests::{map, text};
+
+    fn items<'a>(groups: &'a [SidebarGroup], label: &str) -> Vec<&'a str> {
+        groups
+            .iter()
+            .find(|g| g.label == label)
+            .map(|g| g.items.iter().map(|i| i.label.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn setup_is_in_common_and_tools_and_settings_is_at_the_foot() {
+        let file = TempFile::new("sidebar");
+        let mut fyo = indian_company(&file);
+        let groups = sidebar(&fyo);
+        let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
+        assert!(!labels.contains(&"Setup"));
+        assert_eq!(labels.last(), Some(&"Tools"));
+        assert_eq!(
+            items(&groups, "Common"),
+            [
+                "Journal Entry",
+                "Party",
+                "Items",
+                "Chart of Accounts",
+                "Tax Templates"
+            ]
+        );
+        assert_eq!(
+            items(&groups, "Tools"),
+            ["Import Wizard", "Print Templates", "AI Assistants"]
+        );
+        let settings = groups
+            .iter()
+            .flat_map(|g| &g.items)
+            .any(|i| matches!(i.route, Route::Settings { .. }));
+        assert!(!settings);
+
+        // The GST returns, once the company has a GSTIN.
+        assert!(!labels.contains(&"GST"));
+        fyo.db
+            .update(
+                "AccountingSettings",
+                &map([("gstin", text("29AABCA1234A1Z5"))]),
+            )
+            .unwrap();
+        assert_eq!(items(&sidebar(&fyo), "GST"), ["GSTR1"]);
+    }
 }

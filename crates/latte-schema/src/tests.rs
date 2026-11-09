@@ -264,6 +264,48 @@ fn regional_schemas_override_app_schemas() {
     assert!(swiss["Party"].field("gstin").is_none());
 }
 
+#[test]
+fn indias_gst_settings_are_on_a_gst_tab() {
+    let india = get_schemas("in", &[]).unwrap();
+    let settings = &india["AccountingSettings"];
+    let gstin = settings.field("gstin").unwrap();
+    assert_eq!(gstin.label.as_deref(), Some("GSTIN"));
+    assert_eq!(gstin.tab.as_deref(), Some("GST"));
+    let filing = settings.field("gstReturnFiling").unwrap();
+    assert_eq!(filing.tab.as_deref(), Some("GST"));
+    assert_eq!(filing.default, Some(RawValue::Text("Monthly".into())));
+    let options: Vec<(&str, &str)> = filing
+        .options
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|o| (o.value.as_str(), o.label.as_str()))
+        .collect();
+    assert_eq!(
+        options,
+        [("Monthly", "Monthly"), ("Quarterly", "Quarterly (QRMP)")]
+    );
+    // Books' own keys of the schema stay.
+    assert!(
+        settings
+            .quick_edit_fields
+            .as_ref()
+            .unwrap()
+            .contains(&"gstin".to_owned())
+    );
+    // The other fields keep their tab.
+    assert_eq!(settings.field("companyName").unwrap().tab, None);
+
+    for country in ["-", "ch"] {
+        let schemas = get_schemas(country, &[]).unwrap();
+        assert!(
+            schemas["AccountingSettings"]
+                .field("gstReturnFiling")
+                .is_none()
+        );
+    }
+}
+
 fn custom(parent: &str, fieldname: &str) -> RawCustomField {
     RawCustomField {
         parent: parent.into(),

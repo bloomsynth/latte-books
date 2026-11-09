@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use latte_db::{DocValueMap, FieldValue, GetAllOptions, Order, RawValue};
 
 use crate::fyo::model::helpers::js_number_string;
-use crate::models::helpers::{single_is_truthy, single_text};
+use crate::models::helpers::single_is_truthy;
 use crate::reports::REPORTS;
 use crate::views::list::create_values;
 use crate::views::sidebar::Route;
@@ -836,7 +836,7 @@ fn create_list(fyo: &Fyo) -> Vec<SearchItem> {
 
 /// `getReportList`: inventory reports only with inventory on, GST ones only with a GSTIN.
 fn report_list(fyo: &Fyo) -> Vec<SearchItem> {
-    let has_gstin = single_text(fyo, "AccountingSettings", "gstin").is_some();
+    let has_gstin = crate::reports::gstr::is_gst_registered(fyo);
     let has_inventory = single_is_truthy(fyo, "AccountingSettings", "enableInventory");
     REPORTS
         .iter()

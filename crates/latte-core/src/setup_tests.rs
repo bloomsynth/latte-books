@@ -83,8 +83,11 @@ fn setting_up_an_indian_company_makes_what_books_makes() {
             .get("parentAccount"),
         Some(&DocValue::Text("Bank Accounts".into()))
     );
-    assert_eq!(count(&fyo, "Tax"), 18);
-    assert_eq!(count(&fyo, "TaxDetail"), 26);
+    // Books' 18, and GST-40 and IGST-40.
+    assert_eq!(count(&fyo, "Tax"), 20);
+    assert_eq!(count(&fyo, "TaxDetail"), 29);
+    assert!(fyo.db.exists("Tax", Some("GST-40")).unwrap());
+    assert!(fyo.db.exists("Tax", Some("IGST-40")).unwrap());
     assert_eq!(count(&fyo, "Currency"), 147);
     assert_eq!(count(&fyo, "UOM"), 6);
     assert_eq!(count(&fyo, "PaymentMethod"), 3);

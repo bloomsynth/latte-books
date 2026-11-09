@@ -189,6 +189,15 @@ pub trait Report {
     fn export_json(&self, _fyo: &Fyo) -> Option<Result<String, Error>> {
         None
     }
+    /// Latte's own: a line shown under the filters, such as when a GSTR-1 is due.
+    fn note(&self, _fyo: &Fyo, _formatter: &Formatter) -> Option<String> {
+        None
+    }
+    /// Latte's own: the name the exports are saved as, without its extension, for a
+    /// report that names them; else they are named by `reportName`.
+    fn file_name(&self, _fyo: &Fyo) -> Option<String> {
+        None
+    }
 }
 
 /// `getCsvData`: the columns' labels, then a line per row, as RFC 4180 CSV with CRLF line
@@ -324,14 +333,13 @@ pub fn get_report(report_name: &str) -> Option<Box<dyn Report>> {
         "trial-balance" => Box::new(trial_balance::TrialBalance::default()),
         "stock-ledger" => Box::new(stock_ledger::StockLedger::default()),
         "stock-balance" => Box::new(stock_balance::StockBalance::default()),
-        "gstr-1" => Box::new(gstr::Gstr::new(gstr::GstrType::Gstr1)),
-        "gstr-2" => Box::new(gstr::Gstr::new(gstr::GstrType::Gstr2)),
+        "gstr-1" => Box::new(gstr::Gstr::new()),
         _ => return None,
     })
 }
 
 /// The reports Latte has, as `(reportName, title)`, in Books' order.
-pub const REPORTS: [(&str, &str); 8] = [
+pub const REPORTS: [(&str, &str); 7] = [
     ("general-ledger", "General Ledger"),
     ("profit-and-loss", "Profit And Loss"),
     ("balance-sheet", "Balance Sheet"),
@@ -339,5 +347,4 @@ pub const REPORTS: [(&str, &str); 8] = [
     ("stock-ledger", "Stock Ledger"),
     ("stock-balance", "Stock Balance"),
     ("gstr-1", "GSTR1"),
-    ("gstr-2", "GSTR2"),
 ];

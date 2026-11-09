@@ -46,6 +46,8 @@ const SOURCE: &str = r##"
 ])
 #let n = data.columns.len()
 #let aligns = data.columns.map(c => if c.align == "right" { right } else if c.align == "center" { center } else { left })
+// An amount keeps its symbol: the spaces of a right-aligned value don't break.
+#let rows = data.rows.map(row => row.enumerate().map(((c, v)) => if aligns.at(c, default: left) == right { v.replace(" ", "\u{a0}") } else { v }))
 #let cell(c, r, value) = grid.cell(
   align: aligns.at(c),
   stroke: (top: border, left: if c > 0 { border }),
@@ -53,21 +55,35 @@ const SOURCE: &str = r##"
   text(size: px(12), weight: if r == 0 { "semibold" } else { "regular" }, value),
 )
 // `repeat(n, minmax(0, auto))`: each column as wide as its widest cell, and what is
-// left of the page shared out between them, as a CSS grid stretches auto tracks.
+// left of the page shared out between them, as a CSS grid stretches auto tracks. When
+// the page is too narrow, each column keeps the width of its longest word, so a GSTIN
+// or an amount isn't cut, and the rest of the page goes to the columns that wrap.
 #layout(size => context {
-  let natural = range(n).map(c => {
-    calc.max(
-      measure(text(size: px(12), weight: "semibold", data.columns.at(c).label)).width,
-      // The first rows are enough to size a column, and keep a long ledger quick.
-      ..data.rows.slice(0, calc.min(100, data.rows.len())).map(row => measure(text(size: px(12), row.at(c, default: ""))).width),
-    ) + px(16) + 1pt
-  })
+  let width(v, weight) = measure(text(size: px(12), weight: weight, v)).width
+  let longest(v, weight) = calc.max(0pt, ..v.split(" ").map(w => width(w, weight)))
+  // The first rows are enough to size a column, and keep a long ledger quick.
+  let sample = rows.slice(0, calc.min(100, rows.len()))
+  let pad = px(16) + 1pt
+  let natural = range(n).map(c => calc.max(
+    width(data.columns.at(c).label, "semibold"),
+    ..sample.map(row => width(row.at(c, default: ""), "regular")),
+  ) + pad)
+  let least = range(n).map(c => calc.max(
+    longest(data.columns.at(c).label, "semibold"),
+    ..sample.map(row => longest(row.at(c, default: ""), "regular")),
+  ) + pad)
   let free = size.width - natural.sum(default: 0pt)
-  let columns = if free > 0pt and n > 0 { natural.map(w => w + free / n) } else { (auto,) * n }
+  let room = size.width - least.sum(default: 0pt)
+  let wanted = range(n).map(c => natural.at(c) - least.at(c))
+  let columns = if n == 0 { () } else if free >= 0pt {
+    natural.map(w => w + free / n)
+  } else if room > 0pt and wanted.sum() > 0pt {
+    range(n).map(c => least.at(c) + wanted.at(c) * (room / wanted.sum()))
+  } else { least }
   grid(
   columns: columns,
   ..data.columns.enumerate().map(((c, col)) => cell(c, 0, col.label)),
-  ..data.rows.enumerate().map(((r, row)) => row.enumerate().map(((c, v)) => cell(c, r + 1, v))).flatten(),
+  ..rows.enumerate().map(((r, row)) => row.enumerate().map(((c, v)) => cell(c, r + 1, v))).flatten(),
   )
 })
 #block(width: 100%, inset: px(8), stroke: (top: border), align(right, text(size: px(11), data.printed)))

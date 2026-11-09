@@ -528,9 +528,16 @@ fn filter_kind(kind: &FilterKind) -> Value {
     }
 }
 
+/// Whether the company has a report, as the app shows it: GSTR-1 only for a
+/// company registered for GST, one with a GSTIN.
+fn has_report(fyo: &Fyo, name: &str) -> bool {
+    !name.starts_with("gstr-") || reports::gstr::is_gst_registered(fyo)
+}
+
 fn list_reports(fyo: &Fyo) -> Outcome {
     let list: Vec<Value> = reports::REPORTS
         .iter()
+        .filter(|(name, _)| has_report(fyo, name))
         .filter_map(|(name, title)| {
             let report = reports::get_report(name)?;
             let filters: Vec<Value> = report
@@ -554,6 +561,11 @@ fn list_reports(fyo: &Fyo) -> Outcome {
 fn run_report(fyo: &Fyo, name: &str, filters: Option<&Value>) -> Outcome {
     let mut report =
         reports::get_report(name).ok_or_else(|| format!("There's no report \"{name}\""))?;
+    if !has_report(fyo, name) {
+        return Err(format!(
+            "{name} is for a company registered for GST, and this one has no GSTIN; it can be set in Settings, under GST"
+        ));
+    }
     let known = report.filters(fyo);
     if let Some(Value::Object(given)) = filters {
         for (fieldname, value) in given {
