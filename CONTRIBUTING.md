@@ -39,7 +39,8 @@ porting principle in [docs/PLAN.md](docs/PLAN.md).
 You need [rustup](https://rustup.rs/); `rust-toolchain.toml` pins the Rust version. On
 Windows, build from PowerShell or a Developer Command Prompt so the MSVC linker is used.
 
-Before you open a pull request, run what CI runs:
+Before you open a pull request, run what CI runs. CI checks the formatting and clippy on
+Windows, macOS and Linux, and runs the tests on Linux:
 
 ```sh
 cargo fmt --all --check

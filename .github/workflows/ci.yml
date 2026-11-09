@@ -29,4 +29,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # On Linux only: the tests check the accounting, which is the same on every system,
+      # and they take 24 minutes on the Windows runner against under a minute on Linux.
+      # Clippy above still compiles each system's own code.
+      - if: runner.os == 'Linux'
+        run: cargo test --workspace
