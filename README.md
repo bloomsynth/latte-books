@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <strong>0.8 s</strong> to open a company &nbsp;·&nbsp; <strong>18 MB</strong> of memory &nbsp;·&nbsp; <strong>25 MB</strong> to download
+  <strong>Starts in under a second</strong> &nbsp;·&nbsp; <strong>Uses less memory than a browser tab</strong> &nbsp;·&nbsp; <strong>A 25 MB download</strong>
 </p>
 
 <p align="center">
