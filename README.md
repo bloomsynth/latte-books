@@ -43,8 +43,7 @@
   in plain words, from the AI assistant you already use. It asks you before anything is
   posted to your accounts. Connect one in a click:
   - <img src="docs/images/assistants/claude.svg" alt="" height="14" align="absmiddle"> Claude
-  - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/chatgpt-dark.svg"><img src="docs/images/assistants/chatgpt-light.svg" alt="" height="14" align="absmiddle"></picture> ChatGPT
-  - <img src="docs/images/assistants/codex.svg" alt="" height="14" align="absmiddle"> Codex
+  - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/chatgpt-dark.svg"><img src="docs/images/assistants/chatgpt-light.svg" alt="" height="14" align="absmiddle"></picture> ChatGPT and <img src="docs/images/assistants/codex.svg" alt="" height="14" align="absmiddle"> Codex
   - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/cursor-dark.svg"><img src="docs/images/assistants/cursor-light.svg" alt="" height="14" align="absmiddle"></picture> Cursor
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
   the reports your accountant asks for, in one app.
