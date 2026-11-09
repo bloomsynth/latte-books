@@ -5,6 +5,12 @@ here.
 
 ## [Unreleased]
 
+- **Updates:** Latte Books checks for a new version when it starts and once a day. A
+  newer one shows at the foot of the sidebar, with its notes, and **Update and Restart**
+  installs it and opens the app again. Each update is checked against Latte Books' signing
+  key before it's installed. Turn checking off, or check now, in Settings → System. The
+  .deb links to the release instead, and versions up to 0.1.0-beta.3 need this one
+  installed by hand.
 - AI Assistants lists **ChatGPT Codex**: ChatGPT and Codex share one setup, so Connect
   makes Latte Books available in the ChatGPT desktop app's Codex and Work chats as well as
   Codex. It shows as found when either is installed.

@@ -2,6 +2,11 @@
 # with checksums and the tag's notes from CHANGELOG.md. Run it by hand (Actions → Release →
 # Run workflow) to build the installers without releasing; they're kept as the run's
 # artifacts. The installers aren't signed yet (docs/PLAN.md §6).
+#
+# Updates: with the CARGO_PACKAGER_SIGN_PRIVATE_KEY and _PASSWORD secrets set, cargo-packager
+# signs what the app updates itself with (Windows' installer, macOS' app as a .tar.gz, the
+# AppImage), and the release gets latest.json, which the app reads from
+# releases/latest/download/latest.json (crates/latte-ui/src/updater.rs).
 name: Release
 
 on:
@@ -23,7 +28,8 @@ jobs:
             formats: nsis
           - os: macos-latest
             name: macos
-            formats: dmg
+            # app: the app bundle on its own, which updates are made from.
+            formats: app,dmg
           # The oldest Ubuntu runner, so the .deb and AppImage run on older glibc too.
           - os: ubuntu-22.04
             name: linux
@@ -58,6 +64,24 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --version 0.11.8 --locked
 
+      # A release needs the key, or installs couldn't update to it. A run by hand, or a
+      # fork's, can go without: its installers just can't be offered as updates.
+      - name: Use the update signing key
+        shell: bash
+        env:
+          KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "CARGO_PACKAGER_SIGN_PRIVATE_KEY=$KEY" >> "$GITHUB_ENV"
+            echo "CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "::error::The CARGO_PACKAGER_SIGN_PRIVATE_KEY secret isn't set, so this release couldn't be offered as an update"
+            exit 1
+          else
+            echo "::warning::No update signing key: this build can't be offered as an update"
+          fi
+
       - name: Make installers
         # The AppImage tools need FUSE, which runners don't have.
         env:
@@ -77,6 +101,8 @@ jobs:
             target/packages/*.dmg
             target/packages/*.deb
             target/packages/*.AppImage
+            target/packages/*.app.tar.gz
+            target/packages/*.sig
 
   release:
     needs: package
@@ -95,23 +121,22 @@ jobs:
           merge-multiple: true
 
       # The same names in every release, so the README's download buttons can link to
-      # releases/latest/download/<name>. The version is in the release's title.
-      - name: Name the installers and write checksums
+      # releases/latest/download/<name>. The version is in the release's title. Each
+      # update file keeps its signature beside it; the .dmg and .deb aren't updates.
+      - name: Name the installers
         working-directory: dist
         run: |
           ls -l
+          mv *.exe.sig Latte-Books-Windows-x64-Setup.exe.sig
           mv *.exe Latte-Books-Windows-x64-Setup.exe
+          mv *.app.tar.gz.sig Latte-Books-macOS-arm64.app.tar.gz.sig
+          mv *.app.tar.gz Latte-Books-macOS-arm64.app.tar.gz
+          mv *.AppImage.sig Latte-Books-Linux-x86_64.AppImage.sig
+          mv *.AppImage Latte-Books-Linux-x86_64.AppImage
+          rm -f *.dmg.sig *.deb.sig
           mv *.dmg Latte-Books-macOS-arm64.dmg
           mv *.deb Latte-Books-Linux-amd64.deb
-          mv *.AppImage Latte-Books-Linux-x86_64.AppImage
-          sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      # Lets anyone check an installer was built here from this commit:
-      # gh attestation verify <file> --repo bloomsynth/latte-books
-      - uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: dist/*
+          ls -l
 
       # The notes are this version's section of CHANGELOG.md.
       - name: Write the release notes
@@ -137,6 +162,57 @@ jobs:
             exit 1
           fi
           cat notes.md
+
+      # What the app checks for updates: the version, these notes, and each system's file
+      # with its signature.
+      - name: Write latest.json
+        working-directory: dist
+        run: |
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          sig() { tr -d '\r\n' < "$1"; }
+          jq -n \
+            --arg version "${GITHUB_REF_NAME#v}" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --rawfile notes ../notes.md \
+            --arg base "$base" \
+            --arg windows "$(sig Latte-Books-Windows-x64-Setup.exe.sig)" \
+            --arg macos "$(sig Latte-Books-macOS-arm64.app.tar.gz.sig)" \
+            --arg linux "$(sig Latte-Books-Linux-x86_64.AppImage.sig)" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $date,
+              platforms: {
+                "windows-x86_64": {
+                  url: "\($base)/Latte-Books-Windows-x64-Setup.exe",
+                  signature: $windows,
+                  format: "nsis"
+                },
+                "macos-aarch64": {
+                  url: "\($base)/Latte-Books-macOS-arm64.app.tar.gz",
+                  signature: $macos,
+                  format: "app"
+                },
+                "linux-x86_64": {
+                  url: "\($base)/Latte-Books-Linux-x86_64.AppImage",
+                  signature: $linux,
+                  format: "appimage"
+                }
+              }
+            }' > latest.json
+          cat latest.json
+
+      - name: Write checksums
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Lets anyone check an installer was built here from this commit:
+      # gh attestation verify <file> --repo bloomsynth/latte-books
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
 
       - uses: softprops/action-gh-release@v3
         with:

@@ -15,6 +15,9 @@
 //! starts with Settings, which Ctrl+, (⌘,) opens too. Books has Settings in the Setup group,
 //! which Latte doesn't have (`latte_core::views::sidebar`).
 //!
+//! Not in Books: a newer version of Latte Books shows under the version, and opens the
+//! update dialog (`crate::updater`).
+//!
 //! Not in Books: every two seconds the desk looks for changes another device, such as an AI
 //! assistant, wrote to the file, and shows the page again when it may show them.
 //!
@@ -632,7 +635,21 @@ impl Desk {
                             .text_12()
                             .text_color(pick(raw_gray(500), raw_gray(600)))
                             .child(format!("v{}", latte_core::VERSION)),
-                    ),
+                    )
+                    // Not in Books: a newer version to update to (`crate::updater`).
+                    .children(crate::updater::sidebar_notice(cx).map(|(text, open)| {
+                        div()
+                            .id("update-notice")
+                            .text_12()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(books::color("blue", 500))
+                            .when(open, |d| {
+                                d.cursor_pointer()
+                                    .hover(|d| d.underline())
+                                    .on_click(|_, _, cx| crate::updater::open_dialog(cx))
+                            })
+                            .child(text)
+                    })),
             )
             .child(
                 div()

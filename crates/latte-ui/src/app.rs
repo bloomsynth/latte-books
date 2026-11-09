@@ -142,6 +142,8 @@ impl Render for LatteApp {
             // The browser's 16px, which Books' unstyled text keeps.
             .text_size(px(16.))
             .child(screen)
+            // Not in Books: the update dialog (`crate::updater`).
+            .children(crate::updater::dialog_element(window, cx))
             // `#toast-container`.
             .children(crate::widgets::toasts(window, cx))
     }

@@ -76,8 +76,8 @@ latte-books/
 │  ├─ latte-i18n/     CSV translation loader, number/date/currency formatting
 │  ├─ latte-print/    Typst rendering of invoices, payments and shipments
 │  ├─ latte-regional/ Country modules: `in` (GST, GSTR-1/2), `ch`, …
-│  ├─ latte-ui/       GPUI screens and components (depends on gpui-kit)
-│  └─ latte-app/      main(): startup, window, menus, file open, updater
+│  ├─ latte-ui/       GPUI screens and components (depends on gpui-kit), updater
+│  └─ latte-app/      main(): startup, window, menus, file open
 ├─ vendor/books/      Files taken from Frappe Books (schemas, fixtures, translations,
 │                     templates), with their original copyright notices
 ├─ tools/parity/      Scripts comparing Latte Books output with Frappe Books
@@ -277,6 +277,8 @@ CI runs the parity suite on every PR. Any difference fails the build.
 - Printing: port the `Basic`, `Business` and `Minimal` templates to Typst, then PDF and print.
 - Translations: language switcher with the existing CSVs.
 - Packaging: signed installers for Windows and macOS, AppImage/deb; auto-update.
+  *Auto-update built 2026-11-10 (`latte-ui/src/updater.rs`): cargo-packager's updater reads
+  `latest.json` from GitHub's newest release, which the release workflow writes and signs.*
 - **Exit: public beta.** An existing Books user can open their file and do daily invoicing,
   payments and reports.
 

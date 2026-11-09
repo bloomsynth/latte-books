@@ -34,6 +34,7 @@ mod settings;
 mod setup_wizard;
 mod shortcuts;
 mod template_builder;
+mod updater;
 mod widgets;
 
 use gpui_kit::*;
@@ -68,6 +69,7 @@ pub fn run() {
             i18n::load();
             gpui_kit::init(cx);
             books::init(cx);
+            updater::init(cx);
             let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

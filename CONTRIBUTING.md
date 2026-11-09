@@ -77,6 +77,13 @@ cargo packager --release -p latte-app
 To try AI assistants from a build, run `cargo build` first so `latte-mcp` sits next to
 `latte-books`.
 
+A debug build doesn't check for updates. To try the updater, point it at a `latest.json`
+of your own, such as one served from a folder with `python -m http.server`:
+
+```sh
+LATTE_UPDATE_ENDPOINT=http://localhost:8000/latest.json cargo run -p latte-app
+```
+
 Startup can be timed against Frappe Books as [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 describes. The Phase 0 prototypes are in `spikes`, each with its results.
 
@@ -140,6 +147,12 @@ For maintainers. `.github/workflows/release.yml` does the building.
    attestations. It's never marked as a pre-release, even for a beta, since the README's
    download buttons link to the latest release, which skips pre-releases. Download an
    installer, try it, then publish the draft.
+6. Publishing it is what offers the update: the app reads `latest.json` from the latest
+   release. The workflow signs the update files with the `CARGO_PACKAGER_SIGN_PRIVATE_KEY`
+   and `CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD` secrets, whose public key is in
+   `crates/latte-ui/src/updater.rs`. A tag without them stops the workflow; a run by hand
+   only warns. Keep the private key backed up: installs can only verify updates signed
+   with it.
 
 By contributing you agree that your work is licensed under the
 [AGPL-3.0](LICENSE), like the rest of Latte Books.

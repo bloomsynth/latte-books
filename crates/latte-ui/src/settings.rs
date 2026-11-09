@@ -10,6 +10,8 @@
 //! - There is no ERPNext Sync tab.
 //! - The company's name can be changed in General; the window title and the recent files
 //!   follow it.
+//! - System has Updates: whether Latte Books checks GitHub for a newer version, and Check
+//!   Now (`crate::updater`).
 //! - System's Version is Latte Books' own; the Frappe Books version the file is kept at is
 //!   under Compatibility, at the end (`latte_core::views::field::form_layout`).
 //! - An Indian company has a GST tab: the GSTIN, which Books has in General, and Return
@@ -263,6 +265,72 @@ impl SettingsPage {
             })
     }
 
+    /// Not in Books: System's Updates, which Latte keeps in its config, not in the file
+    /// (`crate::updater`).
+    fn updates(&self, cx: &mut Context<Self>) -> Div {
+        let on = crate::updater::enabled();
+        let status = crate::updater::status_text(cx);
+        let available = matches!(
+            crate::updater::state(cx),
+            crate::updater::State::Available(_)
+        );
+        div()
+            .v_flex()
+            .p_4()
+            .gap_2()
+            .border_t_1()
+            .border_color(gray(200))
+            .child(
+                div()
+                    .text_13()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gray(900))
+                    .child(t("Updates")),
+            )
+            .child(
+                div()
+                    .id("check-for-updates")
+                    .h_flex()
+                    .gap_2()
+                    .cursor_pointer()
+                    .child(crate::widgets::check_box(on))
+                    .child(
+                        div()
+                            .text_13()
+                            .text_color(gray(800))
+                            .child(t("Check for updates")),
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        crate::updater::set_enabled(!on, cx);
+                        cx.notify();
+                    })),
+            )
+            .child(div().text_12().text_color(gray(600)).child(t(
+                "When Latte Books starts and once a day, it asks GitHub, where its releases are,                  for a newer version. Nothing else is sent.",
+            )))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("check-now")
+                            .label(t("Check Now"))
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                crate::updater::check_now(cx);
+                                cx.notify();
+                            })),
+                    )
+                    .when(available, |d| {
+                        d.child(
+                            Button::new("update-now")
+                                .label(t("Update"))
+                                .on_click(|_, _, cx| crate::updater::open_dialog(cx)),
+                        )
+                    }),
+            )
+            .children(status.map(|status| div().text_12().text_color(gray(700)).child(status)))
+    }
+
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let company = self.session.borrow().company_name();
         let mut errors = Vec::new();
@@ -379,7 +447,8 @@ impl Render for SettingsPage {
                     .min_h_0()
                     .overflow_y_scroll()
                     .children(self.forms.get(self.schema()).cloned())
-                    .when(self.tab == GST, |d| d.child(self.tax_templates(cx))),
+                    .when(self.tab == GST, |d| d.child(self.tax_templates(cx)))
+                    .when(self.tab == "SystemSettings", |d| d.child(self.updates(cx))),
             )
             .children(tab_bar);
 

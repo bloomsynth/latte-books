@@ -20,3 +20,5 @@ base64 = "0.23"
 fastrand.workspace = true
 jiff.workspace = true
 serde_json.workspace = true
+# Updates from GitHub Releases (src/updater.rs), as cargo-packager packages them.
+cargo-packager-updater = "0.2.3"
