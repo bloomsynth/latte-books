@@ -42,7 +42,7 @@
   company opens in under a second, in 18 MB of memory.
 - **Built for AI.** Connect Claude, Codex or Cursor in one click, and ask your books
   questions, draft invoices or record a month of bills in plain words. The assistant
-  works under the same rules as you do, and asks before anything is posted.
+  asks you before anything is posted to your accounts.
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
   the reports your accountant asks for, in one app.
 - **Your books, on your computer.** Each company is a single file you own. There's no
@@ -84,8 +84,8 @@ Cursor, and talk to your books:
 
 You stay in charge:
 
-- **The same checks as the app.** Every change an assistant makes goes through the rules
-  a person's would. It can't save what you couldn't.
+- **No shortcuts.** The assistant can only do what the app lets you do. It can't save an
+  invoice with details missing, or a journal entry that doesn't balance.
 - **Drafts first.** New documents are saved as drafts for you to look over, and the
   assistant asks before it submits anything to your accounts.
 - **Your assistant, your choice.** Latte Books runs no AI of its own and has no AI fees.
