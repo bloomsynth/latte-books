@@ -24,7 +24,7 @@ impl Kind {
         match self {
             Self::ClaudeDesktop => "Claude Desktop",
             Self::ClaudeCode => "Claude Code",
-            Self::Codex => "ChatGPT and Codex",
+            Self::Codex => "ChatGPT Codex",
             Self::Cursor => "Cursor",
         }
     }
@@ -354,7 +354,7 @@ mod tests {
     /// ChatGPT's desktop app reads Codex's config, so the one entry is for both.
     #[test]
     fn chatgpt_is_connected_through_codex() {
-        assert_eq!(Kind::Codex.name(), "ChatGPT and Codex");
+        assert_eq!(Kind::Codex.name(), "ChatGPT Codex");
         let codex = all().into_iter().find(|a| a.kind == Kind::Codex);
         if let Some(codex) = codex {
             assert!(codex.config.ends_with("config.toml"));
