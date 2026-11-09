@@ -127,6 +127,32 @@ fn a_company_without_gstin_prints() {
     }
 }
 
+/// The self-invoice for a purchase under the reverse charge, in both its layouts, and
+/// the message it prints for a purchase with none.
+#[test]
+fn the_self_invoice_prints() {
+    let source = include_str!("templates/self_invoice.typ");
+    let charge = |integrated: bool| {
+        json!({
+            "rows": [{ "item": "Claude subscription", "hsnCode": "998315",
+                "value": "₹ 1,000.00", "rate": "18%", "igst": "₹ 180.00",
+                "cgst": "₹ 90.00", "sgst": "₹ 90.00" }],
+            "value": "₹ 1,000.00", "igst": "₹ 180.00", "cgst": "₹ 90.00",
+            "sgst": "₹ 90.00", "tax": "₹ 180.00", "integrated": integrated,
+            "import": integrated, "placeOfSupply": "29-Karnataka",
+        })
+    };
+    for integrated in [true, false] {
+        let mut values = values("PurchaseInvoice");
+        values["doc"]["reverseCharge"] = charge(integrated);
+        values["print"]["gstin"] = json!("29AABCA1234A1Z5");
+        let printout = render(source, &values, (21.0, 29.7), &t)
+            .unwrap_or_else(|e| panic!("{integrated}: {}", crate::errors_text(&e)));
+        assert_eq!(printout.page_count(), 1);
+    }
+    assert!(render(source, &values("PurchaseInvoice"), (21.0, 29.7), &t).is_ok());
+}
+
 #[test]
 fn errors_say_where_in_the_template() {
     let source = "#import \"/latte.typ\": *\n#show: setup\n\nHello #doc.nam\n";

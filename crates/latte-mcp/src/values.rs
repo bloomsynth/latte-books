@@ -148,6 +148,10 @@ pub fn field_value(field: &Field, value: &Value, pesa: &MoneyMaker) -> Result<Do
             DocValue::Date(timestamp)
         }
         (_, Value::String(text)) => DocValue::Text(text.clone()),
+        // A number for a text field, such as an item's HSN/SAC code, is its digits.
+        (Some(FieldType::Data | FieldType::Text), Value::Number(n)) => {
+            DocValue::Text(n.to_string())
+        }
         (_, Value::Number(n)) => DocValue::Number(n.as_f64().unwrap_or_default()),
         (_, Value::Bool(b)) => DocValue::Bool(*b),
         _ => return Err(format!("{label}: give a text, number or true/false")),
@@ -254,5 +258,20 @@ mod tests {
 
         let read = to_doc_value(&raw, &field, &pesa).unwrap();
         assert_eq!(value_json(&read, field.fieldtype), json!("2025-04-01"));
+    }
+
+    /// An assistant may give a code such as an HSN/SAC as a number; a text field keeps it
+    /// as its digits.
+    #[test]
+    fn a_number_for_a_text_field_is_kept_as_its_digits() {
+        let schemas = get_schemas("in", &[]).unwrap();
+        let field = schemas["Item"].field("hsnCode").unwrap().clone();
+        let pesa = MoneyMaker {
+            currency: "INR".into(),
+            precision: 11,
+            display: 2,
+        };
+        let value = field_value(&field, &json!(998315), &pesa).unwrap();
+        assert_eq!(value, latte_db::DocValue::Text("998315".into()));
     }
 }

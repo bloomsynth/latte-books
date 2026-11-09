@@ -66,7 +66,7 @@ const UQCS: [&str; 45] = [
 
 /// How a row is taxed, from its tax's accounts.
 #[derive(Clone, Copy)]
-enum RowKind {
+pub(super) enum RowKind {
     /// GST at a rate, as central and state tax, or as integrated tax. At 0% it is nil
     /// rated.
     Gst {
@@ -81,7 +81,7 @@ enum RowKind {
 }
 
 impl RowKind {
-    fn rate(self) -> f64 {
+    pub(super) fn rate(self) -> f64 {
         match self {
             Self::Gst {
                 cgst, sgst, igst, ..
@@ -239,7 +239,7 @@ fn uqc(unit: &str) -> &'static str {
 }
 
 /// How the tax `name` taxes a row, or `None` if it has no GST account.
-fn row_kind(fyo: &Fyo, name: &str) -> Result<Option<RowKind>, Error> {
+pub(super) fn row_kind(fyo: &Fyo, name: &str) -> Result<Option<RowKind>, Error> {
     let tax = fyo.db.get_doc("Tax", name)?;
     let Some(DocValue::Table(details)) = tax.get("details") else {
         return Ok(None);

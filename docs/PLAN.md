@@ -293,7 +293,8 @@ CI runs the parity suite on every PR. Any difference fails the build.
   Ledger and Stock Balance reports are in `latte_core::reports`. Eight Books bugs are
   fixed (see BOOKS-BUGS.md). The barcode scanner and the inventory list filters aren't
   ported yet. Not yet checked against Books by hand.*
-- India: GSTIN fields, GST types, state codes, the GSTR-1 report (GSTR-2 is left out, see DEVIATIONS.md).
+- India: GSTIN fields, GST types, state codes, the GSTR-1 report (GSTR-2 is left out, see
+  DEVIATIONS.md); Latte's own GSTR-3B summary, reverse charge and self-invoice.
 - Switzerland regional fields.
 - Point of Sale: profiles, shifts, checkout, barcodes.
 - Pricing rules, price lists, coupons, loyalty programs, leads, quotes.

@@ -8,8 +8,10 @@ use serde_json::{Value, json};
 use crate::fyo::format::Formatter;
 use crate::fyo::model::types::DocContext;
 use crate::models::base_models::invoice::get_return_doc;
-use crate::reports::gstr::{Filing, Gstr, Period};
-use crate::reports::{FilterValue, Report};
+use crate::models::helpers;
+use crate::models::invoice_tests::{posting, postings};
+use crate::reports::gstr::{Filing, Gstr, Gstr3b, Period, reverse_charge};
+use crate::reports::{FilterValue, RawValue, Report};
 use crate::setup_tests::{TempFile, indian_company};
 use crate::tests::{map, text};
 use crate::{Doc, Fyo};
@@ -327,7 +329,8 @@ fn gstr_1_lists_each_sale_with_its_gst_once() {
     report.run(&fyo, &formatter).unwrap();
     assert_eq!(report.rows.len(), 1);
     assert_eq!(report.rows[0].party_name, "Walk In");
-    assert_eq!(report.rows[0].reverse_charge, "Y");
+    // Books says Y for a buyer without a GSTIN, which is no reverse charge.
+    assert_eq!(report.rows[0].reverse_charge, "N");
     let json: serde_json::Value =
         serde_json::from_str(&report.export_json(&fyo).unwrap().unwrap()).unwrap();
     assert_eq!(
@@ -935,5 +938,259 @@ fn gstr_1_for_a_quarter_is_filed_for_its_last_month() {
     assert_eq!(
         report.file_name(&fyo).as_deref(),
         Some("GSTR1_29AABCA1234A1Z5_2026-10-01_2026-10-15")
+    );
+}
+
+/// A supplier, with an address in the country if any.
+fn supplier(fyo: &mut Fyo, name: &str, gstin: Option<&str>, country: Option<&str>) {
+    let mut values = map([("name", text(name)), ("role", text("Supplier"))]);
+    if let Some(gstin) = gstin {
+        values.insert("gstType".into(), text("Registered Regular"));
+        values.insert("gstin".into(), text(gstin));
+    } else {
+        values.insert("gstType".into(), text("Unregistered"));
+    }
+    if let Some(country) = country {
+        let address = map([
+            ("addressLine1", text("1 Market Street")),
+            ("city", text("San Francisco")),
+            ("country", text(country)),
+        ]);
+        let mut address = fyo.get_new_doc("Address", address).unwrap();
+        address.sync(fyo).unwrap();
+        values.insert("address".into(), address.get("name").cloned().unwrap());
+    }
+    fyo.get_new_doc("Party", values).unwrap().sync(fyo).unwrap();
+}
+
+/// A submitted purchase invoice on `day` of `rows`: item, quantity and tax, if any.
+fn purchase(fyo: &mut Fyo, party: &str, day: &str, rows: &[(&str, f64, &str)]) -> Doc {
+    let values = map([("party", text(party)), ("date", text(day))]);
+    let mut doc = fyo.get_new_doc("PurchaseInvoice", values).unwrap();
+    for (idx, (item, quantity, tax)) in rows.iter().enumerate() {
+        doc.append(fyo, "items", Default::default()).unwrap();
+        doc.set_child(fyo, "items", idx, "item", text(item))
+            .unwrap();
+        doc.set_child(fyo, "items", idx, "quantity", DocValue::Number(*quantity))
+            .unwrap();
+        if !tax.is_empty() {
+            doc.set_child(fyo, "items", idx, "tax", text(tax)).unwrap();
+        }
+    }
+    doc.sync(fyo).unwrap();
+    doc.submit(fyo).unwrap();
+    doc
+}
+
+fn money_of(doc: &Doc, fieldname: &str) -> f64 {
+    match doc.get(fieldname) {
+        Some(DocValue::Money(money)) => money.float(),
+        other => panic!("{fieldname}: {other:?}"),
+    }
+}
+
+#[test]
+fn indias_setup_makes_the_reverse_charge_templates() {
+    let file = TempFile::new("regional-rcm-setup");
+    let mut fyo = indian_company(&file);
+    assert!(reverse_charge::is_set_up(&fyo).unwrap());
+    let tax = fyo.get_doc("Tax", Some("IGST-18-RCM")).unwrap();
+    let rows: Vec<(String, f64)> = tax
+        .table("details")
+        .iter()
+        .map(|row| {
+            (
+                helpers::text(row, "account").unwrap().to_owned(),
+                helpers::number(row, "rate").unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [("IGST".to_owned(), 18.0), ("IGST (RCM)".to_owned(), -18.0)]
+    );
+    assert_eq!(
+        fyo.get_value("Account", Some("IGST (RCM)"), "parentAccount"),
+        Some(text("Duties and Taxes"))
+    );
+    // Setting it up again adds nothing.
+    assert!(reverse_charge::set_up(&mut fyo).unwrap().is_empty());
+}
+
+#[test]
+fn a_reverse_charge_purchase_is_for_the_bill_and_posts_the_tax_owed() {
+    let file = TempFile::new("regional-rcm-purchase");
+    let mut fyo = registered_company(&file);
+    item(&mut fyo, "Hosting", 1000.0, Some("998315"), "Unit");
+    supplier(&mut fyo, "Cloud Inc", None, Some("United States"));
+    let doc = purchase(
+        &mut fyo,
+        "Cloud Inc",
+        "2026-10-05",
+        &[("Hosting", 1.0, "IGST-18-RCM")],
+    );
+
+    // The supplier is owed the bill; the GST is owed by the company.
+    assert_eq!(money_of(&doc, "grandTotal"), 1000.0);
+    assert_eq!(money_of(&doc, "outstandingAmount"), 1000.0);
+    let mut entries = postings(&fyo, doc.name().unwrap());
+    entries.sort();
+    assert_eq!(
+        entries,
+        [
+            posting("Cost of Goods Sold", "1000.00", "0.00"),
+            posting("Creditors", "0.00", "1000.00"),
+            posting("IGST", "180.00", "0.00"),
+            posting("IGST (RCM)", "0.00", "180.00"),
+        ]
+    );
+
+    let charge = reverse_charge::of_invoice(&fyo, &doc).unwrap().unwrap();
+    assert_eq!(charge.taxable.float(), 1000.0);
+    assert_eq!(charge.igst.float(), 180.0);
+    assert!(charge.cgst.is_zero() && charge.sgst.is_zero());
+    assert!(charge.import);
+    assert_eq!(charge.rows.len(), 1);
+    assert_eq!(charge.rows[0].rate, 18.0);
+    assert_eq!(charge.rows[0].hsn.as_deref(), Some("998315"));
+    assert_eq!(
+        reverse_charge::place_of_supply(&fyo).as_deref(),
+        Some("29-Karnataka")
+    );
+
+    // From a supplier in India, within the state: not an import.
+    supplier(&mut fyo, "Transport Co", None, Some("India"));
+    let doc = purchase(
+        &mut fyo,
+        "Transport Co",
+        "2026-10-06",
+        &[("Hosting", 1.0, "GST-5-RCM")],
+    );
+    assert_eq!(money_of(&doc, "grandTotal"), 1000.0);
+    let charge = reverse_charge::of_invoice(&fyo, &doc).unwrap().unwrap();
+    assert_eq!((charge.cgst.float(), charge.sgst.float()), (25.0, 25.0));
+    assert!(!charge.import);
+
+    // An ordinary purchase has none.
+    let doc = purchase(
+        &mut fyo,
+        "Cloud Inc",
+        "2026-10-07",
+        &[("Hosting", 1.0, "IGST-18")],
+    );
+    assert_eq!(money_of(&doc, "grandTotal"), 1180.0);
+    assert!(reverse_charge::of_invoice(&fyo, &doc).unwrap().is_none());
+}
+
+/// A GSTR-3B row: its table, nature of supplies, figures (taxable value, integrated,
+/// central and state tax, each none where the row shows none) and whether it is bold.
+type Gstr3bRow = (String, String, [Option<f64>; 4], bool);
+
+fn gstr_3b_rows(fyo: &Fyo, report: &mut Gstr3b) -> Vec<Gstr3bRow> {
+    let formatter = Formatter::new(fyo).unwrap();
+    report
+        .run(fyo, &formatter)
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            let number = |c: usize| match &row.cells[c].raw_value {
+                RawValue::Number(n) => Some((n * 100.0).round() / 100.0),
+                _ => None,
+            };
+            (
+                row.cells[0].value.clone(),
+                row.cells[1].value.clone(),
+                [number(2), number(3), number(4), number(5)],
+                row.cells[0].bold,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn gstr_3b_sums_up_sales_the_reverse_charge_and_the_credit() {
+    let (_file, mut fyo) = gst_company();
+    fyo.db
+        .update(
+            "AccountingSettings",
+            &map([("gstin", text("29AABCA1234A1Z5"))]),
+        )
+        .unwrap();
+    item(&mut fyo, "Hosting", 1000.0, Some("998315"), "Unit");
+    item(&mut fyo, "Support", 500.0, Some("998316"), "Unit");
+    item(&mut fyo, "Tea", 200.0, Some("0902"), "Unit");
+    supplier(&mut fyo, "Cloud Inc", None, Some("United States"));
+    supplier(&mut fyo, "Local Supplier", Some("29AABCS1234A1Z5"), None);
+    let day = "2026-10-05";
+    purchase(
+        &mut fyo,
+        "Cloud Inc",
+        day,
+        &[("Hosting", 1.0, "IGST-18-RCM")],
+    );
+    purchase(
+        &mut fyo,
+        "Local Supplier",
+        day,
+        &[("Support", 1.0, "GST-18")],
+    );
+    // A purchase with no GST, left out of the tables and listed under them.
+    purchase(&mut fyo, "Local Supplier", day, &[("Tea", 1.0, "")]);
+
+    let mut report = Gstr3b::new();
+    report.set("fiscalYear", FilterValue::Text("2026-27".into()));
+    report.set("period", FilterValue::Text("10".into()));
+    let rows = gstr_3b_rows(&fyo, &mut report);
+    let find = |table: &str, nature: &str| {
+        rows.iter()
+            .find(|row| row.0 == table && row.1.starts_with(nature))
+            .unwrap_or_else(|| panic!("{table} {nature}: {rows:?}"))
+            .clone()
+    };
+    // The sales: 200 and 100 at 18%, within the state and to Maharashtra, and 100 at 5%.
+    assert_eq!(
+        find("3.1(a)", "Outward").2,
+        [Some(400.0), Some(18.0), Some(20.5), Some(20.5)]
+    );
+    assert_eq!(
+        find("3.1(d)", "Inward").2,
+        [Some(1000.0), Some(180.0), Some(0.0), Some(0.0)]
+    );
+    assert_eq!(
+        find("4(A)(2)", "ITC: Import").2,
+        [None, Some(180.0), Some(0.0), Some(0.0)]
+    );
+    assert_eq!(
+        find("4(A)(3)", "ITC: Inward").2,
+        [None, Some(0.0), Some(0.0), Some(0.0)]
+    );
+    assert_eq!(
+        find("4(A)(5)", "ITC: All other").2,
+        [None, Some(0.0), Some(45.0), Some(45.0)]
+    );
+    let net = find("4(C)", "Net ITC");
+    assert_eq!(net.2, [None, Some(180.0), Some(45.0), Some(45.0)]);
+    assert!(net.3);
+    let cash = find("6.1", "Reverse charge");
+    assert_eq!(cash.2, [None, Some(180.0), Some(0.0), Some(0.0)]);
+    assert!(cash.3);
+    assert_eq!(
+        find("", "Purchase rows with no GST").2,
+        [Some(200.0), None, None, None]
+    );
+    assert!(!rows.iter().any(|row| row.1.starts_with("Sales rows")));
+
+    // Due on the 20th of the next month; for a quarter, the 22nd in Karnataka and the
+    // 24th in Delhi.
+    assert_eq!(report.due_date(&fyo), Some(date(2026, 11, 20)));
+    report.set("period", FilterValue::Text("Q3".into()));
+    assert_eq!(report.due_date(&fyo), Some(date(2027, 1, 22)));
+    assert_eq!(
+        Period::Quarter(3).gstr3b_due_date(2026, "07"),
+        Some(date(2027, 1, 24))
+    );
+    assert_eq!(
+        report.file_name(&fyo).as_deref(),
+        Some("GSTR3B_29AABCA1234A1Z5_122026")
     );
 }

@@ -75,7 +75,8 @@ fn setting_up_an_indian_company_makes_what_books_makes() {
     let file = TempFile::new("india");
     let fyo = indian_company(&file);
 
-    assert_eq!(count(&fyo, "Account"), 79);
+    // And the reverse charge accounts and templates, which Books has not.
+    assert_eq!(count(&fyo, "Account"), 82);
     assert_eq!(
         fyo.db
             .get_doc("Account", "Acme Bank")
@@ -84,8 +85,8 @@ fn setting_up_an_indian_company_makes_what_books_makes() {
         Some(&DocValue::Text("Bank Accounts".into()))
     );
     // Books' 18, and GST-40 and IGST-40.
-    assert_eq!(count(&fyo, "Tax"), 20);
-    assert_eq!(count(&fyo, "TaxDetail"), 29);
+    assert_eq!(count(&fyo, "Tax"), 24);
+    assert_eq!(count(&fyo, "TaxDetail"), 41);
     assert!(fyo.db.exists("Tax", Some("GST-40")).unwrap());
     assert!(fyo.db.exists("Tax", Some("IGST-40")).unwrap());
     assert_eq!(count(&fyo, "Currency"), 147);

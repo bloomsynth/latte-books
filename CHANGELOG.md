@@ -36,12 +36,29 @@ here.
 - GSTR-2 is removed. The return hasn't been filed since 2017; input tax credit is
   claimed from the GSTR-2B the GST portal makes.
 - A report wider than the window scrolls sideways to its other columns: drag the
-  scrollbar under the rows, use Shift and the wheel, or swipe on a trackpad. The wheel alone scrolls
-  sideways too when the rows all fit. They were
-  cut off before.
+  scrollbar under the rows, use Shift and the wheel, or swipe on a trackpad. The wheel
+  alone scrolls sideways too when the rows all fit. They were cut off before.
 - Printed reports keep each GSTIN and amount whole: a column is never narrower than its
   longest word, and ₹ stays on the amount's line. GSTR's "Intergrated Tax" column is
   now "Integrated Tax".
+- **Reverse charge** for Indian companies: purchases on which you pay the GST, such as
+  software and cloud services bought from abroad. Give the item the IGST-18-RCM tax
+  template (GST-18-RCM within your state, and 5% templates for goods transport). The
+  invoice is for what the supplier bills; the GST is posted as owed on IGST (RCM) and
+  claimed as input tax credit on IGST. New Indian companies have the templates; for an
+  existing one, Settings → GST → **Set Up Reverse Charge** adds them.
+- A reverse charge purchase invoice prints as its **Self Invoice (Reverse Charge)**, in
+  rupees, from the print view's template list.
+- **GSTR-3B**, under GST: the period's figures to enter on the portal, from the sales
+  and purchase invoices: outward supplies (3.1), reverse charge purchases (3.1(d)),
+  input tax credit (4(A)), exempt purchases (5) and the reverse charge to pay in cash
+  (6.1), with the return's due date. Rows with no GST tax template are listed below,
+  to put right.
+- GSTR-1's Reverse Chrg. column is N. Frappe Books shows Y for every customer without
+  a GSTIN.
+- A tax row that is taken off, such as a reverse charge's, comes off the invoice's total
+  and posts on the other side of the ledger. Frappe Books adds it to the total.
+- An AI assistant can give a number for a text field, such as an item's HSN/SAC code.
 
 ## [0.1.0-beta.3] - 2026-10-26
 

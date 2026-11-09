@@ -254,7 +254,7 @@ pub fn sidebar(fyo: &Fyo) -> Vec<SidebarGroup> {
             "GST",
             "gst",
             Route::Report("gstr-1".to_owned()),
-            vec![report("GSTR1", "gstr-1")],
+            vec![report("GSTR1", "gstr-1"), report("GSTR3B", "gstr-3b")],
         ));
     }
 
@@ -327,6 +327,6 @@ mod tests {
                 &map([("gstin", text("29AABCA1234A1Z5"))]),
             )
             .unwrap();
-        assert_eq!(items(&sidebar(&fyo), "GST"), ["GSTR1"]);
+        assert_eq!(items(&sidebar(&fyo), "GST"), ["GSTR1", "GSTR3B"]);
     }
 }

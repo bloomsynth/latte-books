@@ -11,6 +11,9 @@
 //!   older Latte's), and marks the row as modified in 2000, so Books, opening the file
 //!   again, puts its HTML back. Each app prints with its own; custom templates are left
 //!   alone by both.
+//! - Not in Books: a Purchase Invoice under the reverse charge can also print as its Self
+//!   Invoice (`templates/self_invoice.typ`). It isn't a PrintTemplate row, as Books can't
+//!   print it; the print view offers it beside the file's templates.
 
 use jiff::Timestamp;
 use latte_core::fyo::model::helpers::is_truthy;
@@ -67,6 +70,33 @@ impl PrintTemplate {
 pub fn is_html(source: &str) -> bool {
     let start = source.trim_start();
     start.starts_with('<') && !start.starts_with("<<")
+}
+
+/// The self-invoice of a purchase under the reverse charge, offered for such a Purchase
+/// Invoice only.
+pub const SELF_INVOICE: &str = "Self Invoice (Reverse Charge)";
+
+/// The self-invoice's template.
+fn self_invoice() -> PrintTemplate {
+    PrintTemplate {
+        name: SELF_INVOICE.to_owned(),
+        kind: "PurchaseInvoice".to_owned(),
+        template: include_str!("templates/self_invoice.typ").to_owned(),
+        width: 0.0,
+        height: 0.0,
+        is_custom: false,
+    }
+}
+
+/// The templates a document can print with: its schema's, and for a Purchase Invoice
+/// under the reverse charge, last, its Self Invoice.
+pub fn template_names_for(fyo: &Fyo, doc: &Doc) -> Vec<String> {
+    let mut names = template_names(fyo, doc.schema_name());
+    let reverse_charge = latte_core::reports::gstr::reverse_charge::of_invoice(fyo, doc);
+    if matches!(reverse_charge, Ok(Some(_))) && !names.iter().any(|n| n == SELF_INVOICE) {
+        names.push(SELF_INVOICE.to_owned());
+    }
+    names
 }
 
 /// The template a new PrintTemplate starts with: `baseTemplate` in Typst.
@@ -281,6 +311,9 @@ pub fn can_print(fyo: &Fyo, schema_name: &str) -> bool {
 
 /// A PrintTemplate by its name.
 pub fn load(fyo: &mut Fyo, name: &str) -> Result<PrintTemplate, Error> {
+    if name == SELF_INVOICE && !fyo.db.exists("PrintTemplate", Some(name))? {
+        return Ok(self_invoice());
+    }
     let doc = fyo.get_doc("PrintTemplate", Some(name))?;
     Ok(PrintTemplate::from_doc(&doc))
 }

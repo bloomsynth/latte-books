@@ -189,7 +189,30 @@ impl Period {
         };
         Some(date(next.year(), next.month(), day))
     }
+
+    /// The last day GSTR-3B can be filed for the period without a late fee: the 20th of
+    /// the next month for a month. For a quarter (QRMP), the 22nd of the month after it in
+    /// the states of Notification 76/2020-Central Tax's first group, by the GSTIN's state
+    /// code, and the 24th elsewhere. None for Custom.
+    pub fn gstr3b_due_date(self, fiscal_year: i16, state_code: &str) -> Option<Date> {
+        let (_, last) = self.dates(fiscal_year)?;
+        let next = last.checked_add(1.day()).ok()?;
+        let day = match self {
+            Self::Quarter(_) if QRMP_22ND.contains(&state_code) => 22,
+            Self::Quarter(_) => 24,
+            _ => 20,
+        };
+        Some(date(next.year(), next.month(), day))
+    }
 }
+
+/// The states and union territories whose quarterly GSTR-3B is due on the 22nd, by GST
+/// state code: Chhattisgarh, Madhya Pradesh, Gujarat, Dadra and Nagar Haveli and Daman
+/// and Diu, Maharashtra, Karnataka, Goa, Lakshadweep, Kerala, Tamil Nadu, Puducherry,
+/// Andaman and Nicobar Islands, Telangana and Andhra Pradesh.
+const QRMP_22ND: [&str; 15] = [
+    "22", "23", "24", "25", "26", "27", "29", "30", "31", "32", "33", "34", "35", "36", "37",
+];
 
 /// The latest period that has ended by `today`, and its financial year: last month, or last
 /// quarter in QRMP. It is the return due next.

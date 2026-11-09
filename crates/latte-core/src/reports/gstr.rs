@@ -1,7 +1,11 @@
 // Port of reports/GoodsAndServiceTax/ @ v0.36.0: BaseGSTR.ts and GSTR1.ts.
-// GSTR-1 lists the sales invoices of a period, with each one's GST. Books' GSTR-2, the
-// purchase invoices, is left out: the return hasn't been filed since 2017, and input tax
-// credit is claimed from the GSTR-2B the portal makes. The JSON export of gstExporter.ts is in gstr/export.rs.
+// GSTR-1 lists the sales invoices of a period, with each one's GST. The JSON export of
+// gstExporter.ts is in gstr/export.rs.
+//
+// Not in Books: GSTR-3B's summary (gstr/gstr3b.rs) and the reverse charge
+// (gstr/reverse_charge.rs). Books' GSTR-2, the purchase invoices, is left out: the return
+// hasn't been filed since 2017, and input tax credit is claimed from the GSTR-2B the
+// portal makes.
 //
 // Books bugs Latte fixes:
 // - The rate of an invoice is its taxes' rates added up once. Books adds them twice, so
@@ -13,6 +17,8 @@
 // - The period is the invoices' dates as the app shows them. Books compares the stored
 //   date and time with the period's dates as text, which leaves out the invoices of the
 //   To Date, and in India those of the From Date entered before 5:30 in the morning.
+// - Reverse Chrg. is N: Latte makes no sale under the reverse charge. Books shows Y for
+//   a party without a GSTIN, which is an unregistered buyer, not a reverse charge.
 // - B2C-Large is an inter-state sale to an unregistered buyer of more than ₹1 lakh, the
 //   limit since 1 August 2024 (Notification 12/2024-Central Tax), and of more than
 //   ₹2.5 lakh before. Books uses ₹2.5 lakh or more throughout.
@@ -27,8 +33,11 @@
 // the period (gstr/period.rs).
 
 mod export;
+mod gstr3b;
 pub mod period;
+pub mod reverse_charge;
 
+pub use gstr3b::Gstr3b;
 pub use period::{Filing, Period};
 
 use jiff::civil::{Date, date};
@@ -338,6 +347,16 @@ impl Gstr {
     /// show. The dates are stored as instants, so the query takes a day more on each side
     /// and the dates are then compared as the app shows them.
     fn period_invoices(&self, fyo: &Fyo, cancelled: bool) -> Result<Vec<PeriodInvoice>, Error> {
+        self.period_invoices_of(fyo, self.schema_name(), cancelled)
+    }
+
+    /// The period's submitted invoices of a schema, as `period_invoices`.
+    fn period_invoices_of(
+        &self,
+        fyo: &Fyo,
+        schema_name: &str,
+        cancelled: bool,
+    ) -> Result<Vec<PeriodInvoice>, Error> {
         let bound = |date: Option<Date>, days: i64| {
             date.and_then(|d| d.checked_add(days.days()).ok())
                 .map(|d| DbFilterValue::Text(d.to_string()))
@@ -370,7 +389,7 @@ impl Gstr {
             ..GetAllOptions::default()
         };
         let mut invoices = Vec::new();
-        for row in fyo.db.get_all_docs(self.schema_name(), &options)? {
+        for row in fyo.db.get_all_docs(schema_name, &options)? {
             let Some(date) = shown_date(row.get("date")) else {
                 continue;
             };
@@ -410,7 +429,7 @@ impl Gstr {
 
         let in_state = !gstin.is_empty() && gstin.get(..2).and_then(state) == Some(place.as_str());
         let mut row = GstrRow {
-            reverse_charge: if party_gstin.is_empty() { "Y" } else { "N" },
+            reverse_charge: "N",
             gstin: party_gstin,
             party_name,
             inv_no: name.to_owned(),

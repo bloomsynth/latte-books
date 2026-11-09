@@ -50,6 +50,7 @@ fn report_class(name: &str) -> &str {
         "stock-ledger" => "StockLedger",
         "stock-balance" => "StockBalance",
         "gstr-1" => "GSTR1",
+        "gstr-3b" => "GSTR3B",
         name => name,
     }
 }

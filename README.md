@@ -42,7 +42,7 @@ single file.
   Frappe Books can still open it afterwards.
 - **Fast and light.** Native code drawn on the GPU, with no Electron or browser inside.
 - **The same accounting.** The documents, rules and reports of Frappe Books, with the ledger
-  checked against it, and [79 of its bugs fixed](docs/BOOKS-BUGS.md).
+  checked against it, and [80 of its bugs fixed](docs/BOOKS-BUGS.md).
 - **Free.** There's nothing to pay for, now or later, and the code is open source.
 - **Private.** No telemetry or update checks. Your books stay on your computer
   unless you connect an AI assistant.
@@ -77,9 +77,11 @@ Everything in Frappe Books v0.36.0:
 - **Inventory:** stock, shipments and receipts
 - **Point of sale,** pricing rules, coupons and loyalty points
 - **Reports:** General Ledger, Profit and Loss, Balance Sheet, Trial Balance and more
-- **India GST** with GSTR-1 by month, or by quarter for QRMP, as the GST
+- **India GST** with GSTR-1 and GSTR-3B by month, or by quarter for QRMP, as the GST
   portal files them, and **Switzerland**. GSTR-1 exports the whole return for the GST
-  portal, HSN summary and documents issued included
+  portal, HSN summary and documents issued included. Purchases under the **reverse
+  charge**, such as services bought from abroad, post the GST you owe and the credit you
+  claim, and print a self-invoice
 - **Print to PDF** with Frappe Books' templates, rendered by [Typst](https://typst.app/)
 - **18 languages,** Frappe Books' community translations
 - **AI assistants,** optional: Claude, Codex or Cursor can look things up and draft

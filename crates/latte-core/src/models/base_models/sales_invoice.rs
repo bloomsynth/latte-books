@@ -59,12 +59,7 @@ fn get_posting(doc: &Doc, fyo: &mut Fyo) -> Result<LedgerPosting, Error> {
     for tax in doc.table("taxes") {
         let account = text(tax, "account").unwrap_or_default();
         let amount = money_or_zero(tax, "amount", fyo).mul(exchange_rate)?;
-        let amount = invoice::posting_amount(amount, is_return)?;
-        if is_return {
-            posting.debit(fyo, account, &amount)?;
-            continue;
-        }
-        posting.credit(fyo, account, &amount)?;
+        invoice::post_tax(&mut posting, fyo, account, &amount, is_return, false)?;
     }
 
     let discount_amount =

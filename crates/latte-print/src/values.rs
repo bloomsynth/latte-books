@@ -9,6 +9,9 @@
 //!   and an empty list when the payment isn't for a Sales Invoice. Books passes the
 //!   invoice's raw rows, and nothing at all otherwise, which the Payment template reads
 //!   as `doc.taxes.length`.
+//! - Not in Books: a Purchase Invoice under the reverse charge has `reverseCharge`, its
+//!   rows and taxes in rupees and the place of supply, for the self-invoice
+//!   (`templates/self_invoice.typ`).
 
 use jiff::tz::TimeZone;
 use latte_core::fyo::format::{Formatter, local_date};
@@ -171,7 +174,51 @@ pub fn print_values(
         values.insert("description".to_owned(), json!(any));
     }
 
+    if schema_name == "PurchaseInvoice"
+        && let Some(charge) = latte_core::reports::gstr::reverse_charge::of_invoice(fyo, doc)?
+    {
+        values.insert(
+            "reverseCharge".to_owned(),
+            reverse_charge_values(fyo, formatter, &charge)?,
+        );
+    }
+
     Ok(json!({ "doc": values, "print": print }))
+}
+
+/// `doc.reverseCharge`: the reverse charge's rows and totals, formatted in rupees.
+fn reverse_charge_values(
+    fyo: &Fyo,
+    formatter: &Formatter,
+    charge: &latte_core::reports::gstr::reverse_charge::ReverseCharge,
+) -> Result<Value, Error> {
+    let rows: Vec<Value> = charge
+        .rows
+        .iter()
+        .map(|row| {
+            json!({
+                "item": row.item,
+                "hsnCode": row.hsn.clone().unwrap_or_default(),
+                "value": formatter.currency(&row.value),
+                "rate": format!("{}%", js_number_string(row.rate)),
+                "igst": formatter.currency(&row.igst),
+                "cgst": formatter.currency(&row.cgst),
+                "sgst": formatter.currency(&row.sgst),
+            })
+        })
+        .collect();
+    let place = latte_core::reports::gstr::reverse_charge::place_of_supply(fyo);
+    Ok(json!({
+        "rows": rows,
+        "value": formatter.currency(&charge.taxable),
+        "igst": formatter.currency(&charge.igst),
+        "cgst": formatter.currency(&charge.cgst),
+        "sgst": formatter.currency(&charge.sgst),
+        "tax": formatter.currency(&charge.tax()?),
+        "integrated": charge.cgst.is_zero() && charge.sgst.is_zero(),
+        "import": charge.import,
+        "placeOfSupply": place.unwrap_or_default(),
+    }))
 }
 
 /// `getPaymentDetails`.

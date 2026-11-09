@@ -15,7 +15,8 @@
 //! - An Indian company has a GST tab: the GSTIN, which Books has in General, and Return
 //!   Filing, monthly or quarterly, which the GSTR reports follow. It is the GST tab of
 //!   AccountingSettings, so General and GST are one document, saved together. It links to
-//!   the Tax Templates.
+//!   the Tax Templates, and sets up the reverse charge's accounts and templates for a
+//!   company made before Latte had them (`latte_core::reports::gstr::reverse_charge`).
 
 use std::collections::HashMap;
 
@@ -181,7 +182,32 @@ impl SettingsPage {
     }
 
     /// GST's link to the Tax Templates, which the invoices' taxes come from.
+    /// Adds the reverse charge's accounts and templates the file doesn't have yet.
+    fn set_up_reverse_charge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let added = {
+            let mut s = self.session.borrow_mut();
+            latte_core::reports::gstr::reverse_charge::set_up(&mut s.fyo)
+        };
+        match added {
+            Ok(added) => {
+                self.error = None;
+                let message = if added.is_empty() {
+                    t("The reverse charge is already set up")
+                } else {
+                    format!("{} {}", t("Added"), added.join(", "))
+                };
+                show_toast(Toast::new(message, DialogKind::Success).short(), window, cx);
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        cx.notify();
+    }
+
     fn tax_templates(&self, cx: &mut Context<Self>) -> Div {
+        let set_up = {
+            let s = self.session.borrow();
+            latte_core::reports::gstr::reverse_charge::is_set_up(&s.fyo).unwrap_or(true)
+        };
         div()
             .v_flex()
             .p_4()
@@ -211,6 +237,30 @@ impl SettingsPage {
                         })),
                 ),
             )
+            .child(
+                div()
+                    .mt_2()
+                    .text_13()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gray(900))
+                    .child(t("Reverse Charge")),
+            )
+            .child(div().text_12().text_color(gray(600)).child(if set_up {
+                t("For a purchase on which you pay the GST, such as a service from abroad,                    use IGST-18-RCM (or GST-18-RCM within your state). The GST is owed on                    IGST (RCM) and claimed on IGST; GSTR3B sums it up.")
+            } else {
+                t("For a purchase on which you pay the GST, such as a service from abroad.                    Adds the IGST (RCM), CGST (RCM) and SGST (RCM) accounts and the                    IGST-18-RCM, GST-18-RCM, IGST-5-RCM and GST-5-RCM templates.")
+            }))
+            .when(!set_up, |d| {
+                d.child(
+                    div().h_flex().child(
+                        Button::new("set-up-reverse-charge")
+                            .label(t("Set Up Reverse Charge"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_up_reverse_charge(window, cx)
+                            })),
+                    ),
+                )
+            })
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {

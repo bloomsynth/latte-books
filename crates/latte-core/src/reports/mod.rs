@@ -334,12 +334,13 @@ pub fn get_report(report_name: &str) -> Option<Box<dyn Report>> {
         "stock-ledger" => Box::new(stock_ledger::StockLedger::default()),
         "stock-balance" => Box::new(stock_balance::StockBalance::default()),
         "gstr-1" => Box::new(gstr::Gstr::new()),
+        "gstr-3b" => Box::new(gstr::Gstr3b::new()),
         _ => return None,
     })
 }
 
 /// The reports Latte has, as `(reportName, title)`, in Books' order.
-pub const REPORTS: [(&str, &str); 7] = [
+pub const REPORTS: [(&str, &str); 8] = [
     ("general-ledger", "General Ledger"),
     ("profit-and-loss", "Profit And Loss"),
     ("balance-sheet", "Balance Sheet"),
@@ -347,4 +348,5 @@ pub const REPORTS: [(&str, &str); 7] = [
     ("stock-ledger", "Stock Ledger"),
     ("stock-balance", "Stock Balance"),
     ("gstr-1", "GSTR1"),
+    ("gstr-3b", "GSTR3B"),
 ];

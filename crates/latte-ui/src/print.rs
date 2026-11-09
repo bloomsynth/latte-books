@@ -64,12 +64,12 @@ impl PrintPage {
     ) -> Self {
         let (template_list, default) = {
             let mut s = session.borrow_mut();
-            let list = templates::template_names(&s.fyo, schema);
-            let default = s
-                .fyo
-                .get_doc(schema, Some(name))
-                .ok()
-                .and_then(|doc| templates::default_template_name(&mut s.fyo, &doc));
+            let doc = s.fyo.get_doc(schema, Some(name)).ok();
+            let list = match &doc {
+                Some(doc) => templates::template_names_for(&s.fyo, doc),
+                None => templates::template_names(&s.fyo, schema),
+            };
+            let default = doc.and_then(|doc| templates::default_template_name(&mut s.fyo, &doc));
             (list, default)
         };
         let options = template_list

@@ -274,6 +274,33 @@ pub(crate) fn posting_amount(amount: Money, is_return: bool) -> Result<Money, Er
     Ok(amount)
 }
 
+/// Posts a tax row: an invoice's on `debit`'s side (a purchase's) or the other (a
+/// sale's), and a return's on the opposite one. A row of the other sign, such as a reverse
+/// charge's RCM row (gstr/reverse_charge.rs), is taken off, so it goes on the other side.
+///
+/// Books posts every row on its side as it is, so a taken-off row is a negative debit or
+/// credit. The balances are the same; Latte's ledger shows the row as what it is.
+pub(crate) fn post_tax(
+    posting: &mut LedgerPosting,
+    fyo: &mut Fyo,
+    account: &str,
+    amount: &Money,
+    is_return: bool,
+    debit: bool,
+) -> Result<(), Error> {
+    let taken_off = if is_return {
+        amount.is_positive()
+    } else {
+        amount.is_negative()
+    };
+    let size = amount.abs()?;
+    if (debit != is_return) != taken_off {
+        posting.debit(fyo, account, &size)
+    } else {
+        posting.credit(fyo, account, &size)
+    }
+}
+
 pub fn get_total_discount(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
     if !enable_discounting(fyo) {
         return Ok(fyo.pesa().zero());
@@ -289,6 +316,10 @@ pub fn get_total_discount(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
 }
 
 /// `getGrandTotal`: the net total and the taxes, less the discounts.
+///
+/// Deviation: a tax row that is taken off (`post_tax`), such as a reverse charge's RCM row,
+/// comes off the total. Books adds every row's size, so an RCM template would charge the
+/// tax it owes on top of the supplier's bill.
 fn get_grand_total(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
     let total_discount = get_total_discount(doc, fyo)?;
     let net_total = required_money(doc, "netTotal")?;
@@ -300,14 +331,23 @@ fn get_grand_total(doc: &Doc, fyo: &Fyo) -> Result<Money, Error> {
         return Ok(net_total.sub(&total_discount)?);
     }
 
+    let is_return = is_return(doc);
     let mut grand_total = net_total.abs()?;
     for tax in taxes {
         let amount = required_money(tax, "amount")?;
-        grand_total = if is_return(doc) {
-            grand_total.abs()?.add(&amount.abs()?)?.neg()?
+        let taken_off = if is_return {
+            amount.is_positive()
+        } else {
+            amount.is_negative()
+        };
+        grand_total = if taken_off {
+            grand_total.sub(&amount.abs()?)?
         } else {
             grand_total.add(&amount.abs()?)?
         };
+    }
+    if is_return {
+        grand_total = grand_total.neg()?;
     }
     Ok(grand_total.sub(&total_discount)?)
 }

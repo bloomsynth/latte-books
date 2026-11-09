@@ -343,6 +343,16 @@ what Books already saved is left as it is.
 - **How we know:** from the code.
 - **Test:** `gstr_1_export_files_returns_as_credit_notes`.
 
+### GSTR-1 marks sales to unregistered buyers as reverse charge
+
+- **In Books:** the Reverse Chrg. column is Y for every customer without a GSTIN.
+- **What it does to your books:** the report says B2C sales are under the reverse
+  charge, which is for supplies on which the buyer pays the GST. The JSON export writes
+  N, so the report and the file disagree.
+- **In Latte:** the column is N, as the export is.
+- **How we know:** from the code.
+- **Test:** `gstr_1_lists_each_sale_with_its_gst_once`.
+
 ### GSTR's JSON gives a foreign-currency invoice's value in that currency
 
 - **In Books:** the items' taxable values are in rupees, but the invoice value is the

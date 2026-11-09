@@ -528,7 +528,7 @@ fn filter_kind(kind: &FilterKind) -> Value {
     }
 }
 
-/// Whether the company has a report, as the app shows it: GSTR-1 only for a
+/// Whether the company has a report, as the app shows it: GSTR-1 and GSTR-3B only for a
 /// company registered for GST, one with a GSTIN.
 fn has_report(fyo: &Fyo, name: &str) -> bool {
     !name.starts_with("gstr-") || reports::gstr::is_gst_registered(fyo)
