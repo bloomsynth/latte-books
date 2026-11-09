@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <strong>Free, open-source accounting software for your desktop.</strong><br>
-  The Frappe Books desktop app, rebuilt in Rust. Opens your existing company files, and
-  starts 9× faster in a fraction of the memory.
+  <strong>Accounting software for the AI era.</strong><br>
+  Free, open source and fast, on your own desktop. Keep your books yourself, or let your
+  AI assistant keep them with you.
 </p>
 
 <p align="center">
@@ -33,24 +33,102 @@
 
 ## Why Latte Books
 
-Frappe has [retired the Frappe Books desktop app](https://github.com/frappe/books/issues/1566)
-for a new version that runs in the browser. Latte Books keeps the desktop app going: a port
-of Frappe Books v0.36.0 to Rust that runs on your computer and keeps your company in a
-single file.
+- **Built for AI.** Connect Claude, Codex or Cursor in one click, and ask your books
+  questions, draft invoices or record a month of bills in plain words. The assistant
+  works under the same rules as you do, and asks before anything is posted.
+- **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
+  the reports your accountant asks for, in one app.
+- **Fast and native.** Written from scratch in Rust and drawn on the GPU, with no browser
+  inside. It opens a company in under a second, in 18 MB of memory.
+- **Your books, on your computer.** Each company is a single file you own. There's no
+  account, no telemetry and no cloud, unless you connect an AI assistant.
+- **Free and open source.** Nothing to pay for, now or later, under the AGPL.
+- **Actively developed.** New features and fixes land every week: see the
+  [changelog](CHANGELOG.md).
 
-- **Your files, as they are.** Open your `.books.db` and carry on. No export or import, and
-  Frappe Books can still open it afterwards.
-- **Fast and light.** Native code drawn on the GPU, with no Electron or browser inside.
-- **The same accounting.** The documents, rules and reports of Frappe Books, with the ledger
-  checked against it, and [80 of its bugs fixed](docs/BOOKS-BUGS.md).
-- **Free.** There's nothing to pay for, now or later, and the code is open source.
-- **Private.** No telemetry or update checks. Your books stay on your computer
-  unless you connect an AI assistant.
+## Your books, with your AI assistant
+
+Latte Books is made to be worked from an AI assistant as well as by hand. Open
+**Tools → AI Assistants**, press **Connect** beside Claude Desktop, Claude Code, Codex or
+Cursor, and talk to your books:
+
+- *"What does Acme owe us, and since when?"*
+- *"Invoice Acme for 10 chairs at ₹2,500, with 18% GST."*
+- *"Here's a folder of this month's supplier bills. Record them as purchases."*
+- *"Run the Profit and Loss for this quarter and tell me what changed."*
+- *"What do I need to file in GSTR-3B for October?"*
+
+You stay in charge:
+
+- **The same checks as the app.** Every change an assistant makes goes through the rules
+  a person's would. It can't save what you couldn't.
+- **Drafts first.** New documents are saved as drafts for you to look over, and the
+  assistant asks before it submits anything to your accounts.
+- **Your assistant, your choice.** Latte Books runs no AI of its own and has no AI fees.
+  Bring the assistant you already use; it reaches your books on your computer, while the
+  app is open or closed.
+- **Optional.** Nothing is connected until you connect it, and Disconnect removes it.
+
+## Features
+
+- **Sales and purchases:** quotes, invoices, payments, returns and journal entries,
+  in any currency
+- **Inventory:** items, stock, locations, shipments and purchase receipts
+- **Point of sale,** with pricing rules, coupons and loyalty points
+- **Reports:** General Ledger, Profit and Loss, Balance Sheet, Trial Balance, Stock
+  Ledger and Stock Balance, to print or save as CSV
+- **India GST:** GSTR-1 and GSTR-3B by month, or by quarter for QRMP, as the GST portal
+  files them, with their due dates. GSTR-1 exports the whole return for the GST portal,
+  HSN summary and documents issued included. Purchases under the **reverse charge**, such
+  as services bought from abroad, post the GST you owe and the credit you claim, and
+  print a self-invoice
+- **Charts of accounts** for 12 countries, and a standard one for the rest
+- **Print to PDF** with templates you can edit, rendered by [Typst](https://typst.app/)
+- **Import** parties, items and documents from CSV files
+- **18 languages,** with community translations
 
 ## Performance
 
-Latte Books 0.1.0-beta.1 against Frappe Books v0.36.0, the Electron app it ports, on the
-same Windows PC, both opening the same company file:
+Latte Books is native code, drawn on the GPU, in a single process. On a Windows PC:
+
+| | Latte Books |
+|---|---|
+| Open a company, until ready | **0.8 s** |
+| Memory, as Task Manager shows it | **18 MB** |
+| Windows installer | **25 MB** |
+| Installed on disk | **87 MB** |
+
+How each number was measured is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+## Status
+
+Latte Books is in **beta**: keep a copy of your company file while you try it.
+
+- **Not built yet:** right-to-left layout for Arabic and Persian.
+- **Known issues:** exchange rates aren't fetched; in Hindi and Gujarati, wrapped text can
+  break inside a word; and a GPU is required (virtual machines and Remote Desktop are
+  untested).
+
+What's next is in [docs/PLAN.md](docs/PLAN.md).
+
+## Coming from Frappe Books
+
+Latte Books began as a rebuild of the [Frappe Books](https://github.com/frappe/books)
+desktop app, which Frappe has
+[retired](https://github.com/frappe/books/issues/1566) for a version that runs in the
+browser. It is written from scratch in Rust and keeps Frappe Books' file format, so you
+can switch without losing anything:
+
+- **Your files open as they are.** Open your `.books.db` from Frappe Books v0.36.0 and
+  carry on, with no export or import, and Frappe Books can still open it afterwards. A
+  file last opened by an older version needs opening once in v0.36.0 first.
+- **The same accounting, with fixes.** The ledger is checked against Frappe Books, and
+  [80 of its bugs are fixed](docs/BOOKS-BUGS.md). Every difference is in
+  [docs/DEVIATIONS.md](docs/DEVIATIONS.md).
+- **Not carried over:** ERPNext sync.
+
+It is also much faster and lighter. On the same Windows PC, opening the same company
+file, against Frappe Books v0.36.0:
 
 <p align="center">
   <img src="docs/images/benchmarks.svg" alt="Opening a company until the window is ready: Latte Books 0.8 seconds, Frappe Books 7.1 seconds. Memory with a company open: Latte Books 18 MB, Frappe Books 150 MB. Windows installer: Latte Books 25 MB, Frappe Books 76 MB." width="760">
@@ -69,40 +147,6 @@ same Windows PC, both opening the same company file:
 How each number was measured, and how to run the tests yourself, is in
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-## Features
-
-Everything in Frappe Books v0.36.0:
-
-- **Sales and purchases:** quotes, invoices, payments, returns, journal entries
-- **Inventory:** stock, shipments and receipts
-- **Point of sale,** pricing rules, coupons and loyalty points
-- **Reports:** General Ledger, Profit and Loss, Balance Sheet, Trial Balance and more
-- **India GST** with GSTR-1 and GSTR-3B by month, or by quarter for QRMP, as the GST
-  portal files them, and **Switzerland**. GSTR-1 exports the whole return for the GST
-  portal, HSN summary and documents issued included. Purchases under the **reverse
-  charge**, such as services bought from abroad, post the GST you owe and the credit you
-  claim, and print a self-invoice
-- **Print to PDF** with Frappe Books' templates, rendered by [Typst](https://typst.app/)
-- **18 languages,** Frappe Books' community translations
-- **AI assistants,** optional: Claude, Codex or Cursor can look things up and draft
-  documents in your books, under the same rules as the app, and ask before submitting.
-  Connect one under **Tools → AI Assistants**.
-
-
-## Coming from Frappe Books
-
-Latte Books is in **beta**: try it on a copy of your company file first.
-
-- **Files from Frappe Books v0.36.0** open as they are. A file last opened by an older
-  version needs opening once in v0.36.0 first.
-- **Not ported yet:** ERPNext sync, and right-to-left layout for Arabic and Persian.
-- **Known issues:** exchange rates aren't fetched; in Hindi and Gujarati, wrapped text can
-  break inside a word; and a GPU is required (virtual machines and Remote Desktop are
-  untested).
-
-Every difference from Frappe Books is in [docs/DEVIATIONS.md](docs/DEVIATIONS.md), and
-what's next is in [docs/PLAN.md](docs/PLAN.md).
-
 ## Build from source
 
 You need [rustup](https://rustup.rs/) and a GPU.
@@ -118,13 +162,12 @@ layout are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contributing
 
-Frappe Books users are especially welcome.
 [Open an issue](https://github.com/bloomsynth/latte-books/issues/new/choose) to say what you
-use it for and what you'd miss most: that decides what gets checked first. If you'd like the
-desktop app to live on, **star the repository** so other Frappe Books users can find it.
+use Latte Books for and what you'd like it to do next: that decides what gets built first.
+If you like where it's going, **star the repository** so others can find it.
 
 ## License
 
-[AGPL-3.0](LICENSE), like Frappe Books. Latte Books is built on Frappe Books by Frappe
-Technologies and its contributors, including the volunteers who translated it. It is
-**not affiliated with Frappe Technologies**. See [NOTICE](NOTICE).
+[AGPL-3.0](LICENSE). Latte Books grew out of Frappe Books by Frappe Technologies and its
+contributors, including the volunteers who translated it. It is **not affiliated with
+Frappe Technologies**. See [NOTICE](NOTICE).
