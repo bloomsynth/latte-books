@@ -66,6 +66,13 @@ digitized data copyright (c) 2010 Google Corporation) and Inter (Copyright (c) 2
 The Inter Project Authors), both under the SIL Open Font License 1.1; see the LICENSE
 files beside them.
 
+docs/images/assistants holds the logos of the AI assistants the README names: Claude
+and Cursor from Simple Icons (https://simpleicons.org, CC0 1.0), and Codex from Lobe
+Icons (https://github.com/lobehub/lobe-icons), Copyright (c) 2023 LobeHub, under the MIT
+License. Claude, Codex and Cursor are trademarks of Anthropic, OpenAI and Anysphere,
+shown only to say which assistants Latte Books works with; it is not affiliated with or
+endorsed by them.
+
 Latte Books is not affiliated with, endorsed by or sponsored by Frappe Technologies
 Pvt. Ltd. "Frappe" and "Frappe Books" are trademarks of their owner and are used here
 only to describe where this project comes from.
