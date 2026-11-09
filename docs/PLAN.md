@@ -379,7 +379,7 @@ for Tally).
   submitting.
 - *Built 2026-10-23: the `latte-mcp` crate has the server (company info, document types
   and fields, find, get, create, update, submit, cancel and delete documents, and the
-  reports) and the assistant setup for Claude Desktop, Claude Code, Codex and Cursor; the
+  reports) and the assistant setup for Claude Desktop, Claude Code, ChatGPT and Codex (which share Codex's config) and Cursor; the
   app's "Set up AI assistants" page connects and disconnects them, and the app points
   connected assistants at its own `latte-mcp` each time it starts. Writes are confirmed by
   the assistant's own tool approval. An assistant's writes are logged under their own

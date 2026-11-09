@@ -13,6 +13,8 @@ pub const ENTRY: &str = "latte-books";
 pub enum Kind {
     ClaudeDesktop,
     ClaudeCode,
+    /// OpenAI's: the ChatGPT desktop app and Codex share one config, Codex's
+    /// `config.toml`, so one entry connects both.
     Codex,
     Cursor,
 }
@@ -22,7 +24,7 @@ impl Kind {
         match self {
             Self::ClaudeDesktop => "Claude Desktop",
             Self::ClaudeCode => "Claude Code",
-            Self::Codex => "Codex",
+            Self::Codex => "ChatGPT and Codex",
             Self::Cursor => "Cursor",
         }
     }
@@ -32,7 +34,8 @@ impl Kind {
         match self {
             Self::ClaudeDesktop => "Quit and reopen Claude Desktop.",
             Self::Cursor => "Reopen Cursor.",
-            Self::ClaudeCode | Self::Codex => "Start a new session.",
+            Self::Codex => "Restart ChatGPT, or start a new Codex session.",
+            Self::ClaudeCode => "Start a new session.",
         }
     }
 }
@@ -85,7 +88,7 @@ pub fn all() -> Vec<Assistant> {
     });
     list.push(Assistant {
         kind: Kind::Codex,
-        found: codex_dir.is_dir(),
+        found: codex_dir.is_dir() || chatgpt_installed(&home),
         config: codex_dir.join("config.toml"),
     });
     let cursor_dir = home.join(".cursor");
@@ -95,6 +98,28 @@ pub fn all() -> Vec<Assistant> {
         config: cursor_dir.join("mcp.json"),
     });
     list
+}
+
+/// Whether the ChatGPT desktop app is installed: from the Microsoft Store on Windows, where
+/// it is the OpenAI.Codex package, or in Applications on a Mac.
+fn chatgpt_installed(home: &Path) -> bool {
+    if cfg!(windows) {
+        let Some(packages) =
+            std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Packages"))
+        else {
+            return false;
+        };
+        std::fs::read_dir(packages).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().starts_with("OpenAI."))
+        })
+    } else if cfg!(target_os = "macos") {
+        Path::new("/Applications/ChatGPT.app").is_dir()
+            || home.join("Applications").join("ChatGPT.app").is_dir()
+    } else {
+        false
+    }
 }
 
 /// `latte-mcp` beside the running app, if it is there.
@@ -324,6 +349,16 @@ mod tests {
         assistant.disconnect().unwrap();
         assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ChatGPT's desktop app reads Codex's config, so the one entry is for both.
+    #[test]
+    fn chatgpt_is_connected_through_codex() {
+        assert_eq!(Kind::Codex.name(), "ChatGPT and Codex");
+        let codex = all().into_iter().find(|a| a.kind == Kind::Codex);
+        if let Some(codex) = codex {
+            assert!(codex.config.ends_with("config.toml"));
+        }
     }
 
     #[test]

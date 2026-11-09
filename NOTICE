@@ -67,9 +67,10 @@ The Inter Project Authors), both under the SIL Open Font License 1.1; see the LI
 files beside them.
 
 docs/images/assistants holds the logos of the AI assistants the README names: Claude
-and Cursor from Simple Icons (https://simpleicons.org, CC0 1.0), and Codex from Lobe
-Icons (https://github.com/lobehub/lobe-icons), Copyright (c) 2023 LobeHub, under the MIT
-License. Claude, Codex and Cursor are trademarks of Anthropic, OpenAI and Anysphere,
+and Cursor from Simple Icons (https://simpleicons.org, CC0 1.0), and Codex and ChatGPT
+from Lobe Icons (https://github.com/lobehub/lobe-icons), Copyright (c) 2023 LobeHub, under
+the MIT License. Claude, ChatGPT, Codex and Cursor are trademarks of Anthropic, OpenAI and
+Anysphere,
 shown only to say which assistants Latte Books works with; it is not affiliated with or
 endorsed by them.
 
