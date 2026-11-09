@@ -81,8 +81,8 @@ Latte Books is made to be worked from an AI assistant as well as by hand. Open
 - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/chatgpt-dark.svg"><img src="docs/images/assistants/chatgpt-light.svg" alt="" height="14" align="absmiddle"></picture> ChatGPT, in its desktop app, and <img src="docs/images/assistants/codex.svg" alt="" height="14" align="absmiddle"> Codex
 - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/cursor-dark.svg"><img src="docs/images/assistants/cursor-light.svg" alt="" height="14" align="absmiddle"></picture> Cursor
 
-ChatGPT and Codex share one connection. In the ChatGPT app, Latte Books may show up only
-in Codex and Work for now, while OpenAI fixes local tools in ordinary chats.
+ChatGPT and Codex share one connection. In the ChatGPT app, use a Codex or Work chat:
+ordinary ChatGPT chats can't reach apps on your computer yet.
 
 Then talk to your books:
 

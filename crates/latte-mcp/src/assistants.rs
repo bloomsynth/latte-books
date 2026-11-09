@@ -34,7 +34,7 @@ impl Kind {
         match self {
             Self::ClaudeDesktop => "Quit and reopen Claude Desktop.",
             Self::Cursor => "Reopen Cursor.",
-            Self::Codex => "Restart ChatGPT, or start a new Codex session.",
+            Self::Codex => "Restart ChatGPT and use a Codex or Work chat.",
             Self::ClaudeCode => "Start a new session.",
         }
     }

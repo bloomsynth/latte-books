@@ -6,8 +6,8 @@ here.
 ## [Unreleased]
 
 - AI Assistants lists **ChatGPT and Codex** together: they share one setup, so Connect
-  makes Latte Books available in the ChatGPT desktop app as well as Codex. It shows as
-  found when either is installed.
+  makes Latte Books available in the ChatGPT desktop app's Codex and Work chats as well as
+  Codex. It shows as found when either is installed.
 - GSTR-1's JSON export is the whole return for the period, as the GST portal's offline
   tool (V3.2.4) reads it: B2B, B2C-Large and B2C-Small, credit notes, nil rated and
   exempt supplies, the HSN summary (Table 12) and the documents issued (Table 13).
