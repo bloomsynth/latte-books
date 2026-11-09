@@ -67,8 +67,8 @@ What makes it this fast:
   editor. Long lists and reports draw only the rows on screen, so they scroll smoothly.
 - **One small process.** The whole app is a single program in a fraction of the memory a
   web-based app needs.
-- **Works offline.** Everything runs on your computer, so you never wait on a server or
-  an internet connection.
+- **Offline and private.** Everything runs on your computer, with no server and no
+  internet needed, and your books never leave it unless you connect an AI assistant.
 
 How each number was measured, and how to time it yourself, is in
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
