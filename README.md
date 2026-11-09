@@ -39,9 +39,12 @@
 
 - **Built for speed.** Made to be one of the fastest accounting apps you can install.
   Written from scratch in Rust, Latte Books opens in under a second.
-- **Built for AI.** Connect <img src="docs/images/assistants/claude.svg" alt="" height="14" align="absmiddle"> Claude, <img src="docs/images/assistants/codex.svg" alt="" height="14" align="absmiddle"> Codex or <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/cursor-dark.svg"><img src="docs/images/assistants/cursor-light.svg" alt="" height="14" align="absmiddle"></picture> Cursor in one click, and ask your books
-  questions, draft invoices or record a month of bills in plain words. The assistant
-  asks you before anything is posted to your accounts.
+- **Built for AI.** Ask your books questions, draft invoices or record a month of bills
+  in plain words, from the AI assistant you already use. It asks you before anything is
+  posted to your accounts. Connect one in a click:
+  - <img src="docs/images/assistants/claude.svg" alt="" height="14" align="absmiddle"> Claude
+  - <img src="docs/images/assistants/codex.svg" alt="" height="14" align="absmiddle"> Codex
+  - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/cursor-dark.svg"><img src="docs/images/assistants/cursor-light.svg" alt="" height="14" align="absmiddle"></picture> Cursor
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
   the reports your accountant asks for, in one app.
 - **Your books, on your computer.** Each company is a single file you own. There's no
@@ -71,8 +74,14 @@ What makes it this fast:
 ## Your books, with your AI assistant
 
 Latte Books is made to be worked from an AI assistant as well as by hand. Open
-**Tools → AI Assistants**, press **Connect** beside <img src="docs/images/assistants/claude.svg" alt="" height="14" align="absmiddle"> Claude Desktop, <img src="docs/images/assistants/claude.svg" alt="" height="14" align="absmiddle"> Claude Code,
-<img src="docs/images/assistants/codex.svg" alt="" height="14" align="absmiddle"> Codex or <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/cursor-dark.svg"><img src="docs/images/assistants/cursor-light.svg" alt="" height="14" align="absmiddle"></picture> Cursor, and talk to your books:
+**Tools → AI Assistants** and press **Connect** beside yours:
+
+- <img src="docs/images/assistants/claude.svg" alt="" height="14" align="absmiddle"> Claude Desktop
+- <img src="docs/images/assistants/claude.svg" alt="" height="14" align="absmiddle"> Claude Code
+- <img src="docs/images/assistants/codex.svg" alt="" height="14" align="absmiddle"> Codex
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/cursor-dark.svg"><img src="docs/images/assistants/cursor-light.svg" alt="" height="14" align="absmiddle"></picture> Cursor
+
+Then talk to your books:
 
 - *"What does Acme owe us, and since when?"*
 - *"Invoice Acme for 10 chairs at ₹2,500, with 18% GST."*
