@@ -37,9 +37,8 @@
 
 ## Why Latte Books
 
-- **Built for speed.** Made to be one of the fastest accounting apps you can install:
-  native code written from scratch in Rust, drawn on the GPU, with no browser inside. A
-  company opens in under a second, in 18 MB of memory.
+- **Built for speed.** Made to be one of the fastest accounting apps you can install.
+  Written from scratch in Rust, Latte Books opens in under a second.
 - **Built for AI.** Connect Claude, Codex or Cursor in one click, and ask your books
   questions, draft invoices or record a month of bills in plain words. The assistant
   asks you before anything is posted to your accounts.
@@ -61,12 +60,11 @@ Latte Books is optimized from the ground up:
 
 What makes it this fast:
 
-- **Native code.** Rust compiles to machine code: no JavaScript engine, no browser, and
-  nothing to warm up.
+- **Native code.** Rust compiles straight to machine code, so there's nothing to load or
+  warm up.
 - **Drawn on the GPU** by [GPUI](https://www.gpui.rs/), the framework behind the Zed
   editor. Long lists and reports draw only the rows on screen, so they scroll smoothly.
-- **One small process.** The whole app is a single program in a fraction of the memory a
-  web-based app needs.
+- **Lightweight.** The whole app is one small program that uses very little memory.
 - **Offline and private.** Everything runs on your computer, with no server and no
   internet needed, and your books never leave it.
 
