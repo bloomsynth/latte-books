@@ -139,7 +139,8 @@ For maintainers. `.github/workflows/release.yml` does the building.
 1. Set the version in the root `Cargo.toml`, for example `0.1.0-beta.2`. The app shows it
    in the sidebar, and the installers and `.exe` files carry it.
 2. Give it a section in [CHANGELOG.md](CHANGELOG.md), `## [0.1.0-beta.2] - 2026-11-01`,
-   saying what changed for someone using the app. That section becomes the release notes.
+   saying what changed for someone using the app, in the format the top of the changelog
+   sets out. That section becomes the release notes.
 3. To try the build first, run **Actions → Release → Run workflow**. It makes the
    installers for each system and keeps them as the run's artifacts, without releasing.
 4. Commit, then tag and push: `git tag v0.1.0-beta.2 && git push origin v0.1.0-beta.2`. The
