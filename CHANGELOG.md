@@ -17,6 +17,11 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [Unreleased]
 
+## [0.1.0-beta.5] - 2026-11-12
+
+Latte Books now sends an anonymous daily count of its use, so we can see how many people
+use it and which features matter.
+
 ### What's new
 
 - **Anonymous usage counts.** Once a day, Latte Books sends a count of its use: its
