@@ -7,9 +7,10 @@
 //! `doc:SalesInvoice`. Never a company's name, its documents, amounts or file paths. The
 //! README's "Usage counts" lists every field.
 //!
-//! Nothing is sent before the first-run notice has been shown, or while Settings → System's
-//! "Send anonymous usage counts" is off. Turning it off also forgets the ID and the features
-//! not yet sent. A failed ping is dropped and tried again later; the app never shows it.
+//! Nothing is sent before the first-run notice has been shown, or while Settings → System →
+//! Advanced's "Send anonymous usage counts" is off. Turning it off also forgets the ID and
+//! the features not yet sent. A failed ping is dropped and tried again later; the app never
+//! shows it.
 //!
 //! A debug build doesn't send, unless `LATTE_TELEMETRY_ENDPOINT` names a service to try it
 //! with, such as `http://localhost:8787/v1/latte-books/ping`.

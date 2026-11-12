@@ -96,6 +96,8 @@ pub struct SettingsPage {
     tab: &'static str,
     forms: HashMap<&'static str, Entity<FormPage>>,
     error: Option<String>,
+    /// Whether System's Advanced section is unfolded; it starts folded.
+    advanced_open: bool,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -115,6 +117,7 @@ impl SettingsPage {
             tab: TABS[0].id,
             forms: HashMap::new(),
             error: None,
+            advanced_open: false,
             focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
         };
@@ -329,16 +332,48 @@ impl SettingsPage {
                     }),
             )
             .children(status.map(|status| div().text_12().text_color(gray(700)).child(status)))
-            .child(self.usage_counts(cx))
     }
 
-    /// Not in Books: the usage counts checkbox, at the foot of System's Updates. Latte keeps
-    /// it in its config (`crate::telemetry`).
+    /// Not in Books: System's Advanced, folded until its heading is clicked. It holds the
+    /// usage counts checkbox, which Latte keeps in its config (`crate::telemetry`).
+    fn advanced(&self, cx: &mut Context<Self>) -> Div {
+        let open = self.advanced_open;
+        div()
+            .v_flex()
+            .p_4()
+            .gap_2()
+            .border_t_1()
+            .border_color(gray(200))
+            .child(
+                div()
+                    .id("advanced-settings")
+                    .h_flex()
+                    .justify_between()
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .text_13()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(gray(900))
+                            .child(t("Advanced")),
+                    )
+                    .child(div().text_12().text_color(gray(600)).child(if open {
+                        t("Hide")
+                    } else {
+                        t("Show")
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.advanced_open = !this.advanced_open;
+                        cx.notify();
+                    })),
+            )
+            .when(open, |d| d.child(self.usage_counts(cx)))
+    }
+
     fn usage_counts(&self, cx: &mut Context<Self>) -> Div {
         let on = crate::telemetry::enabled();
         div()
             .v_flex()
-            .pt_2()
             .gap_1()
             .child(
                 div()
@@ -480,7 +515,9 @@ impl Render for SettingsPage {
                     .overflow_y_scroll()
                     .children(self.forms.get(self.schema()).cloned())
                     .when(self.tab == GST, |d| d.child(self.tax_templates(cx)))
-                    .when(self.tab == "SystemSettings", |d| d.child(self.updates(cx))),
+                    .when(self.tab == "SystemSettings", |d| {
+                        d.child(self.updates(cx)).child(self.advanced(cx))
+                    }),
             )
             .children(tab_bar);
 

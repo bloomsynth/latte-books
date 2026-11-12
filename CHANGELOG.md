@@ -17,6 +17,10 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [Unreleased]
 
+### Improvements
+
+- **Usage counts setting** is now under Settings → System → Advanced.
+
 ## [0.1.0-beta.5] - 2026-11-12
 
 Latte Books now sends an anonymous daily count of its use, so we can see how many people
