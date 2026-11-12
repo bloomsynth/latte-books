@@ -151,8 +151,9 @@ paths. The service keeps the country the count came from, not your IP address.
 - Nothing is sent until the app has told you about it, the first time you open a company.
 - Turn it off in **Settings → System → Send anonymous usage counts**. That also forgets the
   random ID and anything not yet sent.
-- The code that sends it is [crates/latte-ui/src/telemetry.rs](crates/latte-ui/src/telemetry.rs),
-  and the service that receives it is [bloomsynth/telemetry](https://github.com/bloomsynth/telemetry).
+- The code that sends it is [crates/latte-ui/src/telemetry.rs](crates/latte-ui/src/telemetry.rs).
+  The service that receives it, at telemetry.bloomsynth.com, uses your IP address only to
+  find the country and to limit how often one address can send. It never stores or logs it.
 - Copies built from source don't send anything.
 
 ## Coming from Frappe Books

@@ -1,5 +1,5 @@
 //! Not in Books: an anonymous count of use, sent once a day to Bloomsynth's telemetry
-//! service (github.com/bloomsynth/telemetry), so we know how many people use Latte Books
+//! service (telemetry.bloomsynth.com), so we know how many people use Latte Books
 //! and which features they use.
 //!
 //! A ping carries a random ID made on the first run, the app's version, the system, the
