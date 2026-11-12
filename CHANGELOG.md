@@ -19,14 +19,12 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [0.1.0-beta.5] - 2026-11-12
 
-Latte Books now sends an anonymous daily count of its use, so we can see how many people
-use it and which features matter.
+Latte Books now sends an anonymous usage count once a day.
 
 ### What's new
 
-- **Anonymous usage counts.** Once a day, Latte Books sends a count of its use: its
-  version, your system and the features you opened, never your company's data. You can
-  turn it off in Settings → System → Advanced, and the README lists everything it sends.
+- **Anonymous usage counts.** Never your company's data. Turn it off in Settings → System
+  → Advanced.
 
 ## [0.1.0-beta.4] - 2026-11-10
 
