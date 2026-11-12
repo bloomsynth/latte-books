@@ -23,8 +23,8 @@ Latte Books now sends an anonymous usage count once a day.
 
 ### What's new
 
-- **Anonymous usage counts.** Never your company's data. Turn it off in Settings → System
-  → Advanced.
+- **Anonymous usage counts.** Basic telemetry is sent. No data from the books. Turn it off
+  in Settings → System → Advanced.
 
 ## [0.1.0-beta.4] - 2026-11-10
 
