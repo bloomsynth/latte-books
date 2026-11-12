@@ -329,25 +329,17 @@ impl SettingsPage {
                     }),
             )
             .children(status.map(|status| div().text_12().text_color(gray(700)).child(status)))
+            .child(self.usage_counts(cx))
     }
 
-    /// Not in Books: System's Usage Counts, which Latte keeps in its config
-    /// (`crate::telemetry`).
+    /// Not in Books: the usage counts checkbox, at the foot of System's Updates. Latte keeps
+    /// it in its config (`crate::telemetry`).
     fn usage_counts(&self, cx: &mut Context<Self>) -> Div {
         let on = crate::telemetry::enabled();
         div()
             .v_flex()
-            .p_4()
-            .gap_2()
-            .border_t_1()
-            .border_color(gray(200))
-            .child(
-                div()
-                    .text_13()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(gray(900))
-                    .child(t("Usage Counts")),
-            )
+            .pt_2()
+            .gap_1()
             .child(
                 div()
                     .id("send-usage-counts")
@@ -367,19 +359,8 @@ impl SettingsPage {
                     })),
             )
             .child(div().text_12().text_color(gray(600)).child(t(
-                "Once a day, Latte Books tells Bloomsynth its version, your system and language, and which features you opened, under a random ID. Never your company's name, documents or amounts. It's how we know how many people use it.",
+                "The app's version, your system and the features you open. Never your company's data.",
             )))
-            .child(
-                div().h_flex().child(
-                    Button::new("usage-counts-details")
-                        .label(t("What's Sent"))
-                        .on_click(|_, _, cx| {
-                            cx.open_url(
-                                "https://github.com/bloomsynth/latte-books#usage-counts",
-                            )
-                        }),
-                ),
-            )
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -499,9 +480,7 @@ impl Render for SettingsPage {
                     .overflow_y_scroll()
                     .children(self.forms.get(self.schema()).cloned())
                     .when(self.tab == GST, |d| d.child(self.tax_templates(cx)))
-                    .when(self.tab == "SystemSettings", |d| {
-                        d.child(self.updates(cx)).child(self.usage_counts(cx))
-                    }),
+                    .when(self.tab == "SystemSettings", |d| d.child(self.updates(cx))),
             )
             .children(tab_bar);
 
