@@ -70,7 +70,9 @@ What makes it this fast:
   editor. Long lists and reports draw only the rows on screen, so they scroll smoothly.
 - **Lightweight.** The whole app is one small program that uses very little memory.
 - **Offline and private.** Everything runs on your computer, with no server and no
-  internet needed, and your books never leave it.
+  internet needed, and your books never leave it. The app only goes online to check for
+  updates and to send an anonymous [usage count](#usage-counts), and you can turn off
+  both.
 
 ## Your books, with your AI assistant
 
@@ -128,6 +130,30 @@ Latte Books is in **beta**: keep a copy of your company file while you try it.
   untested).
 
 What's next is in [docs/PLAN.md](docs/PLAN.md).
+
+## Usage counts
+
+Once a day, Latte Books sends Bloomsynth an anonymous count of its use, so we know how
+many people use it and which features matter. This is everything it sends:
+
+| Field | Example |
+|---|---|
+| A random ID, made on first run and linked to nothing else | `5f0c…9a1e` |
+| The app's version | `0.1.0-beta.5` |
+| Your system and processor type | `windows`, `x86_64` |
+| The app's language | `English` |
+| The features you opened since the last count, by name | `pos`, `doc:SalesInvoice`, `report:GSTR1`, `export:GSTR1:json` |
+| The AI assistants you've connected | `assistant:ClaudeDesktop` |
+
+It never sends your company's name, GSTIN, parties, items, amounts, documents or file
+paths. The service keeps the country the count came from, not your IP address.
+
+- Nothing is sent until the app has told you about it, the first time you open a company.
+- Turn it off in **Settings → System → Send anonymous usage counts**. That also forgets the
+  random ID and anything not yet sent.
+- The code that sends it is [crates/latte-ui/src/telemetry.rs](crates/latte-ui/src/telemetry.rs),
+  and the service that receives it is [bloomsynth/telemetry](https://github.com/bloomsynth/telemetry).
+- Copies built from source don't send anything.
 
 ## Coming from Frappe Books
 

@@ -4213,6 +4213,7 @@ dependencies = [
  "latte-printer",
  "latte-schema",
  "raw-window-handle",
+ "reqwest",
  "serde_json",
 ]
 

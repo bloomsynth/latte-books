@@ -377,6 +377,7 @@ impl ReportPage {
             }
         };
         let extension = if json { "json" } else { "csv" };
+        crate::telemetry::record(&format!("export:{}:{extension}", self.report.report_name()));
         let name = self
             .report
             .file_name(&self.session.borrow().fyo)

@@ -17,6 +17,12 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [Unreleased]
 
+### What's new
+
+- **Anonymous usage counts.** Once a day, Latte Books sends a count of its use: its
+  version, your system and the features you opened, never your company's data. You can
+  turn it off in Settings → System, and the README lists everything it sends.
+
 ## [0.1.0-beta.4] - 2026-11-10
 
 Latte Books now updates itself, prepares GSTR-1 and GSTR-3B for the GST portal, handles

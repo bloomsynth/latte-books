@@ -306,7 +306,7 @@ impl SettingsPage {
                     })),
             )
             .child(div().text_12().text_color(gray(600)).child(t(
-                "When Latte Books starts and once a day, it asks GitHub, where its releases are,                  for a newer version. Nothing else is sent.",
+                "When Latte Books starts and once a day, it asks GitHub, where its releases are, for a newer version. Nothing else is sent with it.",
             )))
             .child(
                 div()
@@ -329,6 +329,57 @@ impl SettingsPage {
                     }),
             )
             .children(status.map(|status| div().text_12().text_color(gray(700)).child(status)))
+    }
+
+    /// Not in Books: System's Usage Counts, which Latte keeps in its config
+    /// (`crate::telemetry`).
+    fn usage_counts(&self, cx: &mut Context<Self>) -> Div {
+        let on = crate::telemetry::enabled();
+        div()
+            .v_flex()
+            .p_4()
+            .gap_2()
+            .border_t_1()
+            .border_color(gray(200))
+            .child(
+                div()
+                    .text_13()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gray(900))
+                    .child(t("Usage Counts")),
+            )
+            .child(
+                div()
+                    .id("send-usage-counts")
+                    .h_flex()
+                    .gap_2()
+                    .cursor_pointer()
+                    .child(crate::widgets::check_box(on))
+                    .child(
+                        div()
+                            .text_13()
+                            .text_color(gray(800))
+                            .child(t("Send anonymous usage counts")),
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        crate::telemetry::set_enabled(!on, cx);
+                        cx.notify();
+                    })),
+            )
+            .child(div().text_12().text_color(gray(600)).child(t(
+                "Once a day, Latte Books tells Bloomsynth its version, your system and language, and which features you opened, under a random ID. Never your company's name, documents or amounts. It's how we know how many people use it.",
+            )))
+            .child(
+                div().h_flex().child(
+                    Button::new("usage-counts-details")
+                        .label(t("What's Sent"))
+                        .on_click(|_, _, cx| {
+                            cx.open_url(
+                                "https://github.com/bloomsynth/latte-books#usage-counts",
+                            )
+                        }),
+                ),
+            )
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -448,7 +499,9 @@ impl Render for SettingsPage {
                     .overflow_y_scroll()
                     .children(self.forms.get(self.schema()).cloned())
                     .when(self.tab == GST, |d| d.child(self.tax_templates(cx)))
-                    .when(self.tab == "SystemSettings", |d| d.child(self.updates(cx))),
+                    .when(self.tab == "SystemSettings", |d| {
+                        d.child(self.updates(cx)).child(self.usage_counts(cx))
+                    }),
             )
             .children(tab_bar);
 

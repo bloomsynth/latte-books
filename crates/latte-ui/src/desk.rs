@@ -270,6 +270,7 @@ impl Desk {
                 return;
             }
         };
+        crate::telemetry::record(&crate::telemetry::route_feature(&route));
         let result: Result<(), String> = match nav {
             Nav::Reopen(_) => Ok(()),
             Nav::Doc(doc) if doc.schema_name() == "PrintTemplate" => {

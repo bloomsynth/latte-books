@@ -33,6 +33,7 @@ mod session;
 mod settings;
 mod setup_wizard;
 mod shortcuts;
+mod telemetry;
 mod template_builder;
 mod updater;
 mod widgets;
@@ -70,6 +71,7 @@ pub fn run() {
             gpui_kit::init(cx);
             books::init(cx);
             updater::init(cx);
+            telemetry::init(cx);
             let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
