@@ -13,7 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        # No macOS: GitHub's macOS runners are often short, and the run is cancelled before
+        # it starts. release.yml builds on macOS for each tag, which catches macOS-only code.
+        os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
