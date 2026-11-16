@@ -260,3 +260,56 @@ fn an_assistant_has_the_gst_returns_only_with_a_gstin() {
         json!({ "report": "gstr-1", "filters": { "fromDate": "2026-07-01", "toDate": "2026-09-30" } }),
     );
 }
+
+#[test]
+fn a_payment_names_a_purchase_invoice_whatever_order_its_row_is_given_in() {
+    let file = company();
+    let mut server = Server::new(Some(file.0.clone()));
+    ok(
+        &mut server,
+        "create_document",
+        json!({ "type": "Party", "values": { "name": "Initech", "role": "Supplier" } }),
+    );
+    ok(
+        &mut server,
+        "create_document",
+        json!({ "type": "Item", "values": { "name": "Paper", "rate": 100 } }),
+    );
+    let invoice = ok(
+        &mut server,
+        "create_document",
+        json!({
+            "type": "PurchaseInvoice",
+            "values": {
+                "party": "Initech",
+                "date": "2026-10-23",
+                "items": [{ "item": "Paper", "quantity": 5 }],
+            },
+        }),
+    );
+    let name = invoice["name"].as_str().unwrap().to_owned();
+    ok(
+        &mut server,
+        "submit_document",
+        json!({ "type": "PurchaseInvoice", "name": name }),
+    );
+
+    // The invoice's name comes before its type, as a caller may well give them.
+    let payment = ok(
+        &mut server,
+        "create_document",
+        json!({
+            "type": "Payment",
+            "values": {
+                "paymentType": "Pay",
+                "for": [{
+                    "referenceName": name,
+                    "referenceType": "PurchaseInvoice",
+                }],
+                "party": "Initech",
+            },
+        }),
+    );
+    assert_eq!(payment["for"][0]["referenceType"], "PurchaseInvoice");
+    assert_eq!(payment["for"][0]["referenceName"], name);
+}
