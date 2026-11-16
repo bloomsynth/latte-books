@@ -6,6 +6,9 @@
 ; the install folder, and installs over the old files, which leaves the user's settings and
 ; companies alone. Same-version reinstalls and downgrades still ask.
 ; Look for "Updating" to find each change.
+;
+; Also changed: latte-mcp.exe, which an AI assistant keeps running, is stopped before its file
+; is replaced or deleted. Look for "StopMcpServer".
 
 ; Set the compression algorithm.
 !if "{{compression}}" == ""
@@ -500,10 +503,24 @@ SectionEnd
   app_check_done:
 !macroend
 
+; StopMcpServer: an AI assistant starts latte-mcp.exe and keeps it running, and Windows won't
+; let the installer replace or delete a running program. Stop it; the assistant starts it again
+; the next time it's used.
+!macro StopMcpServer
+  nsis_tauri_utils::FindProcess "latte-mcp.exe"
+  Pop $R0
+  ${If} $R0 = 0
+    nsis_tauri_utils::KillProcess "latte-mcp.exe"
+    Pop $R0
+    Sleep 500
+  ${EndIf}
+!macroend
+
 Section Install
   SetOutPath $INSTDIR
 
   !insertmacro CheckIfAppIsRunning
+  !insertmacro StopMcpServer
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -608,6 +625,7 @@ FunctionEnd
 
 Section Uninstall
   !insertmacro CheckIfAppIsRunning
+  !insertmacro StopMcpServer
 
   ; Delete the app directory and its content from disk
   ; Copy main executable
