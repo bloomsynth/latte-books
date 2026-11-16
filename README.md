@@ -48,7 +48,7 @@
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
   the reports your accountant asks for, in one app.
 - **Your books, on your computer.** Each company is a single file you own. There's no
-  account, no telemetry and no cloud, unless you connect an AI assistant. The app only
+  account and no cloud, unless you connect an AI assistant. The app only
   goes online to check for a new version, which you can turn off in Settings.
 - **Free and open source.** Nothing to pay for, now or later, under the AGPL.
 - **Actively developed.** New features and fixes land every week, and the app updates
