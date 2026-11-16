@@ -48,8 +48,7 @@
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
   the reports your accountant asks for, in one app.
 - **Your books, on your computer.** Each company is a single file you own. There's no
-  account and no cloud, unless you connect an AI assistant. The app only
-  goes online to check for a new version, which you can turn off in Settings.
+  account and no cloud, unless you connect an AI assistant.
 - **Free and open source.** Nothing to pay for, now or later, under the AGPL.
 - **Actively developed.** New features and fixes land every week, and the app updates
   itself in a click: see the [changelog](CHANGELOG.md).
@@ -70,8 +69,7 @@ What makes it this fast:
   editor. Long lists and reports draw only the rows on screen, so they scroll smoothly.
 - **Lightweight.** The whole app is one small program that uses very little memory.
 - **Offline and private.** Everything runs on your computer, with no server and no
-  internet needed, and your books never leave it. The app only goes online to check for
-  updates and to send an anonymous usage count, and you can turn off both.
+  internet needed, and your books never leave it.
 
 ## Your books, with your AI assistant
 
