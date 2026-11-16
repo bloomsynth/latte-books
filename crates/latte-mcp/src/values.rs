@@ -186,6 +186,16 @@ pub fn row_values(schema: &Schema, row: &Value, pesa: &MoneyMaker) -> Result<Doc
         let field = find_field(schema, fieldname)?;
         values.insert(fieldname.clone(), field_value(field, value, pesa)?);
     }
+    // Set in the schema's field order, not the caller's: a field can depend on one before it,
+    // as a payment row's invoice name on its invoice type.
+    let position = |name: &String| {
+        schema
+            .fields
+            .iter()
+            .position(|f| &f.fieldname == name)
+            .unwrap_or(usize::MAX)
+    };
+    values.sort_by_cached_key(|name, _| position(name));
     Ok(values)
 }
 
