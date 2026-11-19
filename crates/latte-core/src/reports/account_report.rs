@@ -12,7 +12,7 @@
 
 use indexmap::IndexMap;
 use jiff::civil::Date;
-use jiff::{ToSpan, Zoned};
+use jiff::{ToSpan, ZonedDateTime};
 use latte_db::pesa::Money;
 use latte_db::{
     DocValue, Filter as DbFilter, FilterOperand, FilterValue as DbFilterValue, GetAllOptions,
@@ -227,7 +227,7 @@ impl AccountReport {
             let to = to_date.checked_add(1.day()).unwrap_or(to_date);
             return (from, to);
         }
-        let this_year = Zoned::now().date().year();
+        let this_year = ZonedDateTime::now().date().year();
         let (from, to) = get_fiscal_endpoints(
             fyo,
             self.to_year.unwrap_or(this_year),

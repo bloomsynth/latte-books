@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use jiff::Zoned;
+use jiff::ZonedDateTime;
 use jiff::civil::Date;
 use latte_db::pesa::Money;
 
@@ -344,7 +344,7 @@ impl Report for Gstr3b {
 
     /// GSTR-1's period filters.
     fn filters(&self, fyo: &Fyo) -> Vec<Filter> {
-        let today = Zoned::now().date();
+        let today = ZonedDateTime::now().date();
         let mut filters = vec![
             Filter::new(
                 "fiscalYear",
@@ -396,7 +396,7 @@ impl Report for Gstr3b {
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
         self.period
-            .set_default_filters(Filing::of(fyo), Zoned::now().date());
+            .set_default_filters(Filing::of(fyo), ZonedDateTime::now().date());
         let lines = self.lines(fyo)?;
         Ok(lines
             .iter()
@@ -444,7 +444,7 @@ impl Report for Gstr3b {
     fn note(&self, fyo: &Fyo, formatter: &Formatter) -> Option<String> {
         let due = self.due_date(fyo)?;
         let shown = formatter.date(due);
-        Some(if Zoned::now().date() > due {
+        Some(if ZonedDateTime::now().date() > due {
             format!("GSTR-3B was due on {shown}")
         } else {
             format!("GSTR-3B is due on {shown}")

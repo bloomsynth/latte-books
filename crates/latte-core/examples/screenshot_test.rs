@@ -259,7 +259,9 @@ fn run(path: &str) -> Result<()> {
         let name = doc.name().unwrap_or_default().to_owned();
         let invoice = fyo.get_doc(doc.schema_name(), Some(&name))?;
         if let Some(mut payment) = get_payment(&invoice, &fyo)? {
-            let at = paid_on.at(12, 0, 0, 0).to_zoned(TimeZone::system())?;
+            let at = paid_on
+                .at(12, 0, 0, 0)
+                .to_zoned_datetime(TimeZone::system())?;
             payment.set(&mut fyo, "date", DocValue::Date(at.timestamp()))?;
             payments.push((paid_on, payment));
         }

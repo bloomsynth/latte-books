@@ -333,7 +333,9 @@ fn new_file_path(company_name: &str) -> Result<PathBuf, String> {
     if !path.exists() {
         return Ok(path);
     }
-    let stamp = jiff::Zoned::now().strftime("%Y%m%d%H%M%S").to_string();
+    let stamp = jiff::ZonedDateTime::now()
+        .strftime("%Y%m%d%H%M%S")
+        .to_string();
     Ok(dir.join(format!("{file_name}_{stamp}.books.db")))
 }
 

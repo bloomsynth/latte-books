@@ -143,7 +143,7 @@ fn parse_iso(text: &str) -> Option<Timestamp> {
         .or_else(|_| civil::Date::from_str(text).map(|d| d.to_datetime(civil::Time::midnight())))
         .ok()?;
     civil
-        .to_zoned(TimeZone::system())
+        .to_zoned_datetime(TimeZone::system())
         .ok()
         .map(|z| z.timestamp())
 }
@@ -362,9 +362,12 @@ fn to_raw_date(value: &DocValue, field: &Field) -> Result<RawValue, Error> {
         _ => return Err(raw_conversion_error(value, field)),
     };
     Ok(match timestamp {
-        Some(timestamp) => {
-            RawValue::Text(timestamp.to_zoned(TimeZone::system()).date().to_string())
-        }
+        Some(timestamp) => RawValue::Text(
+            timestamp
+                .to_zoned_datetime(TimeZone::system())
+                .date()
+                .to_string(),
+        ),
         None => RawValue::Null,
     })
 }
@@ -438,7 +441,10 @@ fn js_date_parse(text: &str) -> Option<Timestamp> {
     if text.len() == 10
         && let Ok(date) = civil::Date::from_str(text)
     {
-        return date.to_zoned(TimeZone::UTC).ok().map(|z| z.timestamp());
+        return date
+            .to_zoned_datetime(TimeZone::UTC)
+            .ok()
+            .map(|z| z.timestamp());
     }
     parse_iso(text)
 }

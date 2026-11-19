@@ -1,6 +1,6 @@
 // Port of reports/BalanceSheet/BalanceSheet.ts @ v0.36.0.
 
-use jiff::Zoned;
+use jiff::ZonedDateTime;
 
 use crate::Error;
 use crate::fyo::Fyo;
@@ -79,6 +79,6 @@ impl Report for BalanceSheet {
     }
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
-        self.run_on(fyo, formatter, Zoned::now().date())
+        self.run_on(fyo, formatter, ZonedDateTime::now().date())
     }
 }

@@ -164,7 +164,7 @@ impl ExportWizard {
         let file_name = format!(
             "{}_{}.{extension}",
             self.title.to_lowercase().replace(char::is_whitespace, "-"),
-            jiff::Zoned::now().date()
+            jiff::ZonedDateTime::now().date()
         );
         let dir = std::env::var_os("USERPROFILE")
             .or_else(|| std::env::var_os("HOME"))

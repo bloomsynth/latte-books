@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::process::ExitCode;
 
-use jiff::Zoned;
+use jiff::ZonedDateTime;
 use latte_core::Fyo;
 use latte_db::{Database, DocValue, DocValueMap, Filter, GetAllOptions, Order, QueryFilter};
 
@@ -72,7 +72,7 @@ fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     };
     let debit_account = text_of(debit_account.get("name"));
     let credit_account = text_of(credit_account.get("name"));
-    let today = Zoned::now().date().to_string();
+    let today = ZonedDateTime::now().date().to_string();
     println!("debit {debit_account}, credit {credit_account}, dated {today}\n");
 
     let mut submitted = journal_entry(

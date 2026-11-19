@@ -495,7 +495,7 @@ fn ales(fyo: &Fyo, name: &str) -> Vec<(String, String, String)> {
 #[test]
 fn invoices_earn_and_redeem_loyalty_points() {
     let (_file, mut fyo) = loyalty_shop();
-    let today = jiff::Zoned::now().date().to_string();
+    let today = jiff::ZonedDateTime::now().date().to_string();
 
     let mut sinv = invoice(&mut fyo, &today, JACKET, 2.0, 1000.0);
     assert_eq!(sinv.get("loyaltyProgram"), Some(&text("Program")));

@@ -152,7 +152,10 @@ fn sale(fyo: &mut Fyo, party: &str, quantity: f64, tax: &str) -> Doc {
 fn return_of(fyo: &mut Fyo, name: &str, quantity: f64, day: jiff::civil::Date) -> Doc {
     let invoice = fyo.get_doc("SalesInvoice", Some(name)).unwrap();
     let mut doc = get_return_doc(&invoice, fyo).unwrap().unwrap();
-    let midnight = day.to_zoned(TimeZone::system()).unwrap().timestamp();
+    let midnight = day
+        .to_zoned_datetime(TimeZone::system())
+        .unwrap()
+        .timestamp();
     doc.set(fyo, "date", DocValue::Date(midnight)).unwrap();
     doc.set_child(fyo, "items", 0, "quantity", DocValue::Number(-quantity))
         .unwrap();
@@ -189,7 +192,10 @@ fn registered_company(file: &TempFile) -> Fyo {
 /// Stores an invoice's date as Books does: the instant, in UTC, of that hour of the day
 /// in the computer's time zone.
 fn store_date_as_books(fyo: &Fyo, name: &str, day: jiff::civil::Date, hour: i8) {
-    let zoned = day.at(hour, 0, 0, 0).to_zoned(TimeZone::system()).unwrap();
+    let zoned = day
+        .at(hour, 0, 0, 0)
+        .to_zoned_datetime(TimeZone::system())
+        .unwrap();
     let stored = zoned
         .timestamp()
         .strftime("%Y-%m-%dT%H:%M:%S.000Z")

@@ -157,7 +157,7 @@ pub fn print_values(
     values.insert("grandTotalInWords".to_owned(), json!(in_words(total, t)));
 
     if let Some(DocValue::Date(date)) = doc.get("date") {
-        let zoned = date.to_zoned(TimeZone::system());
+        let zoned = date.to_zoned_datetime(TimeZone::system());
         values.insert(
             "date".to_owned(),
             json!(zoned.strftime("%b %-d, %Y").to_string()),
@@ -366,7 +366,7 @@ fn format_value(
         (Some(FieldType::Int), DocValue::Number(n)) => format!("{}", n.trunc() as i64),
         (_, DocValue::Money(money)) => formatter.currency(money),
         (Some(FieldType::Datetime), DocValue::Date(ts)) => {
-            let zoned = ts.to_zoned(TimeZone::system());
+            let zoned = ts.to_zoned_datetime(TimeZone::system());
             format!(
                 "{} {}",
                 formatter.date(zoned.date()),

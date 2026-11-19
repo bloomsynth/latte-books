@@ -41,7 +41,7 @@ pub use gstr3b::Gstr3b;
 pub use period::{Filing, Period};
 
 use jiff::civil::{Date, date};
-use jiff::{Timestamp, ToSpan, Zoned};
+use jiff::{Timestamp, ToSpan, ZonedDateTime};
 use latte_db::{
     DocValue, DocValueMap, Filter as DbFilter, FilterOperand, FilterValue as DbFilterValue,
     GetAllOptions, QueryFilter,
@@ -612,7 +612,7 @@ impl Report for Gstr {
     }
 
     fn filters(&self, fyo: &Fyo) -> Vec<Filter> {
-        let today = Zoned::now().date();
+        let today = ZonedDateTime::now().date();
         let transfer_types = self
             .transfer_types()
             .into_iter()
@@ -701,7 +701,7 @@ impl Report for Gstr {
     }
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
-        self.set_default_filters(Filing::of(fyo), Zoned::now().date());
+        self.set_default_filters(Filing::of(fyo), ZonedDateTime::now().date());
         self.rows = self.gstr_rows(fyo)?;
         let columns = self.kinded_columns();
         self.rows
@@ -726,7 +726,7 @@ impl Report for Gstr {
     fn note(&self, _fyo: &Fyo, formatter: &Formatter) -> Option<String> {
         let due = self.due_date()?;
         let shown = formatter.date(due);
-        Some(if Zoned::now().date() > due {
+        Some(if ZonedDateTime::now().date() > due {
             format!("GSTR-1 was due on {shown}")
         } else {
             format!("GSTR-1 is due on {shown}")

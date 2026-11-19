@@ -63,8 +63,8 @@ fn submitting_a_journal_entry_posts_it() {
 
     // Midnight UTC of the entry's date as this computer's time zone sees it.
     let date: Timestamp = "2025-04-01T00:00:00Z".parse().unwrap();
-    let day = date.to_zoned(TimeZone::system()).date();
-    let expected = day.to_zoned(TimeZone::UTC).unwrap().timestamp();
+    let day = date.to_zoned_datetime(TimeZone::system()).date();
+    let expected = day.to_zoned_datetime(TimeZone::UTC).unwrap().timestamp();
     assert_eq!(cash.get("date"), Some(&DocValue::Date(expected)));
 
     let sales = &entries[1];

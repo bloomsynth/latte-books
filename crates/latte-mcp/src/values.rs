@@ -114,14 +114,14 @@ pub fn map_json(schema: &Schema, row: &DocValueMap) -> Value {
 /// that zone, wherever the computer is. In UTC, a date east of Greenwich would show as
 /// the day before.
 pub fn date_text(timestamp: Timestamp, tz: &TimeZone) -> String {
-    timestamp.to_zoned(tz.clone()).date().to_string()
+    timestamp.to_zoned_datetime(tz.clone()).date().to_string()
 }
 
 /// A date for a Date field: midnight on it in the computer's time zone, which the file
 /// stores as that date. Midnight in UTC would be stored as the day before west of
 /// Greenwich.
 pub fn date_timestamp(date: Date, tz: &TimeZone) -> Result<Timestamp, String> {
-    date.to_zoned(tz.clone())
+    date.to_zoned_datetime(tz.clone())
         .map(|zoned| zoned.timestamp())
         .map_err(|e| e.to_string())
 }
