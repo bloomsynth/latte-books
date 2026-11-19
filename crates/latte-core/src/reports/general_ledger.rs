@@ -7,7 +7,7 @@
 //   Books offers them only when it is off.
 
 use jiff::civil::Date;
-use jiff::{ToSpan, Zoned};
+use jiff::{ToSpan, ZonedDateTime};
 use latte_db::{Filter as DbFilter, FilterValue as DbFilterValue, QueryFilter};
 
 use crate::Error;
@@ -382,7 +382,7 @@ impl Report for GeneralLedger {
     }
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
-        self.set_default_filters(Zoned::now().date());
+        self.set_default_filters(ZonedDateTime::now().date());
         let columns = self.columns(fyo, formatter)?;
         let entries = self.entries(fyo)?;
         Ok(entries

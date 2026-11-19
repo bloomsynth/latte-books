@@ -11,7 +11,7 @@
 
 use indexmap::IndexMap;
 use jiff::civil::Date;
-use jiff::{ToSpan, Zoned};
+use jiff::{ToSpan, ZonedDateTime};
 use latte_db::{Filter as DbFilter, FilterValue as DbFilterValue, QueryFilter};
 
 use crate::Error;
@@ -238,6 +238,6 @@ impl Report for TrialBalance {
     }
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
-        self.run_on(fyo, formatter, Zoned::now().date())
+        self.run_on(fyo, formatter, ZonedDateTime::now().date())
     }
 }

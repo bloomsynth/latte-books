@@ -7,7 +7,7 @@
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
-use jiff::{Timestamp, ToSpan, Zoned};
+use jiff::{Timestamp, ToSpan, ZonedDateTime};
 use latte_db::QueryFilter;
 
 use crate::Error;
@@ -66,7 +66,7 @@ fn has_serial_numbers(fyo: &Fyo) -> bool {
 
 /// The start of a date, as Books' `Date.parse` reads a date: midnight UTC.
 fn start_of(date: Date) -> Option<Timestamp> {
-    date.to_zoned(TimeZone::UTC)
+    date.to_zoned_datetime(TimeZone::UTC)
         .ok()
         .map(|zoned| zoned.timestamp())
 }
@@ -443,7 +443,7 @@ impl Report for StockLedger {
     }
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
-        self.set_default_filters(Zoned::now().date());
+        self.set_default_filters(ZonedDateTime::now().date());
         let columns = self.kinded_columns(fyo);
         let filtered = self.filtered(computed_entries(fyo)?);
         let colour =

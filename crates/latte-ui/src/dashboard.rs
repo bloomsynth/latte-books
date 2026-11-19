@@ -106,7 +106,7 @@ pub struct DashboardPage {
 impl EventEmitter<Navigate> for DashboardPage {}
 
 fn today() -> jiff::civil::Date {
-    jiff::Zoned::now().date()
+    jiff::ZonedDateTime::now().date()
 }
 
 impl DashboardPage {

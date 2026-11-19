@@ -351,7 +351,7 @@ pub fn edit_text(field: &Field, value: Option<&DocValue>) -> String {
         }
         Some(DocValue::Number(n)) => crate::fyo::model::helpers::js_number_string(*n),
         Some(DocValue::Date(ts)) if field.fieldtype == Some(FieldType::Datetime) => {
-            let zoned = ts.to_zoned(TimeZone::system());
+            let zoned = ts.to_zoned_datetime(TimeZone::system());
             format!("{} {}", zoned.date(), zoned.time().strftime("%H:%M"))
         }
         Some(DocValue::Date(ts)) => local_date(*ts).to_string(),
@@ -412,7 +412,7 @@ pub fn parse(fyo: &Fyo, field: &Field, text: &str) -> Result<DocValue, Error> {
                 .map_err(|_| Error::Value(format!("{label}: {time} is not a time")))?;
             let zoned = date
                 .to_datetime(time)
-                .to_zoned(TimeZone::system())
+                .to_zoned_datetime(TimeZone::system())
                 .map_err(|e| Error::Value(e.to_string()))?;
             DocValue::Date(zoned.timestamp())
         }
@@ -427,7 +427,7 @@ fn parse_date(text: &str, label: &str) -> Result<Date, Error> {
 
 /// A Date field's value for a date: its local midnight, as Books stores one.
 pub fn date_timestamp(date: Date) -> Result<Timestamp, Error> {
-    date.to_zoned(TimeZone::system())
+    date.to_zoned_datetime(TimeZone::system())
         .map(|zoned| zoned.timestamp())
         .map_err(|e| Error::Value(e.to_string()))
 }

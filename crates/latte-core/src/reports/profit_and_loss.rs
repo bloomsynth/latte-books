@@ -6,7 +6,7 @@
 // - With expenses but no income, the total is labelled "Total Expense (Debit)". Books
 //   labels it "Total Income (Credit)".
 
-use jiff::Zoned;
+use jiff::ZonedDateTime;
 
 use crate::Error;
 use crate::fyo::Fyo;
@@ -166,6 +166,6 @@ impl Report for ProfitAndLoss {
     }
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
-        self.run_on(fyo, formatter, Zoned::now().date())
+        self.run_on(fyo, formatter, ZonedDateTime::now().date())
     }
 }
