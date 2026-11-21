@@ -4,12 +4,10 @@
 //!
 //! A ping carries a random ID made on the first run, the app's version, the system, the
 //! language and the names of the features used since the last ping, such as `pos` or
-//! `doc:SalesInvoice`. Never a company's name, its documents, amounts or file paths. The
-//! README's "Usage counts" lists every field.
+//! `doc:SalesInvoice`. Never a company's name, its documents, amounts or file paths.
 //!
-//! Nothing is sent before the first-run notice has been shown, or while Settings → System →
-//! Advanced's "Send anonymous usage counts" is off. Turning it off also forgets the ID and
-//! the features not yet sent. A failed ping is dropped and tried again later; the app never
+//! Nothing is sent while Settings → System → Advanced's "Send anonymous usage counts" is
+//! off. Turning it off also forgets the ID and the features not yet sent. A failed ping is dropped and tried again later; the app never
 //! shows it.
 //!
 //! A debug build doesn't send, unless `LATTE_TELEMETRY_ENDPOINT` names a service to try it
@@ -23,9 +21,6 @@ use gpui_kit::*;
 use latte_core::config::{config_value, set_config_value};
 use latte_core::views::sidebar::Route;
 
-use crate::i18n::t;
-use crate::widgets::{Kind as DialogKind, Toast, show_toast};
-
 const ENDPOINT: &str = "https://telemetry.bloomsynth.com/v1/latte-books/ping";
 
 /// Settings → System's "Send anonymous usage counts", on unless set to "false".
@@ -36,8 +31,6 @@ const INSTALL_ID_KEY: &str = "installId";
 const FEATURES_KEY: &str = "usageFeatures";
 /// The UTC day of the last ping, YYYY-MM-DD.
 const LAST_PING_KEY: &str = "usageLastPing";
-/// "true" once the first-run notice has been shown.
-const NOTICE_KEY: &str = "usageNoticeShown";
 
 /// The most features one ping carries; the service takes up to 200.
 const MAX_FEATURES: usize = 200;
@@ -212,10 +205,7 @@ fn send(endpoint: &str, body: &serde_json::Value) -> Result<(), String> {
 /// Sends today's ping, if it's due.
 async fn ping_if_due(endpoint: &str, cx: &mut AsyncApp) {
     let day = today();
-    if !enabled()
-        || config_value(NOTICE_KEY).as_deref() != Some("true")
-        || config_value(LAST_PING_KEY).as_deref() == Some(day.as_str())
-    {
+    if !enabled() || config_value(LAST_PING_KEY).as_deref() == Some(day.as_str()) {
         return;
     }
     let Some(sent) = with_features(|features| features.clone()) else {
@@ -248,32 +238,6 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
-}
-
-/// The first-run notice: says what's sent, once, with a way to Settings to turn it off.
-/// No ping is sent before it has been shown.
-pub fn show_notice_once(window: &mut Window, cx: &mut App) {
-    if config_value(NOTICE_KEY).as_deref() == Some("true") || !enabled() {
-        return;
-    }
-    set_config_value(NOTICE_KEY, "true");
-    show_toast(
-        Toast::new(
-            t("Latte Books sends an anonymous count of its use once a day: its version, your system and the features you open. Never your company's data."),
-            DialogKind::Info,
-        )
-        .action(t("Settings"), |window, cx| {
-            crate::desk::navigate(
-                Route::Settings {
-                    tab: Some("SystemSettings".to_owned()),
-                },
-                window,
-                cx,
-            )
-        }),
-        window,
-        cx,
-    );
 }
 
 #[cfg(test)]
