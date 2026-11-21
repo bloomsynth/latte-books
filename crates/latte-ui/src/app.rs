@@ -123,7 +123,6 @@ impl LatteApp {
             }),
         ];
         self.screen = Screen::Desk(desk);
-        crate::telemetry::show_notice_once(window, cx);
         cx.notify();
     }
 }

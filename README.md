@@ -148,7 +148,6 @@ many people use it and which features matter. This is everything it sends:
 It never sends your company's name, GSTIN, parties, items, amounts, documents or file
 paths. The service keeps the country the count came from, not your IP address.
 
-- Nothing is sent until the app has told you about it, the first time you open a company.
 - Turn it off in **Settings → System → Advanced → Send anonymous usage counts**. That also
   forgets the random ID and anything not yet sent.
 - The code that sends it is [crates/latte-ui/src/telemetry.rs](crates/latte-ui/src/telemetry.rs).
