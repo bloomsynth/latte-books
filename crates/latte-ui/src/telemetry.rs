@@ -4,8 +4,7 @@
 //!
 //! A ping carries a random ID made on the first run, the app's version, the system, the
 //! language and the names of the features used since the last ping, such as `pos` or
-//! `doc:SalesInvoice`. Never a company's name, its documents, amounts or file paths. The
-//! README's "Usage counts" lists every field.
+//! `doc:SalesInvoice`. Never a company's name, its documents, amounts or file paths.
 //!
 //! Nothing is sent while Settings → System → Advanced's "Send anonymous usage counts" is
 //! off. Turning it off also forgets the ID and the features not yet sent. A failed ping is dropped and tried again later; the app never
