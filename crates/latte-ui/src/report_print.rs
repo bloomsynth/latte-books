@@ -256,7 +256,7 @@ impl ReportPrintPage {
         };
         let name = {
             let s = self.session.borrow();
-            let today = jiff::Zoned::now().date();
+            let today = jiff::ZonedDateTime::now().date();
             format!("{} - {}", t(&self.report.title), s.formatter.date(today))
         };
         print_parts::output(printout, print, &name, window, cx);

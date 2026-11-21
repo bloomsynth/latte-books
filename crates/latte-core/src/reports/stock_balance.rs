@@ -4,7 +4,7 @@
 // Books bug Latte fixes: the To Date is included, as in the Stock Ledger.
 
 use jiff::civil::Date;
-use jiff::{ToSpan, Zoned};
+use jiff::{ToSpan, ZonedDateTime};
 
 use crate::Error;
 use crate::fyo::Fyo;
@@ -161,7 +161,7 @@ impl Report for StockBalance {
     }
 
     fn run(&mut self, fyo: &Fyo, formatter: &Formatter) -> Result<Vec<ReportRow>, Error> {
-        self.set_default_filters(Zoned::now().date());
+        self.set_default_filters(ZonedDateTime::now().date());
         let columns = self.kinded_columns(fyo);
         let colour = |fieldname: &str| match fieldname {
             "incomingQuantity" => Some(Some(CellColor::Green)),

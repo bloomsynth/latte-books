@@ -1060,7 +1060,8 @@ impl FormPage {
         let with_time = f.fieldtype == Some(FieldType::Datetime);
         let value = match self.current_value(key) {
             Some(DocValue::Date(ts)) => Some(if with_time {
-                ts.to_zoned(jiff::tz::TimeZone::system()).datetime()
+                ts.to_zoned_datetime(jiff::tz::TimeZone::system())
+                    .datetime()
             } else {
                 latte_core::fyo::format::local_date(*ts).to_datetime(jiff::civil::Time::midnight())
             }),
@@ -1076,7 +1077,7 @@ impl FormPage {
                     None => Ok(DocValue::Null),
                     Some(datetime) if picked_field.fieldtype == Some(FieldType::Datetime) => {
                         datetime
-                            .to_zoned(jiff::tz::TimeZone::system())
+                            .to_zoned_datetime(jiff::tz::TimeZone::system())
                             .map(|z| DocValue::Date(z.timestamp()))
                             .map_err(|e| e.to_string())
                     }

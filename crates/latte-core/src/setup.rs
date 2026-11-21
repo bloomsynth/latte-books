@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 use indexmap::IndexMap;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
-use jiff::{ToSpan, Zoned};
+use jiff::{ToSpan, ZonedDateTime};
 use latte_db::{Database, DocValue, DocValueMap, GetAllOptions, get_random_string};
 use serde_json::{Map, Value};
 
@@ -222,7 +222,7 @@ fn set_single(
 /// A date field's value for a date: its midnight in the system time zone.
 fn date_value(date: Date) -> Result<DocValue, Error> {
     let zoned = date
-        .to_zoned(TimeZone::system())
+        .to_zoned_datetime(TimeZone::system())
         .map_err(|e| Error::Value(e.to_string()))?;
     Ok(DocValue::Date(zoned.timestamp()))
 }
@@ -711,5 +711,5 @@ fn update_inventory_settings(fyo: &mut Fyo) -> Result<(), Error> {
 
 /// Today in the system time zone.
 pub fn today() -> Date {
-    Zoned::now().date()
+    ZonedDateTime::now().date()
 }

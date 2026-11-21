@@ -58,7 +58,7 @@ impl EventEmitter<DatePicked> for DatePicker {}
 impl EventEmitter<PickerClosed> for DatePicker {}
 
 fn today() -> Date {
-    jiff::Zoned::now().date()
+    jiff::ZonedDateTime::now().date()
 }
 
 fn first_of(date: Date) -> Date {

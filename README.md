@@ -48,8 +48,7 @@
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
   the reports your accountant asks for, in one app.
 - **Your books, on your computer.** Each company is a single file you own. There's no
-  account, no telemetry and no cloud, unless you connect an AI assistant. The app only
-  goes online to check for a new version, which you can turn off in Settings.
+  account and no cloud, unless you connect an AI assistant.
 - **Free and open source.** Nothing to pay for, now or later, under the AGPL.
 - **Actively developed.** New features and fixes land every week, and the app updates
   itself in a click: see the [changelog](CHANGELOG.md).
@@ -70,9 +69,7 @@ What makes it this fast:
   editor. Long lists and reports draw only the rows on screen, so they scroll smoothly.
 - **Lightweight.** The whole app is one small program that uses very little memory.
 - **Offline and private.** Everything runs on your computer, with no server and no
-  internet needed, and your books never leave it. The app only goes online to check for
-  updates and to send an anonymous [usage count](#usage-counts), and you can turn off
-  both.
+  internet needed, and your books never leave it.
 
 ## Your books, with your AI assistant
 
@@ -130,30 +127,6 @@ Latte Books is in **beta**: keep a copy of your company file while you try it.
   untested).
 
 What's next is in [docs/PLAN.md](docs/PLAN.md).
-
-## Usage counts
-
-Once a day, Latte Books sends Bloomsynth an anonymous count of its use, so we know how
-many people use it and which features matter. This is everything it sends:
-
-| Field | Example |
-|---|---|
-| A random ID, made on first run and linked to nothing else | `5f0c…9a1e` |
-| The app's version | `0.1.0-beta.5` |
-| Your system and processor type | `windows`, `x86_64` |
-| The app's language | `English` |
-| The features you opened since the last count, by name | `pos`, `doc:SalesInvoice`, `report:GSTR1`, `export:GSTR1:json` |
-| The AI assistants you've connected | `assistant:ClaudeDesktop` |
-
-It never sends your company's name, GSTIN, parties, items, amounts, documents or file
-paths. The service keeps the country the count came from, not your IP address.
-
-- Turn it off in **Settings → System → Advanced → Send anonymous usage counts**. That also
-  forgets the random ID and anything not yet sent.
-- The code that sends it is [crates/latte-ui/src/telemetry.rs](crates/latte-ui/src/telemetry.rs).
-  The service that receives it, at telemetry.bloomsynth.com, uses your IP address only to
-  find the country and to limit how often one address can send. It never stores or logs it.
-- Copies built from source don't send anything.
 
 ## Coming from Frappe Books
 

@@ -253,8 +253,8 @@ fn timezone_date_time_adjuster(date: &DocValue) -> Result<Timestamp, Error> {
         }
     };
 
-    let day = timestamp.to_zoned(TimeZone::system()).date();
-    day.to_zoned(TimeZone::UTC)
+    let day = timestamp.to_zoned_datetime(TimeZone::system()).date();
+    day.to_zoned_datetime(TimeZone::UTC)
         .map(|zoned| zoned.timestamp())
         .map_err(|e| Error::Value(e.to_string()))
 }

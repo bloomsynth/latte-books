@@ -17,6 +17,23 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [Unreleased]
 
+### Fixes
+
+- **Updating while an AI assistant is connected.** The installer no longer stops with "Error
+  opening file for writing: latte-mcp.exe" when Claude, ChatGPT or another assistant has
+  Latte Books running. It closes the assistant's connection, which restarts on its next use.
+
+## [0.1.0-beta.6] - 2026-11-16
+
+Assistants connected to Latte Books can now create a payment against a purchase invoice in
+one step.
+
+### Fixes
+
+- **Payments for purchase invoices through AI assistants.** Creating a payment that names
+  the invoice it pays no longer fails with "Sales Invoice … does not exist" when the
+  invoice is a purchase invoice.
+
 ## [0.1.0-beta.5] - 2026-11-12
 
 Latte Books now sends an anonymous usage count once a day.

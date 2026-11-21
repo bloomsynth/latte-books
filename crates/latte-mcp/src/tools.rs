@@ -238,7 +238,7 @@ fn company_info(fyo: &Fyo) -> Outcome {
         "fiscalYearStart": setting(fyo, "AccountingSettings", "fiscalYearStart"),
         "fiscalYearEnd": setting(fyo, "AccountingSettings", "fiscalYearEnd"),
         "inventory": is_truthy(fyo.get_value("AccountingSettings", None, "enableInventory").as_ref()),
-        "today": jiff::Zoned::now().date().to_string(),
+        "today": jiff::ZonedDateTime::now().date().to_string(),
     }))
 }
 

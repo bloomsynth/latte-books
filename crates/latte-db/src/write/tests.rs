@@ -287,7 +287,7 @@ fn inserts_a_document_with_its_child_rows() {
 fn read_date(date: &str) -> Timestamp {
     date.parse::<jiff::civil::Date>()
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::system())
+        .to_zoned_datetime(jiff::tz::TimeZone::system())
         .unwrap()
         .timestamp()
 }
@@ -620,7 +620,7 @@ fn converts_document_values_as_books_does() {
         to_raw("JournalEntry", "date", text("2026-10-22")).unwrap(),
         Text(
             utc_midnight
-                .to_zoned(jiff::tz::TimeZone::system())
+                .to_zoned_datetime(jiff::tz::TimeZone::system())
                 .date()
                 .to_string()
         )

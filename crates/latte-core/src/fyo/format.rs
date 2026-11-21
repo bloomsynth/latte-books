@@ -112,7 +112,7 @@ impl Formatter {
 
     /// `format(value, 'Datetime')`: the date and time in the computer's time zone.
     pub fn datetime(&self, timestamp: Timestamp) -> String {
-        let datetime = timestamp.to_zoned(TimeZone::system()).datetime();
+        let datetime = timestamp.to_zoned_datetime(TimeZone::system()).datetime();
         format_datetime(datetime, &format!("{} HH:mm:ss", self.date_format))
     }
 }
@@ -125,13 +125,13 @@ pub fn currency(fyo: &Fyo, money: &Money) -> String {
 
 /// The UTC date of an instant: the date a ledger entry's date and time is stored for.
 pub fn utc_date(timestamp: Timestamp) -> Date {
-    timestamp.to_zoned(TimeZone::UTC).date()
+    timestamp.to_zoned_datetime(TimeZone::UTC).date()
 }
 
 /// The date of a Date field's value: Date fields are read as midnight in the system time
 /// zone, as Books reads them.
 pub fn local_date(timestamp: Timestamp) -> Date {
-    timestamp.to_zoned(TimeZone::system()).date()
+    timestamp.to_zoned_datetime(TimeZone::system()).date()
 }
 
 #[cfg(test)]
