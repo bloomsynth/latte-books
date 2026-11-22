@@ -59,7 +59,7 @@ fn get_auto_debit_credit(ctx: &DocContext<'_>, kind: &str) -> Result<Option<Form
     let total = parent.get_sum(ctx.fyo, "accounts", kind)?;
     let total_other = parent.get_sum(ctx.fyo, "accounts", other_kind)?;
     if total.lt(&total_other)? {
-        return Ok(Some(DocValue::Money(total.sub(&total_other)?).into()));
+        return Ok(Some(DocValue::Money(total_other.sub(&total)?).into()));
     }
     Ok(None)
 }
