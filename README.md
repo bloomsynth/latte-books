@@ -115,7 +115,7 @@ have, and nothing is connected until you press Connect.
 - **Charts of accounts** for 12 countries, and a standard one for the rest
 - **Print to PDF** with templates you can edit, rendered by [Typst](https://typst.app/)
 - **Import** parties, items and documents from CSV files
-- **18 languages,** with community translations
+- **17 languages,** with community translations
 
 ## Status
 
