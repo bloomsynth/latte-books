@@ -130,6 +130,10 @@ Save the capture as `docs/images/raw/dashboard.png`, then frame it with
   existing company files or behaviour gets a `!` after the type, `feat!: …`, and says
   how in the body.
 - Include tests for new rules and fixed bugs.
+- Pull requests from this repo's own branches also get an automated review, the
+  **Claude review** check: green when it finds nothing that should block the merge, red
+  with inline comments when it does. Pull requests from forks don't get it (GitHub gives
+  them no secrets); a maintainer reviews those.
 - Files use LF line endings.
 
 ## Making a release
