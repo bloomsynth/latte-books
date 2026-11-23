@@ -97,7 +97,7 @@ pub fn list() -> Value {
         ),
         tool(
             "update_document",
-            "Changes a draft, or settings such as AccountingSettings (no name). A table given replaces the table's rows. Returns the document.",
+            "Changes a draft, a submitted journal entry (saving re-posts it to the accounts, so check the change with the person first), or settings such as AccountingSettings (no name). A table given replaces the table's rows. Returns the document.",
             false,
             json!({ "type": doc_type, "name": name, "values": values }),
             &["type", "values"]
@@ -499,9 +499,11 @@ fn create(fyo: &mut Fyo, type_name: &str, values: Option<&Value>) -> Outcome {
 fn update(fyo: &mut Fyo, type_name: &str, name: Option<&str>, values: Option<&Value>) -> Outcome {
     let schema = schema(fyo, type_name)?;
     let mut doc = load(fyo, &schema, name)?;
-    if doc.is_submitted() || doc.is_cancelled() {
+    // The app's rule: drafts, and submitted documents that can be altered (journal
+    // entries), which are re-posted when saved.
+    if !doc.can_edit() {
         return Err(format!(
-            "{} is {}; only drafts can be changed",
+            "{} is {}; only drafts and submitted journal entries can be changed",
             doc_label(&doc),
             if doc.is_cancelled() {
                 "cancelled"

@@ -325,11 +325,44 @@ impl DatabaseCore {
             changes: Vec::new(),
         };
 
-        let transaction = self.conn.unchecked_transaction()?;
-        let result = f(self, &mut log)?;
-        log.write(&self.conn)?;
-        transaction.commit()?;
-        Ok(result)
+        // A savepoint rather than a transaction, so that a write can run inside `atomic`.
+        self.begin_atomic()?;
+        let result = f(self, &mut log).and_then(|result| {
+            log.write(&self.conn)?;
+            Ok(result)
+        });
+        match result {
+            Ok(result) => {
+                self.commit_atomic()?;
+                Ok(result)
+            }
+            Err(e) => {
+                self.rollback_atomic();
+                Err(e)
+            }
+        }
+    }
+
+    /// Starts writes that are kept or undone together: until the matching
+    /// [`commit_atomic`](Self::commit_atomic) or [`rollback_atomic`](Self::rollback_atomic),
+    /// nothing written reaches the file. They nest. Not in Books.
+    pub fn begin_atomic(&self) -> Result<(), Error> {
+        self.conn.execute_batch("savepoint `latte_atomic`")?;
+        Ok(())
+    }
+
+    /// Keeps what was written since the matching [`begin_atomic`](Self::begin_atomic).
+    pub fn commit_atomic(&self) -> Result<(), Error> {
+        self.conn.execute_batch("release `latte_atomic`")?;
+        Ok(())
+    }
+
+    /// Undoes what was written since the matching [`begin_atomic`](Self::begin_atomic).
+    /// Best effort: if even this fails, SQLite undoes the open writes when the file closes.
+    pub fn rollback_atomic(&self) {
+        let _ = self
+            .conn
+            .execute_batch("rollback to `latte_atomic`; release `latte_atomic`");
     }
 
     /// Port of `#insertOne`. A field left out is written as null, as knex does with

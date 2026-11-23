@@ -1,5 +1,8 @@
 // Port of models/baseModels/JournalEntry/JournalEntry.ts @ v0.36.0.
 //
+// Unlike Books, a submitted journal entry can be altered, as a Tally voucher can: saving
+// it re-posts its ledger entries (`transactional::repost`).
+//
 // Not ported yet, as the UI needs them: `filters`, `getActions` and
 // `getListViewSettings`.
 
@@ -58,7 +61,10 @@ impl Model for JournalEntry {
         match fieldname {
             "referenceNumber" | "referenceDate" | "userRemark" | "attachment" => {
                 let doc = ctx.doc;
-                let is_done = doc.is_submitted() || doc.is_cancelled();
+                // Books hides them once submitted; here a submitted entry can still be
+                // altered, so they stay until it is cancelled.
+                let is_done =
+                    doc.is_cancelled() || doc.is_submitted() && !doc.is_editable_submitted();
                 Some(!(is_truthy(doc.get(fieldname)) || !is_done))
             }
             _ => None,
@@ -71,6 +77,16 @@ impl Model for JournalEntry {
 
     fn after_submit(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
         transactional::after_submit(self, doc, fyo)
+    }
+
+    /// Not in Books: a submitted journal entry can be altered, as in Tally, and saving it
+    /// re-posts it.
+    fn can_edit_submitted(&self, _doc: &Doc) -> bool {
+        true
+    }
+
+    fn after_submitted_sync(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {
+        transactional::repost(self, doc, fyo)
     }
 
     fn after_cancel(&self, doc: &mut Doc, fyo: &mut Fyo) -> Result<(), Error> {

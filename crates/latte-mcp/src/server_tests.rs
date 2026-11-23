@@ -164,7 +164,10 @@ fn an_assistant_invoices_a_customer() {
         }),
     );
     assert!(is_error);
-    assert!(text.contains("only drafts can be changed"), "{text}");
+    assert!(
+        text.contains("only drafts and submitted journal entries can be changed"),
+        "{text}"
+    );
     let (text, is_error) = call(
         &mut server,
         "create_document",

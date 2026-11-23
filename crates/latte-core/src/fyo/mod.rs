@@ -84,6 +84,22 @@ impl Fyo {
         }
     }
 
+    /// Runs `f` so that what it writes is kept only if it succeeds: on an error, every
+    /// write it made is undone. Not in Books, which writes each statement on its own.
+    pub fn atomic<T>(&mut self, f: impl FnOnce(&mut Fyo) -> Result<T, Error>) -> Result<T, Error> {
+        self.db.begin_atomic()?;
+        match f(self) {
+            Ok(value) => {
+                self.db.commit_atomic()?;
+                Ok(value)
+            }
+            Err(e) => {
+                self.db.rollback_atomic();
+                Err(e)
+            }
+        }
+    }
+
     /// The signed-in user, who is written as `createdBy` and `modifiedBy`.
     pub fn set_user(&mut self, user: impl Into<String>) {
         self.user = user.into();

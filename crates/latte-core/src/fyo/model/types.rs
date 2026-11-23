@@ -118,6 +118,19 @@ pub trait Model: Send + Sync {
         true
     }
 
+    /// Whether a submitted document can still be changed and saved, as Tally lets a
+    /// voucher be altered. Saving one calls `after_submitted_sync`, which brings what it
+    /// posted up to date. Not in Books, where a submitted document is final.
+    fn can_edit_submitted(&self, _doc: &Doc) -> bool {
+        false
+    }
+
+    /// After a submitted document that `can_edit_submitted` is saved: replaces what it
+    /// posted with what it posts now. Runs with the save, which is undone if this fails.
+    fn after_submitted_sync(&self, _doc: &mut Doc, _fyo: &mut Fyo) -> Result<(), Error> {
+        Ok(())
+    }
+
     /// `duplicate`: what a model changes on a copy, after the base copy is made.
     fn duplicate(&self, _doc: &mut Doc) {}
 

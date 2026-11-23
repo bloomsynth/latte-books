@@ -57,6 +57,26 @@ pub fn after_cancel(model: &dyn Transactional, doc: &Doc, fyo: &mut Fyo) -> Resu
     }
 }
 
+/// After a submitted document is changed and saved: deletes the ledger entries it posted
+/// and posts what it posts now, as Tally does when a voucher is altered. The document must
+/// not be cancelled, so it has no reversals to keep. Not in Books.
+pub fn repost(model: &dyn Transactional, doc: &Doc, fyo: &mut Fyo) -> Result<(), Error> {
+    if !model.is_transactional(doc) {
+        return Ok(());
+    }
+
+    // Worked out before anything is deleted, so a posting that fails leaves the old one.
+    let posting = model.get_posting(doc, fyo)?;
+    let name = doc.get("name").cloned().unwrap_or(latte_db::DocValue::Null);
+    for name in get_ledger_entry_names(fyo, doc.schema_name(), &name, None)? {
+        fyo.db.delete("AccountingLedgerEntry", &name)?;
+    }
+    match posting {
+        Some(mut posting) => posting.post(fyo),
+        None => Ok(()),
+    }
+}
+
 /// `afterDelete`: deletes the ledger entries and their reversals.
 pub fn after_delete(model: &dyn Transactional, doc: &Doc, fyo: &mut Fyo) -> Result<(), Error> {
     if !model.is_transactional(doc) {

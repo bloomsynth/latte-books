@@ -17,6 +17,11 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [Unreleased]
 
+### What's new
+
+- **Edit a submitted journal entry.** Open it, change the accounts, amounts or date, and
+  Save: the accounts are updated to match, with no need to cancel it and enter it again.
+
 ### Fixes
 
 - **Updating while an AI assistant is connected.** The installer no longer stops with "Error

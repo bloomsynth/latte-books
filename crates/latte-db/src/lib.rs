@@ -212,6 +212,21 @@ impl Database {
         self.core.delete_all(schema_name, filters)
     }
 
+    /// See [`DatabaseCore::begin_atomic`].
+    pub fn begin_atomic(&self) -> Result<(), Error> {
+        self.core.begin_atomic()
+    }
+
+    /// See [`DatabaseCore::commit_atomic`].
+    pub fn commit_atomic(&self) -> Result<(), Error> {
+        self.core.commit_atomic()
+    }
+
+    /// See [`DatabaseCore::rollback_atomic`].
+    pub fn rollback_atomic(&self) {
+        self.core.rollback_atomic()
+    }
+
     /// See [`DatabaseCore::rename`].
     pub fn rename(
         &mut self,
