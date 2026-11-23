@@ -149,6 +149,12 @@ For maintainers. `.github/workflows/release.yml` does the building.
    installers for each system and keeps them as the run's artifacts, without releasing.
 4. Commit, then tag and push: `git tag v0.1.0-beta.2 && git push origin v0.1.0-beta.2`. The
    tag must match `Cargo.toml`, or the workflow stops.
+
+   Or, with the commit on main, release without a tag of your own, from github.com or the
+   GitHub app on a phone: **Actions → Release → Run workflow** on `main`, with **Tag main
+   with Cargo.toml's version and make a draft release** ticked. It checks the tag doesn't
+   exist yet and the changelog has the version's section, builds the installers, then tags
+   the commit it built, `v` and the version, and makes the same draft release.
 5. The workflow makes a **draft** release with the installers, `SHA256SUMS.txt` and build
    attestations. It's never marked as a pre-release, even for a beta, since the README's
    download buttons link to the latest release, which skips pre-releases. Download an
