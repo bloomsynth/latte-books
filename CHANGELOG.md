@@ -17,6 +17,11 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [Unreleased]
 
+## [0.1.0-beta.7] - 2026-11-23
+
+Submitted journal entries can now be edited, and every change to your books is kept in an
+edit history.
+
 ### What's new
 
 - **Edit a submitted journal entry.** Open it, change the accounts, amounts or date, and
