@@ -207,13 +207,24 @@ impl Doc {
         !self.schema.is_submittable || self.is_cancelled() || !self.is_submitted()
     }
 
+    /// A submitted document whose model lets it be changed (`can_edit_submitted`), as
+    /// Tally lets a voucher be altered. Not in Books.
+    pub fn is_editable_submitted(&self) -> bool {
+        self.is_submitted() && self.model.can_edit_submitted(self)
+    }
+
     pub fn can_edit(&self) -> bool {
-        !self.schema.is_submittable || !(self.truthy("submitted") || self.truthy("cancelled"))
+        !self.schema.is_submittable
+            || !(self.truthy("submitted") || self.truthy("cancelled"))
+            || self.is_editable_submitted()
     }
 
     pub fn can_save(&self) -> bool {
         let submittable = self.schema.is_submittable;
-        if submittable && (self.truthy("submitted") || self.truthy("cancelled")) {
+        if submittable
+            && (self.truthy("submitted") || self.truthy("cancelled"))
+            && !self.is_editable_submitted()
+        {
             return false;
         }
         self.dirty && !self.schema.is_child
@@ -1007,8 +1018,38 @@ impl Doc {
         self.sync_values(fyo, &data)
     }
 
-    /// `sync`: saves the document, inserting it if it is new.
+    /// `sync`: saves the document, inserting it if it is new. Saving a submitted document
+    /// that can be edited also brings what it posted up to date; see `sync_submitted`.
     pub fn sync(&mut self, fyo: &mut Fyo) -> Result<(), Error> {
+        if !self.not_inserted && self.is_editable_submitted() {
+            return self.sync_submitted(fyo);
+        }
+        self.sync_impl(fyo)
+    }
+
+    /// Saves a submitted document that was changed, and replaces what it posted
+    /// (`after_submitted_sync`), all or nothing. If it fails, nothing is written and the
+    /// document keeps its changes, so they can be fixed and saved again. Not in Books.
+    fn sync_submitted(&mut self, fyo: &mut Fyo) -> Result<(), Error> {
+        let meta = ["modified", "modifiedBy"].map(|f| (f, self.values.get(f).cloned()));
+        let model = self.model.clone();
+        let result = fyo.atomic(|fyo| {
+            self.sync_impl(fyo)?;
+            model.after_submitted_sync(self, fyo)
+        });
+        if result.is_err() {
+            // The file still has the old modified time; keep the document matching it.
+            for (fieldname, value) in meta {
+                if let Some(value) = value {
+                    self.set_value(fieldname, value);
+                }
+            }
+            self.syncing = false;
+        }
+        result
+    }
+
+    fn sync_impl(&mut self, fyo: &mut Fyo) -> Result<(), Error> {
         self.syncing = true;
         let model = self.model.clone();
         model.before_sync(self, fyo)?;
@@ -1066,7 +1107,10 @@ impl Doc {
     /// cancel failed passes for cancelled and can be deleted without being reverted.
     fn set_and_sync_or_restore(&mut self, fyo: &mut Fyo, fieldname: &str) -> Result<(), Error> {
         let before = self.clone();
-        let result = self.set_and_sync(fyo, fieldname, DocValue::Bool(true));
+        // `sync_impl`, not `sync`: submitting posts in `after_submit`, not as an edit does.
+        let result = self
+            .set(fyo, fieldname, DocValue::Bool(true))
+            .and_then(|_| self.sync_impl(fyo));
         if result.is_err() {
             *self = before;
         }

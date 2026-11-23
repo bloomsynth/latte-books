@@ -4,6 +4,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use latte_db::{DocValue, DocValueMap, Filter, GetAllOptions, Order, QueryFilter};
 
+use crate::fyo::model::types::DocContext;
 use crate::models::models;
 use crate::tests::{company, journal_entry, map, money, row, text};
 use crate::{Doc, Error, Fyo};
@@ -176,4 +177,174 @@ fn an_account_takes_its_root_and_account_type_from_its_parent() {
     assert_eq!(account.get("rootType"), Some(&text("Asset")));
     assert_eq!(account.get("accountType"), Some(&text("Bank")));
     assert!(crate::models::base_models::account::is_debit(&account));
+}
+
+/// Sets a journal entry row's debit and credit, as the form does: the side with the
+/// amount first, so the row's formulas don't fill in the other.
+fn set_amounts(fyo: &mut Fyo, doc: &mut Doc, idx: usize, debit: f64, credit: f64) {
+    let mut sides = [("debit", debit), ("credit", credit)];
+    if debit == 0.0 {
+        sides.reverse();
+    }
+    for (fieldname, value) in sides {
+        let value = DocValue::Money(fyo.pesa().from_f64(value).unwrap());
+        doc.set_child(fyo, "accounts", idx, fieldname, value)
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_submitted_journal_entry_can_be_altered_and_is_reposted() {
+    let mut fyo = books();
+    let mut doc = submitted_journal_entry(&mut fyo);
+    assert!(doc.can_edit());
+    assert!(!doc.can_save(), "nothing has changed yet");
+
+    // Its fields are open in the form, as a draft's are.
+    let loaded = fyo.get_doc("JournalEntry", Some("JV-1001")).unwrap();
+    let field = loaded.schema().field("date").unwrap().clone();
+    let ctx = DocContext {
+        doc: &loaded,
+        parent: None,
+        fyo: &fyo,
+    };
+    assert!(!crate::views::field::is_read_only(&field, &ctx));
+
+    set_amounts(&mut fyo, &mut doc, 0, 0.0, 300.0);
+    set_amounts(&mut fyo, &mut doc, 1, 300.0, 0.0);
+    let posted: Timestamp = "2025-04-05T00:00:00Z".parse().unwrap();
+    doc.set(&mut fyo, "date", DocValue::Date(posted)).unwrap();
+    assert!(doc.can_save());
+    doc.sync(&mut fyo).unwrap();
+    assert!(doc.is_submitted() && !doc.dirty());
+
+    // The old entries are gone and the new ones posted, with no reversals.
+    let entries = ledger_entries(&fyo, "JV-1001");
+    assert_eq!(entries.len(), 2);
+    let side = |account: &str| {
+        let entry = entries
+            .iter()
+            .find(|e| e.get("account") == Some(&text(account)))
+            .unwrap();
+        assert_eq!(entry.get("reverted"), Some(&DocValue::Bool(false)));
+        (amount(entry, "debit"), amount(entry, "credit"))
+    };
+    assert_eq!(side("Cash"), ("0.00".into(), "300.00".into()));
+    assert_eq!(side("Sales"), ("300.00".into(), "0.00".into()));
+    let day = posted.to_zoned_datetime(TimeZone::system()).date();
+    let expected = day.to_zoned_datetime(TimeZone::UTC).unwrap().timestamp();
+    assert_eq!(entries[0].get("date"), Some(&DocValue::Date(expected)));
+
+    // It saves again, and cancelling reverts what it posts now.
+    set_amounts(&mut fyo, &mut doc, 0, 0.0, 120.0);
+    set_amounts(&mut fyo, &mut doc, 1, 120.0, 0.0);
+    doc.sync(&mut fyo).unwrap();
+    doc.cancel(&mut fyo).unwrap();
+    let entries = ledger_entries(&fyo, "JV-1001");
+    assert_eq!(entries.len(), 4);
+    assert!(
+        entries
+            .iter()
+            .all(|e| amount(e, "debit") == "120.00" || amount(e, "credit") == "120.00")
+    );
+    assert!(!doc.can_edit() && !doc.can_save());
+}
+
+#[test]
+fn an_unbalanced_alteration_changes_nothing() {
+    let mut fyo = books();
+    let mut doc = submitted_journal_entry(&mut fyo);
+    let before = ledger_entries(&fyo, "JV-1001");
+
+    set_amounts(&mut fyo, &mut doc, 0, 300.0, 0.0);
+    let error = doc.sync(&mut fyo).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Total Debit: 300.00 must be equal to Total Credit: 250.00"
+    );
+    assert_eq!(ledger_entries(&fyo, "JV-1001"), before);
+    let saved = fyo.get_doc("JournalEntry", Some("JV-1001")).unwrap();
+    assert_eq!(money(&saved.table("accounts")[0], "debit"), "250.00");
+
+    // The change is kept, and once balanced it saves without a conflict.
+    set_amounts(&mut fyo, &mut doc, 1, 0.0, 300.0);
+    doc.sync(&mut fyo).unwrap();
+    let entries = ledger_entries(&fyo, "JV-1001");
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .all(|e| amount(e, "debit") == "300.00" || amount(e, "credit") == "300.00")
+    );
+}
+
+#[test]
+fn atomic_undoes_every_write_when_it_fails() {
+    let mut fyo = books();
+    let result: Result<(), Error> = fyo.atomic(|fyo| {
+        let mut doc = journal_entry(fyo);
+        doc.sync(fyo)?;
+        Err(Error::Validation("stop".into()))
+    });
+    assert!(result.is_err());
+    assert!(!fyo.db.exists("JournalEntry", Some("JV-1001")).unwrap());
+
+    fyo.atomic(|fyo| journal_entry(fyo).sync(fyo)).unwrap();
+    assert!(fyo.db.exists("JournalEntry", Some("JV-1001")).unwrap());
+}
+
+#[test]
+fn the_edit_history_shows_each_change_with_its_values() {
+    use crate::fyo::format::Formatter;
+    use crate::views::edit_log::{EditKind, FieldChange, history};
+
+    let mut fyo = books();
+    let mut doc = submitted_journal_entry(&mut fyo);
+    fyo.set_user("Priya");
+    set_amounts(&mut fyo, &mut doc, 0, 300.0, 0.0);
+    set_amounts(&mut fyo, &mut doc, 1, 0.0, 300.0);
+    doc.set(&mut fyo, "userRemark", text("Corrected amount"))
+        .unwrap();
+    doc.sync(&mut fyo).unwrap();
+    doc.cancel(&mut fyo).unwrap();
+
+    let formatter = Formatter::new(&fyo).unwrap();
+    let history = history(&fyo, &formatter, "JournalEntry", "JV-1001").unwrap();
+    assert_eq!(history.created_by, "Admin");
+    let kinds: Vec<_> = history
+        .events
+        .iter()
+        .map(|e| (&e.kind, e.user.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (&EditKind::Submitted, "Admin"),
+            (&EditKind::Altered, "Priya"),
+            (&EditKind::Cancelled, "Priya"),
+        ]
+    );
+    assert!(history.events[0].changes.is_empty());
+    assert!(history.events[2].changes.is_empty());
+
+    let changes = &history.events[1].changes;
+    let change = |label: &str| changes.iter().find(|c| c.label == label).cloned();
+    let debit = change("Account Entries row 1: Debit").unwrap();
+    assert!(
+        debit.before.contains("250.00") && debit.after.contains("300.00"),
+        "{debit:?}"
+    );
+    assert!(
+        change("Account Entries row 2: Credit").is_some(),
+        "{changes:?}"
+    );
+    assert_eq!(
+        change("User Remark"),
+        Some(FieldChange {
+            label: "User Remark".into(),
+            before: String::new(),
+            after: "Corrected amount".into(),
+        })
+    );
+    assert_eq!(changes.len(), 3, "{changes:?}");
 }

@@ -39,7 +39,8 @@ pub struct Fyo {
 impl Fyo {
     /// Wraps an open file, with the core models registered and the base `Doc` for every
     /// other schema.
-    pub fn new(db: Database) -> Self {
+    pub fn new(mut db: Database) -> Self {
+        db.set_user(DEFAULT_USER);
         let schemas = db
             .schema_map()
             .iter()
@@ -84,9 +85,26 @@ impl Fyo {
         }
     }
 
+    /// Runs `f` so that what it writes is kept only if it succeeds: on an error, every
+    /// write it made is undone. Not in Books, which writes each statement on its own.
+    pub fn atomic<T>(&mut self, f: impl FnOnce(&mut Fyo) -> Result<T, Error>) -> Result<T, Error> {
+        self.db.begin_atomic()?;
+        match f(self) {
+            Ok(value) => {
+                self.db.commit_atomic()?;
+                Ok(value)
+            }
+            Err(e) => {
+                self.db.rollback_atomic();
+                Err(e)
+            }
+        }
+    }
+
     /// The signed-in user, who is written as `createdBy` and `modifiedBy`.
     pub fn set_user(&mut self, user: impl Into<String>) {
         self.user = user.into();
+        self.db.set_user(self.session_user().to_owned());
     }
 
     /// `fyo.auth.session.user || DEFAULT_USER`.

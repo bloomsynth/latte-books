@@ -51,11 +51,10 @@ pub fn is_read_only(field: &Field, ctx: &DocContext<'_>) -> bool {
     {
         return true;
     }
-    let parent_is = |check: fn(&Doc) -> bool| ctx.parent.is_some_and(check);
-    if doc.is_submitted() || parent_is(Doc::is_submitted) {
-        return true;
-    }
-    if doc.is_cancelled() || parent_is(Doc::is_cancelled) {
+    // Submitted and cancelled documents, and their rows, are read only, unless the
+    // model lets a submitted one be altered (`can_edit_submitted`).
+    let locked = |d: &Doc| d.is_cancelled() || d.is_submitted() && !d.is_editable_submitted();
+    if locked(doc) || ctx.parent.is_some_and(locked) {
         return true;
     }
     if field.schema_name.as_deref() == Some("AccountingSettings")

@@ -195,6 +195,8 @@ pub struct DatabaseCore {
     pub(crate) schema_map: SchemaMap,
     /// Set once the change log is on; writing needs it.
     pub(crate) device: Option<String>,
+    /// Who the edit log says made the changes.
+    pub(crate) user: String,
 }
 
 impl DatabaseCore {
@@ -203,6 +205,7 @@ impl DatabaseCore {
             conn,
             schema_map,
             device: None,
+            user: "Admin".to_owned(),
         }
     }
 

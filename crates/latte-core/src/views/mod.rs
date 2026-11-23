@@ -2,6 +2,7 @@
 //! form lays out, shows and reads its fields. `latte-ui` draws these; Dime reuses them.
 
 pub mod docs;
+pub mod edit_log;
 pub mod field;
 pub mod form;
 #[cfg(test)]

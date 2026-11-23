@@ -678,3 +678,156 @@ fn changes_from_another_device_are_found() {
     );
     assert_eq!(db.core().changes_from_others(last).unwrap(), (last, vec![]));
 }
+
+/// The edit log of a document: (operation, debits of the rows it had, renamedFrom, user).
+fn edits(
+    db: &Database,
+    schema: &str,
+    name: &str,
+) -> Vec<(String, Vec<String>, Option<String>, String)> {
+    db.edit_log(schema, name)
+        .unwrap()
+        .into_iter()
+        .map(|entry| {
+            let debits = match entry.previous.get("accounts") {
+                Some(DocValue::Table(rows)) => rows
+                    .iter()
+                    .map(|row| match row.get("debit") {
+                        Some(DocValue::Money(m)) => m.round(None),
+                        other => format!("{other:?}"),
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let operation = match entry.operation {
+                crate::EditOperation::Update => "update",
+                crate::EditOperation::Delete => "delete",
+                crate::EditOperation::Rename => "rename",
+            };
+            (operation.to_owned(), debits, entry.renamed_from, entry.user)
+        })
+        .collect()
+}
+
+/// A journal entry with a modified time of its own, so an update is one Books would make.
+fn altered(name: &str, lines: &[(&str, &str, &str)]) -> DocValueMap {
+    let mut entry = journal_entry(name, lines);
+    entry.insert("modified".into(), DocValue::Date(Timestamp::now()));
+    entry
+}
+
+#[test]
+fn the_edit_log_keeps_each_version_before_it_changed() {
+    let mut db = company();
+    db.insert(
+        "JournalEntry",
+        &journal_entry("JV-1001", &[("r1:Cash", "100", "0")]),
+    )
+    .unwrap();
+    assert!(
+        edits(&db, "JournalEntry", "JV-1001").is_empty(),
+        "a new entry has no edits"
+    );
+
+    db.set_user("Priya");
+    db.update(
+        "JournalEntry",
+        &altered("JV-1001", &[("r1:Cash", "150", "0")]),
+    )
+    .unwrap();
+    db.update(
+        "JournalEntry",
+        &altered("JV-1001", &[("r1:Cash", "175", "0")]),
+    )
+    .unwrap();
+    // Saving it unchanged but for the modified time isn't an edit.
+    db.update(
+        "JournalEntry",
+        &altered("JV-1001", &[("r1:Cash", "175", "0")]),
+    )
+    .unwrap();
+
+    assert_eq!(
+        edits(&db, "JournalEntry", "JV-1001"),
+        [
+            ("update".into(), vec!["100.00".into()], None, "Priya".into()),
+            ("update".into(), vec!["150.00".into()], None, "Priya".into()),
+        ]
+    );
+    // The counters the app keeps by itself aren't logged.
+    let mut series = doc(&[("name", text("JV-")), ("current", DocValue::Number(1001.0))]);
+    series.insert("modified".into(), DocValue::Date(Timestamp::now()));
+    db.update("NumberSeries", &series).unwrap();
+    assert!(db.edit_log("NumberSeries", "JV-").unwrap().is_empty());
+}
+
+#[test]
+fn the_edit_log_follows_renames_and_keeps_deleted_documents() {
+    let mut db = company();
+    db.insert(
+        "JournalEntry",
+        &journal_entry("JV-1001", &[("r1:Cash", "100", "0")]),
+    )
+    .unwrap();
+    db.update(
+        "JournalEntry",
+        &altered("JV-1001", &[("r1:Cash", "150", "0")]),
+    )
+    .unwrap();
+    db.rename("JournalEntry", "JV-1001", "JV-2001").unwrap();
+    let history = edits(&db, "JournalEntry", "JV-2001");
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].1, ["100.00"]);
+    assert_eq!(history[1].0, "rename");
+    assert_eq!(history[1].2.as_deref(), Some("JV-1001"));
+
+    db.delete("JournalEntry", "JV-2001").unwrap();
+    let history = edits(&db, "JournalEntry", "JV-2001");
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[2].0, "delete");
+
+    // A new entry of the same name starts a history of its own.
+    db.insert(
+        "JournalEntry",
+        &journal_entry("JV-2001", &[("r9:Cash", "5", "0")]),
+    )
+    .unwrap();
+    assert!(edits(&db, "JournalEntry", "JV-2001").is_empty());
+}
+
+#[test]
+fn the_edit_log_cant_be_changed_and_undone_writes_leave_nothing() {
+    let mut db = company();
+    db.insert(
+        "JournalEntry",
+        &journal_entry("JV-1001", &[("r1:Cash", "100", "0")]),
+    )
+    .unwrap();
+
+    db.begin_atomic().unwrap();
+    db.update(
+        "JournalEntry",
+        &altered("JV-1001", &[("r1:Cash", "150", "0")]),
+    )
+    .unwrap();
+    db.rollback_atomic();
+    assert!(edits(&db, "JournalEntry", "JV-1001").is_empty());
+
+    db.update(
+        "JournalEntry",
+        &altered("JV-1001", &[("r1:Cash", "150", "0")]),
+    )
+    .unwrap();
+    let conn = db.core().connection();
+    for sql in [
+        "update latte_edit_log set user = 'Someone else'",
+        "delete from latte_edit_log",
+    ] {
+        let error = conn.execute(sql, []).unwrap_err();
+        assert!(
+            error.to_string().contains("The edit log can't be changed."),
+            "{error}"
+        );
+    }
+    assert_eq!(edits(&db, "JournalEntry", "JV-1001").len(), 1);
+}
