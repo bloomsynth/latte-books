@@ -112,6 +112,9 @@ have, and nothing is connected until you press Connect.
   HSN summary and documents issued included. Purchases under the **reverse charge**, such
   as services bought from abroad, post the GST you owe and the credit you claim, and
   print a self-invoice
+- **Edit history:** every change to a record is kept, with who made it, when and what it
+  was before, for India's audit trail rule. Submitted journal entries can be altered, as
+  in Tally
 - **Charts of accounts** for 12 countries, and a standard one for the rest
 - **Print to PDF** with templates you can edit, rendered by [Typst](https://typst.app/)
 - **Import** parties, items and documents from CSV files
