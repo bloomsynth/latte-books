@@ -19,6 +19,7 @@ use crate::core::{
     DatabaseCore, FieldValue, FieldValueMap, Filter, FilterValue, QueryFilter, RawValue,
     apply_filters, quote, table_fields,
 };
+use crate::edit_log::{self, EditOperation, PendingEdit};
 
 /// `SYSTEM` in Books: the user of values written by the database itself.
 pub const SYSTEM: &str = "__SYSTEM__";
@@ -63,6 +64,7 @@ impl DatabaseCore {
     /// Turns the change log on, creating its table if needed. Writing needs it.
     pub fn enable_change_log(&mut self, device: impl Into<String>) -> Result<(), Error> {
         self.conn.execute(changes::CREATE_TABLE, [])?;
+        self.conn.execute_batch(edit_log::CREATE)?;
         self.device = Some(device.into());
         Ok(())
     }
@@ -218,12 +220,28 @@ impl DatabaseCore {
         field_value_map: &mut FieldValueMap,
     ) -> Result<(), Error> {
         self.write(|core, log| {
+            let name = name_of(field_value_map).unwrap_or_default().to_owned();
+            let previous = core.edit_log_snapshot(schema_name, &name)?;
             if core.schema(schema_name)?.is_single {
                 core.update_single_values(schema_name, field_value_map, log)?;
             } else {
                 core.update_one(schema_name, field_value_map, log)?;
             }
-            core.insert_or_update_children(schema_name, field_value_map, true, log)
+            core.insert_or_update_children(schema_name, field_value_map, true, log)?;
+
+            // Logged only if more than the modified time changed.
+            if let Some(previous) = previous
+                && edit_log::differs(&previous, &core.get(schema_name, &name, None)?)
+            {
+                log.edits.push(PendingEdit {
+                    schema_name: schema_name.to_owned(),
+                    name,
+                    operation: EditOperation::Update,
+                    previous,
+                    renamed_from: None,
+                });
+            }
+            Ok(())
         })
     }
 
@@ -245,12 +263,22 @@ impl DatabaseCore {
                 return Ok(());
             }
 
+            let previous = core.edit_log_snapshot(schema_name, name)?;
             let deleted = core.conn.execute(
                 &format!("delete from {} where `name` = ?", quote(schema_name)),
                 [name],
             )?;
             if deleted > 0 {
                 log.push(Change::new(schema_name, name, Operation::Delete));
+                if let Some(previous) = previous {
+                    log.edits.push(PendingEdit {
+                        schema_name: schema_name.to_owned(),
+                        name: name.to_owned(),
+                        operation: EditOperation::Delete,
+                        previous,
+                        renamed_from: None,
+                    });
+                }
             }
 
             for (_, target) in table_fields(core.schema(schema_name)?) {
@@ -276,6 +304,7 @@ impl DatabaseCore {
         new_name: &str,
     ) -> Result<(), Error> {
         self.write(|core, log| {
+            let previous = core.edit_log_snapshot(schema_name, old_name)?;
             let renamed = core.conn.execute(
                 &format!(
                     "update {} set `name` = ? where `name` = ?",
@@ -287,6 +316,15 @@ impl DatabaseCore {
                 let mut change = Change::new(schema_name, new_name, Operation::Rename);
                 change.renamed_from = Some(old_name.to_owned());
                 log.push(change);
+                if let Some(previous) = previous {
+                    log.edits.push(PendingEdit {
+                        schema_name: schema_name.to_owned(),
+                        name: new_name.to_owned(),
+                        operation: EditOperation::Rename,
+                        previous,
+                        renamed_from: Some(old_name.to_owned()),
+                    });
+                }
             }
             Ok(())
         })
@@ -323,12 +361,14 @@ impl DatabaseCore {
             device,
             timestamp: to_iso_string(Timestamp::now()),
             changes: Vec::new(),
+            edits: Vec::new(),
         };
 
         // A savepoint rather than a transaction, so that a write can run inside `atomic`.
         self.begin_atomic()?;
         let result = f(self, &mut log).and_then(|result| {
             log.write(&self.conn)?;
+            self.write_edits(&log.edits, &log.timestamp, &log.device)?;
             Ok(result)
         });
         match result {
@@ -608,6 +648,19 @@ impl DatabaseCore {
             &format!("select `name` from {}{condition}", quote(schema_name)),
             &params,
         )?;
+        for row in &names {
+            if let Some(RawValue::Text(name)) = row.get("name")
+                && let Some(previous) = self.edit_log_snapshot(schema_name, name)?
+            {
+                log.edits.push(PendingEdit {
+                    schema_name: schema_name.to_owned(),
+                    name: name.clone(),
+                    operation: EditOperation::Delete,
+                    previous,
+                    renamed_from: None,
+                });
+            }
+        }
         let deleted = self.conn.execute(
             &format!("delete from {}{condition}", quote(schema_name)),
             rusqlite::params_from_iter(params.iter()),

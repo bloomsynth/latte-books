@@ -21,6 +21,9 @@ The 0.1.0-beta.4 section is the example to follow.
 
 - **Edit a submitted journal entry.** Open it, change the accounts, amounts or date, and
   Save: the accounts are updated to match, with no need to cancel it and enter it again.
+- **Edit History.** Every change to an entry, invoice, party or other record is kept, with who
+  made it, when, and what each value was before. Open a record and choose View > Edit
+  History. The history can't be changed or deleted, for India's audit trail rule.
 
 ### Fixes
 

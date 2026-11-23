@@ -11,6 +11,7 @@ mod changes;
 mod converter;
 mod core;
 mod create;
+mod edit_log;
 pub mod pesa;
 mod write;
 
@@ -28,6 +29,7 @@ pub use crate::core::{
     DatabaseCore, FieldValue, FieldValueMap, Filter, FilterOperand, FilterValue, GetAllOptions,
     Order, QueryFilter, RawValue, SingleValue, SingleValueQuery,
 };
+pub use crate::edit_log::{EditLogEntry, EditOperation};
 use crate::pesa::MoneyMaker;
 pub use crate::write::{SYSTEM, get_random_string, sqlite_type};
 
@@ -210,6 +212,39 @@ impl Database {
     /// See [`DatabaseCore::delete_all`].
     pub fn delete_all(&mut self, schema_name: &str, filters: &QueryFilter) -> Result<usize, Error> {
         self.core.delete_all(schema_name, filters)
+    }
+
+    /// Sets who the edit log says made the changes from now on.
+    pub fn set_user(&mut self, user: impl Into<String>) {
+        self.core.set_user(user);
+    }
+
+    /// The changes made to a document, oldest first, each with the document as it was
+    /// just before, as document values. See [`DatabaseCore::edit_log`].
+    pub fn edit_log(
+        &self,
+        schema_name: &str,
+        name: &str,
+    ) -> Result<Vec<EditLogEntry<DocValueMap>>, Error> {
+        self.core
+            .edit_log(schema_name, name)?
+            .into_iter()
+            .map(|entry| {
+                let previous =
+                    to_doc_value_map(self.schema_map(), &self.pesa, schema_name, &entry.previous)?;
+                Ok(EditLogEntry {
+                    id: entry.id,
+                    schema_name: entry.schema_name,
+                    name: entry.name,
+                    operation: entry.operation,
+                    previous,
+                    renamed_from: entry.renamed_from,
+                    user: entry.user,
+                    timestamp: entry.timestamp,
+                    device: entry.device,
+                })
+            })
+            .collect()
     }
 
     /// See [`DatabaseCore::begin_atomic`].

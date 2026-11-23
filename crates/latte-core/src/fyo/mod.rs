@@ -39,7 +39,8 @@ pub struct Fyo {
 impl Fyo {
     /// Wraps an open file, with the core models registered and the base `Doc` for every
     /// other schema.
-    pub fn new(db: Database) -> Self {
+    pub fn new(mut db: Database) -> Self {
+        db.set_user(DEFAULT_USER);
         let schemas = db
             .schema_map()
             .iter()
@@ -103,6 +104,7 @@ impl Fyo {
     /// The signed-in user, who is written as `createdBy` and `modifiedBy`.
     pub fn set_user(&mut self, user: impl Into<String>) {
         self.user = user.into();
+        self.db.set_user(self.session_user().to_owned());
     }
 
     /// `fyo.auth.session.user || DEFAULT_USER`.

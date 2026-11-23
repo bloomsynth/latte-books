@@ -78,7 +78,7 @@ fn an_assistant_invoices_a_customer() {
     let tools = server
         .handle(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
         .unwrap();
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 12);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 13);
 
     assert_eq!(
         ok(&mut server, "company_info", json!({}))["currency"],
@@ -168,6 +168,15 @@ fn an_assistant_invoices_a_customer() {
         text.contains("only drafts and submitted journal entries can be changed"),
         "{text}"
     );
+    // The edit log says it was submitted, and by whom.
+    let history = ok(
+        &mut server,
+        "get_edit_history",
+        json!({ "type": "SalesInvoice", "name": name }),
+    );
+    assert_eq!(history["createdBy"], "Admin");
+    assert_eq!(history["changes"][0]["action"], "Submitted");
+    assert_eq!(history["changes"][0]["by"], "Admin");
     let (text, is_error) = call(
         &mut server,
         "create_document",

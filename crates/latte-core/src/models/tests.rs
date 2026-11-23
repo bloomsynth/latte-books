@@ -292,3 +292,59 @@ fn atomic_undoes_every_write_when_it_fails() {
     fyo.atomic(|fyo| journal_entry(fyo).sync(fyo)).unwrap();
     assert!(fyo.db.exists("JournalEntry", Some("JV-1001")).unwrap());
 }
+
+#[test]
+fn the_edit_history_shows_each_change_with_its_values() {
+    use crate::fyo::format::Formatter;
+    use crate::views::edit_log::{EditKind, FieldChange, history};
+
+    let mut fyo = books();
+    let mut doc = submitted_journal_entry(&mut fyo);
+    fyo.set_user("Priya");
+    set_amounts(&mut fyo, &mut doc, 0, 300.0, 0.0);
+    set_amounts(&mut fyo, &mut doc, 1, 0.0, 300.0);
+    doc.set(&mut fyo, "userRemark", text("Corrected amount"))
+        .unwrap();
+    doc.sync(&mut fyo).unwrap();
+    doc.cancel(&mut fyo).unwrap();
+
+    let formatter = Formatter::new(&fyo).unwrap();
+    let history = history(&fyo, &formatter, "JournalEntry", "JV-1001").unwrap();
+    assert_eq!(history.created_by, "Admin");
+    let kinds: Vec<_> = history
+        .events
+        .iter()
+        .map(|e| (&e.kind, e.user.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (&EditKind::Submitted, "Admin"),
+            (&EditKind::Altered, "Priya"),
+            (&EditKind::Cancelled, "Priya"),
+        ]
+    );
+    assert!(history.events[0].changes.is_empty());
+    assert!(history.events[2].changes.is_empty());
+
+    let changes = &history.events[1].changes;
+    let change = |label: &str| changes.iter().find(|c| c.label == label).cloned();
+    let debit = change("Account Entries row 1: Debit").unwrap();
+    assert!(
+        debit.before.contains("250.00") && debit.after.contains("300.00"),
+        "{debit:?}"
+    );
+    assert!(
+        change("Account Entries row 2: Credit").is_some(),
+        "{changes:?}"
+    );
+    assert_eq!(
+        change("User Remark"),
+        Some(FieldChange {
+            label: "User Remark".into(),
+            before: String::new(),
+            after: "Corrected amount".into(),
+        })
+    );
+    assert_eq!(changes.len(), 3, "{changes:?}");
+}

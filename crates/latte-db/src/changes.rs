@@ -5,6 +5,7 @@
 use rusqlite::{Connection, params};
 
 use crate::Error;
+use crate::edit_log::PendingEdit;
 
 pub(crate) const CREATE_TABLE: &str = "create table if not exists `latte_changes` (\
     `id` integer primary key autoincrement, \
@@ -64,11 +65,13 @@ impl Change {
     }
 }
 
-/// The changes of one write, which share its timestamp.
+/// The changes of one write, which share its timestamp, and what the edit log keeps of
+/// the documents they change.
 pub(crate) struct ChangeLog {
     pub device: String,
     pub timestamp: String,
     pub changes: Vec<Change>,
+    pub edits: Vec<PendingEdit>,
 }
 
 impl ChangeLog {

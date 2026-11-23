@@ -42,11 +42,12 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::date_picker::{DatePicked, DatePicker, PickerClosed, anchored_picker};
-use crate::i18n::t;
+use crate::i18n::{t, tr};
 use latte_core::Doc;
 use latte_core::models::base_models::{invoice, lead, sales_quote};
 use latte_core::models::helpers::single_is_truthy;
 use latte_core::models::inventory::stock_transfer;
+use latte_core::views::edit_log::{self, EditHistory};
 use latte_core::views::field::{self, Tab};
 use latte_core::views::form::{self as form_view, LinkedGroup};
 use latte_core::views::list;
@@ -111,6 +112,8 @@ enum Side {
     Row(String, usize),
     /// `LinkedEntries.vue`: the linked documents, and the schemas folded.
     Links(Vec<LinkedGroup>, HashSet<String>),
+    /// The edit history, from the edit log. Not in Books.
+    History(EditHistory),
 }
 
 /// What a quick edit panel tells the page that opened it.
@@ -1705,6 +1708,124 @@ impl FormPage {
         self.refresh(window, cx);
     }
 
+    /// Shows the edit history beside the form, or hides it. Not in Books.
+    fn toggle_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.side, Side::History(..)) {
+            self.close_side(window, cx);
+            return;
+        }
+        let history = {
+            let s = self.session.borrow();
+            let name = self.doc.name().unwrap_or_default().to_owned();
+            edit_log::history(&s.fyo, &s.formatter, self.doc.schema_name(), &name)
+        };
+        match history {
+            Ok(history) => {
+                self.quick_panels.clear();
+                self.side = Side::History(history);
+            }
+            Err(e) => {
+                self.error_title = error_label(&e);
+                self.error = Some(e.to_string());
+            }
+        }
+        self.refresh(window, cx);
+    }
+
+    /// The edit history in a 22rem panel, as the linked entries are shown: Close and the
+    /// title, then the newest change first, each with who made it, when, and the values it
+    /// changed, down to when the document was made.
+    fn render_history(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let Side::History(history) = &self.side else {
+            return None;
+        };
+        let header = div()
+            .h_flex()
+            .flex_none()
+            .h(books::H_PAGE_HEADER)
+            .px_4()
+            .justify_between()
+            .child(
+                Button::new("close-history")
+                    .icon("x")
+                    .on_click(cx.listener(|this, _, window, cx| this.close_side(window, cx))),
+            )
+            .child(
+                div()
+                    .text_18()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gray(600))
+                    .child(t("Edit History")),
+            );
+        let entry = |title: String, user: &str, when: &str| {
+            div()
+                .v_flex()
+                .p_4()
+                .gap_1()
+                .border_b_1()
+                .border_color(gray(200))
+                .child(
+                    div()
+                        .text_13()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(gray(800))
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_11()
+                        .text_color(gray(600))
+                        .child(tr("${0} · ${1}", &[user, when])),
+                )
+        };
+        let events = history.events.iter().rev().map(|event| {
+            entry(t(&event.kind.label()), &event.user, &event.when).children(
+                event.changes.iter().map(|change| {
+                    let arrow = match (change.before.is_empty(), change.after.is_empty()) {
+                        (false, false) => format!("{} → {}", change.before, change.after),
+                        (true, false) => change.after.clone(),
+                        (false, true) => change.before.clone(),
+                        (true, true) => String::new(),
+                    };
+                    div()
+                        .v_flex()
+                        .mt_1()
+                        .text_12()
+                        .child(div().text_color(gray(600)).child(change.label.clone()))
+                        .child(
+                            div()
+                                .text_color(gray(800))
+                                .when(change.after.is_empty(), |d| d.line_through())
+                                .child(arrow),
+                        )
+                }),
+            )
+        });
+        let created = entry(t("Created"), &history.created_by, &history.created);
+        let body = div()
+            .v_flex()
+            .w_full()
+            .border_t_1()
+            .border_color(gray(200))
+            .children(events)
+            .child(created);
+        Some(
+            div()
+                .id("edit-history")
+                .v_flex()
+                .flex_none()
+                .w(rems(22.))
+                .h_full()
+                .bg(white())
+                .border_l_1()
+                .border_color(gray(200))
+                .overflow_y_scroll()
+                .child(header)
+                .child(body)
+                .into_any_element(),
+        )
+    }
+
     /// `LinkedEntries.vue`: a 22rem panel with Close and its title, then each schema's
     /// documents, with their count, folded by a click on the heading.
     fn render_links(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -2055,6 +2176,16 @@ impl FormPage {
                     self.action_toast(done, window, cx);
                 }
                 self.controls.clear();
+                // An open edit history shows the change just made.
+                if matches!(self.side, Side::History(..)) {
+                    let s = self.session.borrow();
+                    let name = self.doc.name().unwrap_or_default().to_owned();
+                    if let Ok(history) =
+                        edit_log::history(&s.fyo, &s.formatter, self.doc.schema_name(), &name)
+                    {
+                        self.side = Side::History(history);
+                    }
+                }
                 self.refresh(window, cx);
                 if self.quick.is_some() && matches!(done, "saved" | "submitted") {
                     cx.emit(QuickEvent::Saved);
@@ -2539,6 +2670,18 @@ impl FormPage {
                     this.pending = Some(Pending::Cancel);
                     cx.notify();
                 }),
+            ));
+        }
+        // Not in Books: the edit history, Tally's Edit Log.
+        let logged = {
+            let s = self.session.borrow();
+            s.fyo.db.core().is_edit_logged(doc.schema_name())
+        };
+        if logged && doc.inserted() {
+            actions.push(Action::new(
+                VIEW,
+                "Edit History",
+                Rc::new(|this, window, cx| this.toggle_history(window, cx)),
             ));
         }
         // `getViewActions`: a party's General Ledger.
@@ -4280,6 +4423,7 @@ impl Render for FormPage {
             .top()
             .map(|panel| panel.clone().into_any_element())
             .or_else(|| self.render_links(cx))
+            .or_else(|| self.render_history(cx))
             .or_else(|| self.render_row_edit(window, cx));
 
         div()

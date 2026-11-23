@@ -89,6 +89,13 @@ pub fn list() -> Value {
             &["type"]
         ),
         tool(
+            "get_edit_history",
+            "Who made a document and when, then each later change (altered, submitted, cancelled, renamed or deleted), by whom and when, with each value it changed from and to. Works for deleted documents too.",
+            true,
+            json!({ "type": doc_type, "name": name }),
+            &["type", "name"]
+        ),
+        tool(
             "create_document",
             "Saves a new document as a draft, with the same checks as the app, and returns it with its name and totals. A draft changes nothing in the accounts until it is submitted.",
             false,
@@ -155,6 +162,7 @@ pub fn call(fyo: &mut Fyo, name: &str, args: &Value) -> Outcome {
             let doc = load(fyo, &schema, opt_text(args, "name"))?;
             pretty(&doc_json(&doc))
         }
+        "get_edit_history" => edit_history(fyo, text_arg(args, "type")?, text_arg(args, "name")?),
         "create_document" => create(fyo, text_arg(args, "type")?, args.get("values")),
         "update_document" => update(
             fyo,
@@ -478,6 +486,35 @@ fn set_values(fyo: &mut Fyo, doc: &mut Doc, values: Option<&Value>) -> Result<()
         doc.set(fyo, fieldname, value).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn edit_history(fyo: &Fyo, type_name: &str, name: &str) -> Outcome {
+    let schema = schema(fyo, type_name)?;
+    let formatter = Formatter::new(fyo).map_err(|e| e.to_string())?;
+    let history = latte_core::views::edit_log::history(fyo, &formatter, &schema.name, name)
+        .map_err(|e| e.to_string())?;
+    let events: Vec<Value> = history
+        .events
+        .iter()
+        .map(|event| {
+            let changes: Vec<Value> = event
+                .changes
+                .iter()
+                .map(|c| json!({ "field": c.label, "from": c.before, "to": c.after }))
+                .collect();
+            json!({
+                "action": event.kind.label(),
+                "by": event.user,
+                "at": event.when,
+                "changes": changes,
+            })
+        })
+        .collect();
+    pretty(&json!({
+        "createdBy": history.created_by,
+        "created": history.created,
+        "changes": events,
+    }))
 }
 
 fn create(fyo: &mut Fyo, type_name: &str, values: Option<&Value>) -> Outcome {
