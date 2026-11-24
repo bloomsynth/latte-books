@@ -11,8 +11,8 @@
 
 <p align="center">
   <strong>Accounting software for the AI era.</strong><br>
-  Fast, free and open source, on your own desktop. Keep your books yourself, or let your
-  AI assistant keep them with you.
+  Fast, free and open source, on your own desktop. Track your invoices, expenses and
+  profit yourself, or let your AI assistant help.
 </p>
 
 <p align="center">
@@ -39,7 +39,7 @@
 
 - **Built for speed.** Made to be one of the fastest accounting apps you can install.
   Written from scratch in Rust, Latte Books opens in under a second.
-- **Built for AI.** Ask your books questions, draft invoices or record a month of bills
+- **Built for AI.** Ask about your accounts, draft invoices or record a month of bills
   in plain words, from the AI assistant you already use. It asks you before anything is
   posted to your accounts. Connect one in a click:
   - <img src="docs/images/assistants/claude.svg" alt="" height="14" align="absmiddle"> Claude
@@ -47,7 +47,7 @@
   - <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/assistants/cursor-dark.svg"><img src="docs/images/assistants/cursor-light.svg" alt="" height="14" align="absmiddle"></picture> Cursor
 - **Complete accounting.** Sales, purchases, payments, inventory, point of sale, GST and
   the reports your accountant asks for, in one app.
-- **Your books, on your computer.** Each company is a single file you own. There's no
+- **Your data, on your computer.** Each company is a single file you own. There's no
   account and no cloud, unless you connect an AI assistant.
 - **Free and open source.** Nothing to pay for, now or later, under the AGPL.
 - **Actively developed.** New features and fixes land every week, and the app updates
@@ -69,9 +69,9 @@ What makes it this fast:
   editor. Long lists and reports draw only the rows on screen, so they scroll smoothly.
 - **Lightweight.** The whole app is one small program that uses very little memory.
 - **Offline and private.** Everything runs on your computer, with no server and no
-  internet needed, and your books never leave it.
+  internet needed, and your data never leaves it.
 
-## Your books, with your AI assistant
+## Your accounts, with your AI assistant
 
 Latte Books is made to be worked from an AI assistant as well as by hand. Open
 **Tools → AI Assistants** and press **Connect** beside yours:
@@ -84,7 +84,7 @@ Latte Books is made to be worked from an AI assistant as well as by hand. Open
 In the ChatGPT app, use a Codex or Work chat:
 ordinary ChatGPT chats can't reach apps on your computer yet.
 
-Then talk to your books:
+Then just ask:
 
 - *"What does Acme owe us, and since when?"*
 - *"Invoice Acme for 10 chairs at ₹2,500, with 18% GST."*
