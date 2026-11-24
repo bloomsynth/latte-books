@@ -185,7 +185,7 @@ impl Render for AssistantsPage {
                     .max_w(px(640.))
                     .overflow_y_scroll()
                     .child(div().text_color(theme.muted_foreground).child(t(
-                        "Work in your books from an AI assistant: ask what a customer owes, \
+                        "Work with your accounts from an AI assistant: ask what a customer owes, \
                          run a report, or have it draft an invoice. Assistants save drafts; \
                          they ask you before they change anything, and before submitting.",
                     )))
