@@ -26,4 +26,4 @@ objc2-app-kit = { version = "0.3", features = ["NSPrintInfo", "NSPrintOperation"
 objc2-pdf-kit = { version = "0.3", features = ["PDFDocument", "objc2-app-kit"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-ashpd = { version = "0.13", default-features = false, features = ["async-io", "print", "raw_handle", "wayland"] }
+ashpd = { version = "0.14", default-features = false, features = ["async-io", "print", "raw_handle", "wayland"] }
