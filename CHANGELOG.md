@@ -17,6 +17,11 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [Unreleased]
 
+## [0.1.0-beta.8] - 2026-11-27
+
+Your AI assistant can now save invoices, other entries and reports as PDFs, and help with
+your print templates.
+
 ### What's new
 
 - **PDFs from your AI assistant.** Ask it to save an invoice, quote, payment or other
