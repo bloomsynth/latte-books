@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 latte-schema = { path = "crates/latte-schema" }
+latte-templates = { path = "crates/latte-templates" }
 latte-db = { path = "crates/latte-db" }
 latte-core = { path = "crates/latte-core" }
 latte-i18n = { path = "crates/latte-i18n" }

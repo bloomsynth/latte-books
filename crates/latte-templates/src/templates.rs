@@ -341,14 +341,20 @@ pub fn default_template_name(fyo: &mut Fyo, doc: &Doc) -> Option<String> {
         });
         from_profile.or_else(|| default("posPrintTemplate"))
     } else {
-        let mut chars = schema_name.chars();
-        let first = chars.next()?;
-        let fieldname = format!("{}{}PrintTemplate", first.to_lowercase(), chars.as_str());
-        default(&fieldname)
+        default(&default_field(&schema_name))
     };
     match named {
         Some(name) if list.contains(&name) => Some(name),
         _ => list.into_iter().next(),
+    }
+}
+
+/// The Defaults field that names a schema's template, such as `salesInvoicePrintTemplate`.
+pub fn default_field(schema_name: &str) -> String {
+    let mut chars = schema_name.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}PrintTemplate", first.to_lowercase(), chars.as_str()),
+        None => String::new(),
     }
 }
 
@@ -363,4 +369,45 @@ pub fn new_template(fyo: &Fyo, kind: &str, template: Option<&str>) -> Result<Doc
     );
     values.insert("isCustom".to_owned(), DocValue::Bool(true));
     fyo.get_new_doc("PrintTemplate", values)
+}
+
+/// Duplicate Template: a new custom template of the same type with the same source and
+/// page size.
+pub fn duplicate_template(fyo: &Fyo, template: &PrintTemplate) -> Result<Doc, Error> {
+    let mut doc = new_template(fyo, &template.kind, Some(&template.template))?;
+    if template.width > 0.0 {
+        doc.set_value("width", DocValue::Number(template.width));
+    }
+    if template.height > 0.0 {
+        doc.set_value("height", DocValue::Number(template.height));
+    }
+    Ok(doc)
+}
+
+/// Converts a Books HTML template to a new custom Typst template, "<name> (Typst)",
+/// saved. Its name, and what couldn't be converted.
+pub fn convert_template(
+    fyo: &mut Fyo,
+    template: &PrintTemplate,
+) -> Result<(String, Vec<String>), String> {
+    let conversion = crate::convert::html_to_typst(&template.template, &template.name);
+    let base = format!("{} (Typst)", template.name);
+    let mut name = base.clone();
+    let mut n = 2;
+    while fyo
+        .db
+        .exists("PrintTemplate", Some(&name))
+        .map_err(|e| e.to_string())?
+    {
+        name = format!("{base} {n}");
+        n += 1;
+    }
+    let copy = PrintTemplate {
+        template: conversion.source,
+        ..template.clone()
+    };
+    let mut doc = duplicate_template(fyo, &copy).map_err(|e| e.to_string())?;
+    doc.set_value("name", DocValue::Text(name.clone()));
+    doc.sync(fyo).map_err(|e| e.to_string())?;
+    Ok((name, conversion.notes))
 }

@@ -257,7 +257,7 @@ impl PrintPage {
             ));
             let copy = {
                 let s = self.session.borrow();
-                duplicate_template(&s.fyo, template).ok()
+                templates::duplicate_template(&s.fyo, template).ok()
             };
             if let Some(doc) = copy {
                 entries.push(MenuEntry::new(
@@ -306,48 +306,12 @@ impl PrintPage {
     }
 }
 
-/// Duplicate Template: a new custom template of the same type with the same source and
-/// page size.
-pub fn duplicate_template(
-    fyo: &latte_core::Fyo,
-    template: &PrintTemplate,
-) -> Result<latte_core::Doc, latte_core::Error> {
-    let mut doc = templates::new_template(fyo, &template.kind, Some(&template.template))?;
-    if template.width > 0.0 {
-        doc.set_value("width", latte_db::DocValue::Number(template.width));
-    }
-    if template.height > 0.0 {
-        doc.set_value("height", latte_db::DocValue::Number(template.height));
-    }
-    Ok(doc)
-}
-
-/// Converts a Books HTML template to a new custom Typst template, "<name> (Typst)",
-/// saved; its name.
+/// Converts a Books HTML template to a new custom Typst template, saved; its name.
 pub fn convert_template(
     fyo: &mut latte_core::Fyo,
     template: &PrintTemplate,
 ) -> Result<String, String> {
-    let conversion = latte_print::convert::html_to_typst(&template.template, &template.name);
-    let base = format!("{} (Typst)", template.name);
-    let mut name = base.clone();
-    let mut n = 2;
-    while fyo
-        .db
-        .exists("PrintTemplate", Some(&name))
-        .map_err(|e| e.to_string())?
-    {
-        name = format!("{base} {n}");
-        n += 1;
-    }
-    let copy = PrintTemplate {
-        template: conversion.source,
-        ..template.clone()
-    };
-    let mut doc = duplicate_template(fyo, &copy).map_err(|e| e.to_string())?;
-    doc.set_value("name", latte_db::DocValue::Text(name.clone()));
-    doc.sync(fyo).map_err(|e| e.to_string())?;
-    Ok(name)
+    templates::convert_template(fyo, template).map(|(name, _)| name)
 }
 
 impl Render for PrintPage {

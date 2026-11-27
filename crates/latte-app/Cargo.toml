@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 latte-core.workspace = true
 latte-ui.workspace = true
+latte-print.workspace = true
 gpui-kit.workspace = true
 
 # The app's icon in the .exe, where GPUI looks for it (see build.rs). GPUI uses this crate

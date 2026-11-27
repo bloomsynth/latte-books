@@ -9,6 +9,9 @@ use latte_db::{DocValue, DocValueMap, Filter, GetAllOptions, Order, QueryFilter}
 use latte_schema::{FieldType, Schema};
 use serde_json::{Map, Value, json};
 
+use latte_templates::templates::{PRINT_SIZES, TEMPLATE_TYPES};
+
+use crate::print::{self, Printer};
 use crate::values::{doc_json, field_value, find_field, map_json, row_values};
 
 /// What a tool returns: text for the assistant, or what went wrong.
@@ -45,6 +48,12 @@ pub fn list() -> Value {
         "description": "Field values by fieldname. A table field takes a list of rows, each an object of the row's fields. Amounts and quantities are numbers or text, dates are like 2026-04-01, and links are the linked document's name.",
     });
     let reports: Vec<&str> = reports::REPORTS.iter().map(|(name, _)| *name).collect();
+    let template_types = json!({ "type": "string", "enum": TEMPLATE_TYPES, "description": "The document type the template prints" });
+    let printed = json!({ "type": "string", "description": "The document's type: SalesInvoice, SalesQuote, PurchaseInvoice, JournalEntry, Payment, Shipment, PurchaseReceipt or StockMovement" });
+    let template = json!({ "type": "string", "description": "A print template's name, from list_print_templates; the document's default template if left out" });
+    let path = json!({ "type": "string", "description": "Where to save it: a .pdf file, or a folder to save it in under its own name. ~ is the home folder, and a relative path is in the Documents folder. The Documents folder if left out. A file already there is never replaced: the new one is numbered beside it. A missing folder is made only inside the home folder." });
+    let sizes: Vec<&str> = PRINT_SIZES.iter().map(|(name, _, _)| *name).collect();
+    let page_size = json!({ "type": "string", "enum": sizes });
     json!([
         tool(
             "company_info",
@@ -147,11 +156,83 @@ pub fn list() -> Value {
             }),
             &["report"]
         ),
+        tool(
+            "list_print_templates",
+            "The print templates, with their page sizes and which one prints by default: for a document (its type and name), a document type, or every type. Templates print SalesInvoice, SalesQuote, PurchaseInvoice, JournalEntry, Payment, Shipment, PurchaseReceipt and StockMovement documents.",
+            true,
+            json!({ "type": printed, "name": { "type": "string", "description": "A document's name, for the templates it can print with" } }),
+            &[]
+        ),
+        tool(
+            "print_document",
+            "Saves a document as a PDF file, laid out with a print template as the app's Save as PDF does, and returns where it was saved.",
+            false,
+            json!({ "type": printed, "name": name, "template": template, "path": path }),
+            &["type", "name"]
+        ),
+        tool(
+            "preview_print",
+            "Shows a document's printout as page images, to check it before saving a PDF, or to try out a template's Typst source (template_source) before it's saved. Template errors come back with their line and column.",
+            true,
+            json!({
+                "type": printed,
+                "name": name,
+                "template": template,
+                "template_source": { "type": "string", "description": "Typst source to lay the document out with in place of the template's own; nothing is saved" },
+                "page_size": page_size,
+                "width": { "type": "number", "description": "Page width in cm, in place of the template's" },
+                "height": { "type": "number", "description": "Page height in cm, in place of the template's" },
+                "pages": { "type": "integer", "description": "How many pages to show, from the first (default 2, up to 6)" },
+            }),
+            &["type", "name"]
+        ),
+        tool(
+            "print_report",
+            "Saves a report as a PDF file, as the app's report Print View does, and returns where it was saved.",
+            false,
+            json!({
+                "report": { "type": "string", "enum": reports },
+                "filters": { "type": "object", "description": "By filter name, from list_reports. Dates are like 2026-04-01." },
+                "columns": { "type": "array", "items": { "type": "string" }, "description": "The columns to print, by label or fieldname, in this order; all of them if left out" },
+                "start_row": { "type": "integer", "description": "The first row to print, from 1" },
+                "row_count": { "type": "integer", "description": "How many rows to print; all of them if left out" },
+                "page_size": page_size,
+                "landscape": { "type": "boolean" },
+                "path": path,
+            }),
+            &["report"]
+        ),
+        tool(
+            "print_template_guide",
+            "How to write a print template for a document type: the Typst starter template, every value a template can read (doc and print), the print library's helpers and fonts, the page sizes, and how to save one and make it the default. With a document's name, also that document's actual values.",
+            true,
+            json!({ "type": template_types, "name": { "type": "string", "description": "A document of that type, to see the values it prints with" } }),
+            &["type"]
+        ),
+        tool(
+            "convert_print_template",
+            "Makes a Typst copy, \"<name> (Typst)\", of a Frappe Books HTML print template, which Latte can't print as it is. The HTML template is left as it is. Returns the copy's name and what couldn't be converted.",
+            false,
+            json!({ "name": { "type": "string", "description": "The HTML template's name" } }),
+            &["name"]
+        ),
     ])
 }
 
-/// `tools/call`.
-pub fn call(fyo: &mut Fyo, name: &str, args: &Value) -> Outcome {
+/// `tools/call`: the reply's content, or what went wrong.
+pub fn call(
+    fyo: &mut Fyo,
+    printer: &Printer,
+    name: &str,
+    args: &Value,
+) -> Result<Vec<Value>, String> {
+    match name {
+        "preview_print" => print::preview(fyo, printer, args),
+        _ => call_text(fyo, printer, name, args).map(|text| vec![print::text_content(text)]),
+    }
+}
+
+fn call_text(fyo: &mut Fyo, printer: &Printer, name: &str, args: &Value) -> Outcome {
     match name {
         "company_info" => company_info(fyo),
         "list_document_types" => list_document_types(fyo),
@@ -203,25 +284,30 @@ pub fn call(fyo: &mut Fyo, name: &str, args: &Value) -> Outcome {
         }
         "list_reports" => list_reports(fyo),
         "run_report" => run_report(fyo, text_arg(args, "report")?, args.get("filters")),
+        "list_print_templates" => print::list_templates(fyo, args),
+        "print_document" => print::print_document(fyo, printer, args),
+        "print_report" => print::report_pdf(fyo, printer, args),
+        "print_template_guide" => print::guide(fyo, args),
+        "convert_print_template" => print::convert(fyo, args),
         _ => Err(format!("There's no tool \"{name}\"")),
     }
 }
 
-fn text_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+pub(crate) fn text_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     opt_text(args, key).ok_or_else(|| format!("\"{key}\" is needed"))
 }
 
-fn opt_text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn opt_text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
 }
 
-fn pretty(value: &Value) -> Outcome {
+pub(crate) fn pretty(value: &Value) -> Outcome {
     serde_json::to_string_pretty(value).map_err(|e| e.to_string())
 }
 
-fn doc_label(doc: &Doc) -> String {
+pub(crate) fn doc_label(doc: &Doc) -> String {
     format!("{} {}", doc.schema().label, doc.name().unwrap_or_default())
 }
 
@@ -279,7 +365,7 @@ fn list_document_types(fyo: &Fyo) -> Outcome {
     pretty(&Value::Array(types))
 }
 
-fn schema(fyo: &Fyo, name: &str) -> Result<std::sync::Arc<Schema>, String> {
+pub(crate) fn schema(fyo: &Fyo, name: &str) -> Result<std::sync::Arc<Schema>, String> {
     fyo.schema(name).cloned().ok_or_else(|| {
         format!("There's no document type \"{name}\"; list_document_types lists them")
     })
@@ -433,7 +519,7 @@ fn find(fyo: &Fyo, args: &Value) -> Outcome {
     ))
 }
 
-fn load(fyo: &mut Fyo, schema: &Schema, name: Option<&str>) -> Result<Doc, String> {
+pub(crate) fn load(fyo: &mut Fyo, schema: &Schema, name: Option<&str>) -> Result<Doc, String> {
     match (schema.is_single, name) {
         (true, _) => fyo.get_doc(&schema.name, None),
         (false, Some(name)) => fyo.get_doc(&schema.name, Some(name)),
@@ -598,6 +684,19 @@ fn list_reports(fyo: &Fyo) -> Outcome {
 }
 
 fn run_report(fyo: &Fyo, name: &str, filters: Option<&Value>) -> Outcome {
+    let mut report = prepared_report(fyo, name, filters)?;
+    let formatter = Formatter::new(fyo).map_err(|e| e.to_string())?;
+    let columns = report.columns(fyo, &formatter).map_err(|e| e.to_string())?;
+    let rows = report.run(fyo, &formatter).map_err(|e| e.to_string())?;
+    Ok(reports::csv(&columns, &rows, formatter.display_precision))
+}
+
+/// A report with the filters given set.
+pub(crate) fn prepared_report(
+    fyo: &Fyo,
+    name: &str,
+    filters: Option<&Value>,
+) -> Result<Box<dyn reports::Report>, String> {
     let mut report =
         reports::get_report(name).ok_or_else(|| format!("There's no report \"{name}\""))?;
     if !has_report(fyo, name) {
@@ -634,8 +733,5 @@ fn run_report(fyo: &Fyo, name: &str, filters: Option<&Value>) -> Outcome {
             report.set(fieldname, value);
         }
     }
-    let formatter = Formatter::new(fyo).map_err(|e| e.to_string())?;
-    let columns = report.columns(fyo, &formatter).map_err(|e| e.to_string())?;
-    let rows = report.run(fyo, &formatter).map_err(|e| e.to_string())?;
-    Ok(reports::csv(&columns, &rows, formatter.display_precision))
+    Ok(report)
 }

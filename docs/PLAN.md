@@ -74,6 +74,7 @@ latte-books/
 │  ├─ latte-core/     Models and business rules: posting, invoices, payments, taxes,
 │  │                  numbering, inventory, reports. NO UI types here.
 │  ├─ latte-i18n/     CSV translation loader, number/date/currency formatting
+│  ├─ latte-templates/ Print templates and the values they read, without Typst
 │  ├─ latte-print/    Typst rendering of invoices, payments and shipments
 │  ├─ latte-regional/ Country modules: `in` (GST, GSTR-1/2), `ch`, …
 │  ├─ latte-ui/       GPUI screens and components (depends on gpui-kit), updater
@@ -387,6 +388,15 @@ for Tally).
   the assistant's own tool approval. An assistant's writes are logged under their own
   device id, and the app shows the open page again when it sees them (see DEVIATIONS.md).
   Not yet tried with a real assistant.*
+- *Printing, 2026-11-27: assistants list the print templates and which prints by default,
+  save a document or a report as a PDF (to Documents unless told where), see a
+  printout's pages as images, try a template's Typst source on a document before
+  saving it, read what a template can use (`print_template_guide`), and convert a Books
+  HTML template to Typst. Like the app, `latte-mcp` writes Latte's bundled templates
+  into the file before printing. `latte-mcp` picks the template and gathers the values
+  (`latte-templates`, no Typst) and runs the app as `latte-books --print-job` to lay
+  them out, so Typst and its fonts are in the app alone: linking them into `latte-mcp`
+  as well made it about 60 MB larger and the Windows installer about 15 MB larger.*
 - Later: a "Changes by assistants" list in the app, and setup for VS Code (Copilot) and
   Windsurf.
 - Next: an invoice in a foreign currency made by an assistant gets exchange rate 1 (Latte

@@ -9,6 +9,7 @@ use latte_core::config;
 use latte_db::{Database, DocValue};
 use serde_json::{Value, json};
 
+use crate::print::Printer;
 use crate::tools;
 
 /// The protocol versions this server speaks, newest first.
@@ -24,31 +25,25 @@ pub struct Server {
     /// The file given with `--file`, which stays the same.
     file: Option<PathBuf>,
     company: Option<Company>,
+    printer: Printer,
 }
 
 impl Server {
+    /// A server that prints with the app beside it.
     pub fn new(file: Option<PathBuf>) -> Self {
+        Self::with_printer(file, Printer::App)
+    }
+
+    pub fn with_printer(file: Option<PathBuf>, printer: Printer) -> Self {
         Self {
             file,
             company: None,
+            printer,
         }
     }
 
     fn company(&mut self) -> Result<&mut Company, String> {
-        let path =
-            self.file.clone().or_else(config::assistant_file).ok_or(
-                "No company is open in Latte Books yet. Open one in the app, then try again.",
-            )?;
-        if self.company.as_ref().is_none_or(|c| c.path != path) {
-            self.company = None;
-            let db = Database::open(&path, config::assistant_device_id())
-                .map_err(|e| format!("Couldn't open {}: {e}", path.display()))?;
-            self.company = Some(Company {
-                path,
-                fyo: Fyo::with_models(db),
-            });
-        }
-        Ok(self.company.as_mut().expect("opened above"))
+        open(self.file.as_deref(), &mut self.company)
     }
 
     fn instructions(&mut self) -> String {
@@ -72,7 +67,9 @@ impl Server {
             "{company} Latte Books is an accounting app (a port of Frappe Books). Look things \
              up with find_documents, get_document and run_report; describe_document_type \
              gives a type's fields. New documents are saved as drafts; show the person a \
-             draft and ask before submitting it, since submitting posts it to the accounts."
+             draft and ask before submitting it, since submitting posts it to the accounts. \
+             print_document and print_report save PDFs; preview_print shows a printout's \
+             pages, and print_template_guide tells how to write a print template."
         )
     }
 
@@ -117,20 +114,41 @@ impl Server {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
-        let outcome = self
-            .company()
-            .and_then(|company| tools::call(&mut company.fyo, name, &args));
-        let (text, is_error) = match outcome {
-            Ok(text) => (text, false),
-            Err(text) => (text, true),
+        let outcome = open(self.file.as_deref(), &mut self.company)
+            .and_then(|company| tools::call(&mut company.fyo, &self.printer, name, &args));
+        let (content, is_error) = match outcome {
+            Ok(content) => (content, false),
+            Err(text) => (vec![json!({ "type": "text", "text": text })], true),
         };
-        json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+        json!({ "content": content, "isError": is_error })
     }
 
     /// The company file in use, once one is open.
     pub fn path(&self) -> Option<&Path> {
         self.company.as_ref().map(|c| c.path.as_path())
     }
+}
+
+/// The company in `file`, or else the one chosen for assistants, opened again when that
+/// changes.
+fn open<'a>(
+    file: Option<&Path>,
+    company: &'a mut Option<Company>,
+) -> Result<&'a mut Company, String> {
+    let path = file
+        .map(Path::to_path_buf)
+        .or_else(config::assistant_file)
+        .ok_or("No company is open in Latte Books yet. Open one in the app, then try again.")?;
+    if company.as_ref().is_none_or(|c| c.path != path) {
+        *company = None;
+        let db = Database::open(&path, config::assistant_device_id())
+            .map_err(|e| format!("Couldn't open {}: {e}", path.display()))?;
+        *company = Some(Company {
+            path,
+            fyo: Fyo::with_models(db),
+        });
+    }
+    Ok(company.as_mut().expect("opened above"))
 }
 
 /// Reads messages from `input` and writes replies to `output` until the input ends.

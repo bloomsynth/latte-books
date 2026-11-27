@@ -2,20 +2,18 @@
 //!
 //! A document prints with a PrintTemplate, as in Books, but its template is Typst source
 //! rather than Books' HTML (see docs/DEVIATIONS.md). A template reads the values Books
-//! gives its HTML templates (`getPrintTemplatePropValues`, see [`values`]) from Latte's
-//! print library, `/latte.typ`. Latte's bundled templates ([`templates`]) are Typst ports
-//! of Books' designs; a Books HTML template in a company file is converted to Typst once
-//! ([`convert`]).
+//! gives its HTML templates (`getPrintTemplatePropValues`, see [`print_values`]) from
+//! Latte's print library, `/latte.typ`. Latte's bundled templates ([`templates`]) are
+//! Typst ports of Books' designs; a Books HTML template in a company file is converted to
+//! Typst once ([`convert`]). Those are in `latte-templates`, re-exported here; this crate
+//! lays them out. [`job`] lays out a job sent by another process, as `latte-mcp` sends
+//! the app.
 //!
 //! A printout is the same on every device: it uses only the fonts bundled with Latte, the
 //! images in the document, and the page size of the template.
 
-pub mod convert;
-pub mod hints;
+pub mod job;
 pub mod report;
-pub mod templates;
-mod values;
-mod words;
 mod world;
 
 use std::collections::HashMap;
@@ -30,16 +28,11 @@ use typst::diag::{Severity, SourceDiagnostic};
 use typst::utils::Scalar;
 use typst_layout::PagedDocument;
 
-pub use templates::{PrintTemplate, is_html};
-pub use values::print_values;
-pub use words::in_words;
+pub use latte_templates::{
+    LIBRARY, PrintTemplate, convert, hints, in_words, is_html, print_values, templates,
+    translated_strings,
+};
 pub use world::font_families;
-
-/// Latte's print library, which templates import as `/latte.typ`.
-pub const LIBRARY: &str = concat!(
-    include_str!("templates/latte.typ"),
-    include_str!("templates/latte-html.typ")
-);
 
 /// A template's own file, as its errors name it.
 const TEMPLATE_PATH: &str = "/template.typ";
@@ -207,53 +200,6 @@ fn print_error(world: &world::PrintWorld, diagnostic: &SourceDiagnostic) -> Prin
     error
 }
 
-/// The strings a template translates: the string literals it passes to `t(…)` and
-/// `tf(…)`.
-fn translated_strings(template: &str) -> Vec<String> {
-    let is_name = |c: char| c.is_alphanumeric() || c == '-' || c == '_' || c == '.';
-    let mut strings = Vec::new();
-    let mut i = 0;
-    while let Some(found) = template[i..].find("(\"") {
-        let open = i + found;
-        i = open + 2;
-        let before = &template[..open];
-        let name_start = before
-            .char_indices()
-            .rev()
-            .take_while(|(_, c)| is_name(*c))
-            .last()
-            .map_or(open, |(k, _)| k);
-        if !matches!(&template[name_start..open], "t" | "tf") {
-            continue;
-        }
-        let mut text = String::new();
-        let mut chars = template[i..].char_indices();
-        let mut closed = None;
-        while let Some((k, c)) = chars.next() {
-            match c {
-                '"' => {
-                    closed = Some(k);
-                    break;
-                }
-                '\\' => match chars.next() {
-                    Some((_, 'n')) => text.push('\n'),
-                    Some((_, 't')) => text.push('\t'),
-                    Some((_, other)) => text.push(other),
-                    None => {}
-                },
-                c => text.push(c),
-            }
-        }
-        if let Some(k) = closed {
-            strings.push(text);
-            i += k + 1;
-        }
-    }
-    strings.sort();
-    strings.dedup();
-    strings
-}
-
 /// The `data:` images among the values, written as files for `picture`.
 fn collect_images(
     value: &Value,
@@ -388,4 +334,4 @@ pub(crate) fn render_plain(
 mod tests;
 
 #[cfg(test)]
-mod templates_tests;
+mod convert_tests;

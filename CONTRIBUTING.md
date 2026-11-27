@@ -109,7 +109,8 @@ Save the capture as `docs/images/raw/dashboard.png`, then frame it with
 | `crates/latte-db` | SQLite access to `.books.db` files |
 | `crates/latte-core` | Accounting rules and reports (no UI) |
 | `crates/latte-i18n` | Translations and formatting |
-| `crates/latte-print` | PDF printing with Typst |
+| `crates/latte-templates` | Print templates and the values they read, without Typst |
+| `crates/latte-print` | PDF printing with Typst; `latte-books --print-job` lays out jobs from `latte-mcp` |
 | `crates/latte-regional` | Country modules (India GST, Switzerland) |
 | `crates/latte-ui` | GPUI screens |
 | `crates/latte-app` | The `latte-books` executable, its icon and installer settings |

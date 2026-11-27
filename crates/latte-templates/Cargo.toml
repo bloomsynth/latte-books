@@ -1,0 +1,14 @@
+[package]
+name = "latte-templates"
+description = "Print templates, the values they read, and Books HTML templates converted to Typst"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+latte-core.workspace = true
+latte-db.workspace = true
+latte-schema.workspace = true
+jiff.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }

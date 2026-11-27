@@ -3,6 +3,7 @@ use latte_core::setup::{SetupWizardOptions, setup_instance};
 use serde_json::{Value, json};
 
 use super::Server;
+use crate::print::Printer;
 
 struct TempFile(std::path::PathBuf);
 
@@ -78,7 +79,7 @@ fn an_assistant_invoices_a_customer() {
     let tools = server
         .handle(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
         .unwrap();
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 13);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 19);
 
     assert_eq!(
         ok(&mut server, "company_info", json!({}))["currency"],
@@ -324,4 +325,241 @@ fn a_payment_names_a_purchase_invoice_whatever_order_its_row_is_given_in() {
     );
     assert_eq!(payment["for"][0]["referenceType"], "PurchaseInvoice");
     assert_eq!(payment["for"][0]["referenceName"], name);
+}
+
+/// A tool's whole reply content, and whether it failed.
+fn call_content(server: &mut Server, name: &str, arguments: Value) -> (Vec<Value>, bool) {
+    let reply = server
+        .handle(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        }))
+        .unwrap();
+    let result = &reply["result"];
+    (
+        result["content"].as_array().unwrap().clone(),
+        result["isError"].as_bool().unwrap(),
+    )
+}
+
+struct TempDir(std::path::PathBuf);
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn an_assistant_prints_an_invoice_and_a_report() {
+    let file = company();
+    let out = TempDir(std::env::temp_dir().join(format!(
+        "latte mcp pdfs {} {}",
+        std::process::id(),
+        latte_db::get_random_string()
+    )));
+    std::fs::create_dir_all(&out.0).unwrap();
+    // The app lays the pages out for an assistant; here the test does, with the same code.
+    let mut server = Server::with_printer(
+        Some(file.0.clone()),
+        Printer::InProcess(latte_print::job::run),
+    );
+    ok(
+        &mut server,
+        "create_document",
+        json!({ "type": "Party", "values": { "name": "Globex", "role": "Customer" } }),
+    );
+    ok(
+        &mut server,
+        "create_document",
+        json!({ "type": "Item", "values": { "name": "Chair", "rate": 500 } }),
+    );
+    let invoice = ok(
+        &mut server,
+        "create_document",
+        json!({
+            "type": "SalesInvoice",
+            "values": {
+                "party": "Globex",
+                "date": "2026-10-23",
+                "items": [{ "item": "Chair", "quantity": 10 }],
+            },
+        }),
+    );
+    let name = invoice["name"].as_str().unwrap().to_owned();
+
+    // The file was never opened in the app, and has Latte's templates all the same.
+    let listed = ok(
+        &mut server,
+        "list_print_templates",
+        json!({ "type": "SalesInvoice", "name": name }),
+    );
+    let templates = listed["templates"].as_array().unwrap();
+    assert!(templates.len() >= 3, "{listed}");
+    assert_eq!(
+        templates.iter().filter(|t| t["default"] == true).count(),
+        1,
+        "{listed}"
+    );
+    let by_type = ok(&mut server, "list_print_templates", json!({}));
+    assert_eq!(
+        by_type["Payment"]["defaultSetting"],
+        "Defaults.paymentPrintTemplate"
+    );
+
+    // Saved as a PDF; a second save doesn't replace the first.
+    let saved = ok(
+        &mut server,
+        "print_document",
+        json!({ "type": "SalesInvoice", "name": name, "path": out.0.display().to_string() }),
+    );
+    let first = std::path::PathBuf::from(saved["saved"].as_str().unwrap());
+    assert_eq!(first, out.0.join(format!("{name}.pdf")));
+    assert!(std::fs::read(&first).unwrap().starts_with(b"%PDF"));
+    assert_eq!(saved["pages"], 1);
+    let again = ok(
+        &mut server,
+        "print_document",
+        json!({
+            "type": "SalesInvoice",
+            "name": name,
+            "template": "Minimal - Sales Invoice",
+            "path": out.0.join("copy.pdf").display().to_string(),
+        }),
+    );
+    assert_eq!(again["template"], "Minimal - Sales Invoice");
+    let again = ok(
+        &mut server,
+        "print_document",
+        json!({
+            "type": "SalesInvoice",
+            "name": name,
+            "path": out.0.join("copy.pdf").display().to_string(),
+        }),
+    );
+    assert_eq!(
+        std::path::PathBuf::from(again["saved"].as_str().unwrap()),
+        out.0.join("copy (2).pdf")
+    );
+    let (text, is_error) = call(
+        &mut server,
+        "print_document",
+        json!({ "type": "SalesInvoice", "name": name, "template": "Fancy" }),
+    );
+    assert!(is_error);
+    assert!(text.contains("Basic - Sales Invoice"), "{text}");
+
+    // A preview is the pages as images.
+    let (content, is_error) = call_content(
+        &mut server,
+        "preview_print",
+        json!({ "type": "SalesInvoice", "name": name }),
+    );
+    assert!(!is_error, "{content:?}");
+    assert_eq!(content.len(), 2, "{content:?}");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["mimeType"], "image/png");
+    assert!(
+        content[1]["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("iVBORw0KGgo")
+    );
+
+    // A template is written from the guide, tried out, then saved and printed with.
+    let guide = ok(
+        &mut server,
+        "print_template_guide",
+        json!({ "type": "SalesInvoice", "name": name }),
+    );
+    assert!(guide["values"]["doc"]["items"].is_array(), "{guide}");
+    assert_eq!(guide["documentValues"]["doc"]["name"], name);
+    let source = format!(
+        "{}\n#doc.links.party.name\n",
+        guide["starter"].as_str().unwrap()
+    );
+    let (text, is_error) = call(
+        &mut server,
+        "preview_print",
+        json!({
+            "type": "SalesInvoice",
+            "name": name,
+            "template_source": "#import \"/latte.typ\": *\n#show: setup\n#doc.nothing.here\n",
+        }),
+    );
+    assert!(is_error);
+    assert!(text.contains("Line 3"), "{text}");
+    let (content, is_error) = call_content(
+        &mut server,
+        "preview_print",
+        json!({ "type": "SalesInvoice", "name": name, "template_source": source, "page_size": "A5" }),
+    );
+    assert!(!is_error, "{content:?}");
+    assert!(content[0]["text"].as_str().unwrap().contains("A5"));
+    ok(
+        &mut server,
+        "create_document",
+        json!({
+            "type": "PrintTemplate",
+            "values": { "name": "Plain", "type": "SalesInvoice", "template": source },
+        }),
+    );
+    let saved = ok(
+        &mut server,
+        "print_document",
+        json!({ "type": "SalesInvoice", "name": name, "template": "Plain", "path": out.0.display().to_string() }),
+    );
+    // A file that's there is never replaced.
+    assert_eq!(
+        std::path::PathBuf::from(saved["saved"].as_str().unwrap()),
+        out.0.join(format!("{name} (2).pdf"))
+    );
+    // A missing folder is made inside the home folder only; the temp folder isn't in it
+    // on Linux and macOS.
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let temp_in_home = home.is_some_and(|home| {
+        let home = std::path::Path::new(&home).canonicalize().unwrap();
+        out.0.canonicalize().unwrap().starts_with(home)
+    });
+    if !temp_in_home {
+        let (text, is_error) = call(
+            &mut server,
+            "print_document",
+            json!({ "type": "SalesInvoice", "name": name, "path": out.0.join("new/folder").display().to_string() }),
+        );
+        assert!(is_error);
+        assert!(text.contains("only inside the home folder"), "{text}");
+    }
+
+    // A report, its columns picked, on a landscape page.
+    ok(
+        &mut server,
+        "submit_document",
+        json!({ "type": "SalesInvoice", "name": name }),
+    );
+    let report = ok(
+        &mut server,
+        "print_report",
+        json!({
+            "report": "general-ledger",
+            "columns": ["Account", "debit"],
+            "landscape": true,
+            "path": out.0.join("ledger.pdf").display().to_string(),
+        }),
+    );
+    assert!(report["rows"].as_u64().unwrap() > 0, "{report}");
+    assert!(
+        std::fs::read(out.0.join("ledger.pdf"))
+            .unwrap()
+            .starts_with(b"%PDF")
+    );
+    let (text, is_error) = call(
+        &mut server,
+        "print_report",
+        json!({ "report": "general-ledger", "columns": ["Colour"] }),
+    );
+    assert!(is_error);
+    assert!(text.contains("no column \"Colour\""), "{text}");
 }

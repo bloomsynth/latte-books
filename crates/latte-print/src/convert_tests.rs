@@ -1,4 +1,4 @@
-use super::html_to_typst;
+use crate::convert::html_to_typst;
 use crate::render;
 use crate::tests::values;
 
@@ -7,37 +7,37 @@ use crate::tests::values;
 pub(crate) const BOOKS: [(&str, &str, &str, f64); 6] = [
     (
         "Basic",
-        include_str!("../../../../vendor/books/templates/Basic.template.html"),
+        include_str!("../../../vendor/books/templates/Basic.template.html"),
         "SalesInvoice",
         21.0,
     ),
     (
         "Business",
-        include_str!("../../../../vendor/books/templates/Business.template.html"),
+        include_str!("../../../vendor/books/templates/Business.template.html"),
         "SalesInvoice",
         21.0,
     ),
     (
         "Minimal",
-        include_str!("../../../../vendor/books/templates/Minimal.template.html"),
+        include_str!("../../../vendor/books/templates/Minimal.template.html"),
         "PurchaseInvoice",
         21.0,
     ),
     (
         "Business.Payment",
-        include_str!("../../../../vendor/books/templates/Business.Payment.template.html"),
+        include_str!("../../../vendor/books/templates/Business.Payment.template.html"),
         "Payment",
         21.0,
     ),
     (
         "Business.Shipment",
-        include_str!("../../../../vendor/books/templates/Business.Shipment.template.html"),
+        include_str!("../../../vendor/books/templates/Business.Shipment.template.html"),
         "Shipment",
         21.0,
     ),
     (
         "Business-POS",
-        include_str!("../../../../vendor/books/templates/Business-POS.template.html"),
+        include_str!("../../../vendor/books/templates/Business-POS.template.html"),
         "SalesInvoice",
         8.0,
     ),
