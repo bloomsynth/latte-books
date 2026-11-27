@@ -51,8 +51,7 @@ pub fn list() -> Value {
     let template_types = json!({ "type": "string", "enum": TEMPLATE_TYPES, "description": "The document type the template prints" });
     let printed = json!({ "type": "string", "description": "The document's type: SalesInvoice, SalesQuote, PurchaseInvoice, JournalEntry, Payment, Shipment, PurchaseReceipt or StockMovement" });
     let template = json!({ "type": "string", "description": "A print template's name, from list_print_templates; the document's default template if left out" });
-    let path = json!({ "type": "string", "description": "Where to save it: a .pdf file, or a folder to save it in under its own name. ~ is the home folder, and a relative path is in the Documents folder. The Documents folder if left out." });
-    let overwrite = json!({ "type": "boolean", "description": "Replace a file already there; otherwise the new one is numbered beside it" });
+    let path = json!({ "type": "string", "description": "Where to save it: a .pdf file, or a folder to save it in under its own name. ~ is the home folder, and a relative path is in the Documents folder. The Documents folder if left out. A file already there is never replaced: the new one is numbered beside it. A missing folder is made only inside the home folder." });
     let sizes: Vec<&str> = PRINT_SIZES.iter().map(|(name, _, _)| *name).collect();
     let page_size = json!({ "type": "string", "enum": sizes });
     json!([
@@ -168,7 +167,7 @@ pub fn list() -> Value {
             "print_document",
             "Saves a document as a PDF file, laid out with a print template as the app's Save as PDF does, and returns where it was saved.",
             false,
-            json!({ "type": printed, "name": name, "template": template, "path": path, "overwrite": overwrite }),
+            json!({ "type": printed, "name": name, "template": template, "path": path }),
             &["type", "name"]
         ),
         tool(
@@ -200,7 +199,6 @@ pub fn list() -> Value {
                 "page_size": page_size,
                 "landscape": { "type": "boolean" },
                 "path": path,
-                "overwrite": overwrite,
             }),
             &["report"]
         ),

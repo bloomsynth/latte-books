@@ -7,7 +7,7 @@
 //! so a PDF from an assistant is the one the app's Save as PDF would save.
 
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -249,9 +249,8 @@ fn documents() -> PathBuf {
 }
 
 /// Where to save a PDF named `stem`: the path given, a `.pdf` file or a folder (`~` is
-/// the home folder, and a relative path is in Documents), else Documents. An existing
-/// file is kept, and the new one numbered beside it, unless `overwrite`.
-fn pdf_path(given: Option<&str>, stem: &str, overwrite: bool) -> Result<PathBuf, String> {
+/// the home folder, and a relative path is in Documents), else Documents.
+fn pdf_path(given: Option<&str>, stem: &str) -> Result<PathBuf, String> {
     let file_name = format!("{}.pdf", file_stem(stem));
     let path = match given {
         None => documents().join(&file_name),
@@ -274,41 +273,79 @@ fn pdf_path(given: Option<&str>, stem: &str, overwrite: bool) -> Result<PathBuf,
         }
     };
     if let Some(folder) = path.parent() {
-        std::fs::create_dir_all(folder)
-            .map_err(|e| format!("Couldn't make the folder {}: {e}", folder.display()))?;
+        make_folder(folder)?;
     }
-    if overwrite || !path.exists() {
-        return Ok(path);
-    }
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    (2..)
-        .map(|n| path.with_file_name(format!("{stem} ({n}).pdf")))
-        .find(|p| !p.exists())
-        .ok_or_else(|| "No free file name".to_owned())
+    Ok(path)
 }
 
-/// Saves the PDF in a reply.
-fn save_pdf(
-    reply: &Value,
-    given: Option<&str>,
-    stem: &str,
-    overwrite: bool,
-) -> Result<PathBuf, String> {
+/// Makes a missing folder, only inside the home folder: an assistant can save beside
+/// files the person keeps anywhere, but not lay out new folders elsewhere on the disk.
+fn make_folder(folder: &Path) -> Result<(), String> {
+    if folder.is_dir() {
+        return Ok(());
+    }
+    let inside_home = home()
+        .and_then(|home| home.canonicalize().ok())
+        .is_some_and(|home| {
+            // The nearest folder that is there, and the rest, which has no `..`.
+            let mut existing = folder;
+            while !existing.is_dir() {
+                match existing.parent() {
+                    Some(parent) => existing = parent,
+                    None => return false,
+                }
+            }
+            let rest = folder.strip_prefix(existing).unwrap_or(folder);
+            !rest
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+                && existing
+                    .canonicalize()
+                    .is_ok_and(|existing| existing.starts_with(&home))
+        });
+    if !inside_home {
+        return Err(format!(
+            "There's no folder {}. New folders are made only inside the home folder; elsewhere, give a folder that's already there.",
+            folder.display()
+        ));
+    }
+    std::fs::create_dir_all(folder)
+        .map_err(|e| format!("Couldn't make the folder {}: {e}", folder.display()))
+}
+
+/// Saves the PDF in a reply as a new file: never over one that's there, which keeps it,
+/// and the new one is numbered beside it.
+fn save_pdf(reply: &Value, given: Option<&str>, stem: &str) -> Result<PathBuf, String> {
     let pdf = reply
         .get("pdf")
         .and_then(Value::as_str)
         .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
         .ok_or("The app sent no PDF back")?;
-    let path = pdf_path(given, stem, overwrite)?;
-    std::fs::write(&path, pdf).map_err(|e| format!("Couldn't save {}: {e}", path.display()))?;
-    Ok(path)
-}
-
-fn overwrite(args: &Value) -> bool {
-    args.get("overwrite").and_then(Value::as_bool) == Some(true)
+    let first = pdf_path(given, stem)?;
+    let stem = first
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let candidates = std::iter::once(first.clone())
+        .chain((2..10_000).map(|n| first.with_file_name(format!("{stem} ({n}).pdf"))));
+    for path in candidates {
+        // `create_new`: a file that appears meanwhile isn't replaced either.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                return file
+                    .write_all(&pdf)
+                    .map(|()| path.clone())
+                    .map_err(|e| format!("Couldn't save {}: {e}", path.display()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Couldn't save {}: {e}", path.display())),
+        }
+    }
+    Err(format!("No free file name beside {}", first.display()))
 }
 
 fn document(fyo: &mut Fyo, args: &Value) -> Result<Doc, String> {
@@ -326,7 +363,7 @@ pub fn print_document(fyo: &mut Fyo, printer: &Printer, args: &Value) -> Outcome
     let template = pick_template(fyo, &doc, opt_text(args, "template"))?;
     let reply = lay_out(fyo, printer, &doc, &template, json!({ "output": "pdf" }))?;
     let name = doc.name().unwrap_or_default().to_owned();
-    let path = save_pdf(&reply, opt_text(args, "path"), &name, overwrite(args))?;
+    let path = save_pdf(&reply, opt_text(args, "path"), &name)?;
     pretty(&json!({
         "saved": path.display().to_string(),
         "document": doc_label(&doc),
@@ -503,7 +540,7 @@ pub fn report_pdf(fyo: &Fyo, printer: &Printer, args: &Value) -> Outcome {
     let reply = printer.run(&json!({ "job": VERSION, "report": print.data(), "output": "pdf" }))?;
     let today = jiff::ZonedDateTime::now().date();
     let stem = format!("{title} - {}", formatter.date(today));
-    let path = save_pdf(&reply, opt_text(args, "path"), &stem, overwrite(args))?;
+    let path = save_pdf(&reply, opt_text(args, "path"), &stem)?;
     pretty(&json!({
         "saved": path.display().to_string(),
         "report": title,

@@ -360,6 +360,7 @@ fn an_assistant_prints_an_invoice_and_a_report() {
         std::process::id(),
         latte_db::get_random_string()
     )));
+    std::fs::create_dir_all(&out.0).unwrap();
     // The app lays the pages out for an assistant; here the test does, with the same code.
     let mut server = Server::with_printer(
         Some(file.0.clone()),
@@ -508,9 +509,29 @@ fn an_assistant_prints_an_invoice_and_a_report() {
     let saved = ok(
         &mut server,
         "print_document",
-        json!({ "type": "SalesInvoice", "name": name, "template": "Plain", "path": out.0.display().to_string(), "overwrite": true }),
+        json!({ "type": "SalesInvoice", "name": name, "template": "Plain", "path": out.0.display().to_string() }),
     );
-    assert_eq!(saved["saved"], first.display().to_string());
+    // A file that's there is never replaced.
+    assert_eq!(
+        std::path::PathBuf::from(saved["saved"].as_str().unwrap()),
+        out.0.join(format!("{name} (2).pdf"))
+    );
+    // A missing folder is made inside the home folder only; the temp folder isn't in it
+    // on Linux and macOS.
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let temp_in_home = home.is_some_and(|home| {
+        let home = std::path::Path::new(&home).canonicalize().unwrap();
+        out.0.canonicalize().unwrap().starts_with(home)
+    });
+    if !temp_in_home {
+        let (text, is_error) = call(
+            &mut server,
+            "print_document",
+            json!({ "type": "SalesInvoice", "name": name, "path": out.0.join("new/folder").display().to_string() }),
+        );
+        assert!(is_error);
+        assert!(text.contains("only inside the home folder"), "{text}");
+    }
 
     // A report, its columns picked, on a landscape page.
     ok(
