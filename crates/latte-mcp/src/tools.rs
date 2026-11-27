@@ -9,9 +9,9 @@ use latte_db::{DocValue, DocValueMap, Filter, GetAllOptions, Order, QueryFilter}
 use latte_schema::{FieldType, Schema};
 use serde_json::{Map, Value, json};
 
-use latte_print::templates::{PRINT_SIZES, TEMPLATE_TYPES};
+use latte_templates::templates::{PRINT_SIZES, TEMPLATE_TYPES};
 
-use crate::print;
+use crate::print::{self, Printer};
 use crate::values::{doc_json, field_value, find_field, map_json, row_values};
 
 /// What a tool returns: text for the assistant, or what went wrong.
@@ -222,14 +222,19 @@ pub fn list() -> Value {
 }
 
 /// `tools/call`: the reply's content, or what went wrong.
-pub fn call(fyo: &mut Fyo, name: &str, args: &Value) -> Result<Vec<Value>, String> {
+pub fn call(
+    fyo: &mut Fyo,
+    printer: &Printer,
+    name: &str,
+    args: &Value,
+) -> Result<Vec<Value>, String> {
     match name {
-        "preview_print" => print::preview(fyo, args),
-        _ => call_text(fyo, name, args).map(|text| vec![print::text_content(text)]),
+        "preview_print" => print::preview(fyo, printer, args),
+        _ => call_text(fyo, printer, name, args).map(|text| vec![print::text_content(text)]),
     }
 }
 
-fn call_text(fyo: &mut Fyo, name: &str, args: &Value) -> Outcome {
+fn call_text(fyo: &mut Fyo, printer: &Printer, name: &str, args: &Value) -> Outcome {
     match name {
         "company_info" => company_info(fyo),
         "list_document_types" => list_document_types(fyo),
@@ -282,8 +287,8 @@ fn call_text(fyo: &mut Fyo, name: &str, args: &Value) -> Outcome {
         "list_reports" => list_reports(fyo),
         "run_report" => run_report(fyo, text_arg(args, "report")?, args.get("filters")),
         "list_print_templates" => print::list_templates(fyo, args),
-        "print_document" => print::print_document(fyo, args),
-        "print_report" => print::report_pdf(fyo, args),
+        "print_document" => print::print_document(fyo, printer, args),
+        "print_report" => print::report_pdf(fyo, printer, args),
         "print_template_guide" => print::guide(fyo, args),
         "convert_print_template" => print::convert(fyo, args),
         _ => Err(format!("There's no tool \"{name}\"")),

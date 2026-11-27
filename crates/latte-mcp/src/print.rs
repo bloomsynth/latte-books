@@ -1,9 +1,14 @@
 //! Printing: documents saved as PDF with their print templates, a look at a printout's
-//! pages, reports saved as PDF, and what an assistant needs to write a template. The
-//! same `latte-print` layout as the app's Print View, so a PDF from an assistant is the
-//! one the app would save.
+//! pages, reports saved as PDF, and what an assistant needs to write a template.
+//!
+//! The templates are picked and the values gathered here, without Typst. The app lays
+//! them out, run as `latte-books --print-job` (`latte_print::job`), so Typst and its
+//! fonts are in the app alone and `latte-mcp` stays small. It is the app's own layout,
+//! so a PDF from an assistant is the one the app's Save as PDF would save.
 
+use std::io::Write as _;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 use base64::Engine as _;
@@ -12,12 +17,12 @@ use latte_core::reports::Align;
 use latte_core::{Doc, Fyo, config};
 use latte_db::DocValue;
 use latte_i18n::translation::{DEFAULT_LANGUAGE, LanguageMap, stitch};
-use latte_print::hints::{Hint, LIBRARY_HINTS};
-use latte_print::report::{ReportColumn, ReportPrint, print_report};
-use latte_print::templates::{
+use latte_templates::hints::{Hint, LIBRARY_HINTS};
+use latte_templates::job::{FLAG, VERSION};
+use latte_templates::report::{ReportColumn, ReportPrint};
+use latte_templates::templates::{
     self, BASE_TEMPLATE, PRINT_SIZES, PrintTemplate, TEMPLATE_TYPES, size_name,
 };
-use latte_print::{Printout, errors_text};
 use serde_json::{Map, Value, json};
 
 use crate::tools::{Outcome, doc_label, load, opt_text, prepared_report, pretty, schema, text_arg};
@@ -40,6 +45,85 @@ fn t(text: &str) -> String {
         Some(map) => map.translate(text, &[]),
         None => stitch(text, &[]),
     }
+}
+
+/// Lays out print jobs.
+pub enum Printer {
+    /// The app beside `latte-mcp`, run as `latte-books --print-job`.
+    App,
+    /// A function in this process, such as `latte_print::job::run` in tests.
+    InProcess(fn(&Value) -> Result<Value, String>),
+}
+
+/// The app, which installs beside `latte-mcp`.
+fn app_path() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let name = if cfg!(windows) {
+        "latte-books.exe"
+    } else {
+        "latte-books"
+    };
+    let path = exe.with_file_name(name);
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "Printing needs the Latte Books app, which lays the pages out, and it isn't at {}. Reinstalling Latte Books puts it back.",
+            path.display()
+        ))
+    }
+}
+
+impl Printer {
+    /// Lays out a job: the reply, with the PDF or page images in base64.
+    fn run(&self, job: &Value) -> Result<Value, String> {
+        let reply = match self {
+            Printer::InProcess(run) => return run(job),
+            Printer::App => run_app(job)?,
+        };
+        match reply.get("error").and_then(Value::as_str) {
+            Some(error) => Err(error.to_owned()),
+            None => Ok(reply),
+        }
+    }
+}
+
+fn run_app(job: &Value) -> Result<Value, String> {
+    let path = app_path()?;
+    let mut command = Command::new(&path);
+    command
+        .arg(FLAG)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        // CREATE_NO_WINDOW: nothing flashes up while the app lays the pages out.
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Couldn't start {} to print: {e}", path.display()))?;
+    let input = job.to_string();
+    let mut stdin = child.stdin.take().ok_or("The app took no job")?;
+    // Written beside the reading, so a large job and its reply can't wait on each other.
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("The app didn't finish printing: {e}"))?;
+    let written = writer.join().map_err(|_| "Couldn't send the app the job")?;
+    serde_json::from_slice::<Value>(&output.stdout).map_err(|_| {
+        let sending = written
+            .err()
+            .map(|e| format!(" Sending it the job: {e}."))
+            .unwrap_or_default();
+        format!(
+            "The app couldn't print ({}).{sending} {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    })
 }
 
 /// The text content of a reply.
@@ -80,7 +164,9 @@ fn pick_template(fyo: &mut Fyo, doc: &Doc, asked: Option<&str>) -> Result<PrintT
     templates::load(fyo, &name).map_err(|e| e.to_string())
 }
 
-fn lay_out(fyo: &mut Fyo, doc: &Doc, template: &PrintTemplate) -> Result<Printout, String> {
+/// A job's `document`: the template, the document's values, the page, and the
+/// template's strings in the app's language.
+fn document_job(fyo: &mut Fyo, doc: &Doc, template: &PrintTemplate) -> Result<Value, String> {
     if template.is_html() {
         return Err(format!(
             "\"{}\" is a Frappe Books HTML template, which Latte can't print. \
@@ -89,13 +175,44 @@ fn lay_out(fyo: &mut Fyo, doc: &Doc, template: &PrintTemplate) -> Result<Printou
         ));
     }
     let formatter = Formatter::new(fyo).map_err(|e| e.to_string())?;
-    latte_print::print(fyo, &formatter, doc, template, &t).map_err(|e| {
-        format!(
-            "The template \"{}\" didn't lay out:\n{}",
-            template.name,
-            errors_text(&e)
-        )
-    })
+    let values =
+        latte_templates::print_values(fyo, &formatter, doc, &t).map_err(|e| e.to_string())?;
+    let translations: Map<String, Value> = latte_templates::translated_strings(&template.template)
+        .into_iter()
+        .map(|s| {
+            let translated = t(&s);
+            (s, json!(translated))
+        })
+        .collect();
+    let (width, height) = template.size();
+    Ok(json!({
+        "template": template.template,
+        "values": values,
+        "width": width,
+        "height": height,
+        "translations": translations,
+    }))
+}
+
+/// Lays a document out with a template: the reply.
+fn lay_out(
+    fyo: &mut Fyo,
+    printer: &Printer,
+    doc: &Doc,
+    template: &PrintTemplate,
+    output: Value,
+) -> Result<Value, String> {
+    let mut job = json!({ "job": VERSION, "document": document_job(fyo, doc, template)? });
+    if let (Value::Object(job), Value::Object(output)) = (&mut job, output) {
+        job.extend(output);
+    }
+    printer
+        .run(&job)
+        .map_err(|e| format!("The template \"{}\" didn't lay out:\n{e}", template.name))
+}
+
+fn pages(reply: &Value) -> u64 {
+    reply.get("pages").and_then(Value::as_u64).unwrap_or(0)
 }
 
 /// A name that is safe as a file name, as the app saves its PDFs.
@@ -173,13 +290,18 @@ fn pdf_path(given: Option<&str>, stem: &str, overwrite: bool) -> Result<PathBuf,
         .ok_or_else(|| "No free file name".to_owned())
 }
 
+/// Saves the PDF in a reply.
 fn save_pdf(
-    printout: &Printout,
+    reply: &Value,
     given: Option<&str>,
     stem: &str,
     overwrite: bool,
 ) -> Result<PathBuf, String> {
-    let pdf = printout.pdf()?;
+    let pdf = reply
+        .get("pdf")
+        .and_then(Value::as_str)
+        .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+        .ok_or("The app sent no PDF back")?;
     let path = pdf_path(given, stem, overwrite)?;
     std::fs::write(&path, pdf).map_err(|e| format!("Couldn't save {}: {e}", path.display()))?;
     Ok(path)
@@ -198,18 +320,18 @@ fn document(fyo: &mut Fyo, args: &Value) -> Result<Doc, String> {
 }
 
 /// `print_document`: Save as PDF.
-pub fn print_document(fyo: &mut Fyo, args: &Value) -> Outcome {
+pub fn print_document(fyo: &mut Fyo, printer: &Printer, args: &Value) -> Outcome {
     ready(fyo)?;
     let doc = document(fyo, args)?;
     let template = pick_template(fyo, &doc, opt_text(args, "template"))?;
-    let printout = lay_out(fyo, &doc, &template)?;
+    let reply = lay_out(fyo, printer, &doc, &template, json!({ "output": "pdf" }))?;
     let name = doc.name().unwrap_or_default().to_owned();
-    let path = save_pdf(&printout, opt_text(args, "path"), &name, overwrite(args))?;
+    let path = save_pdf(&reply, opt_text(args, "path"), &name, overwrite(args))?;
     pretty(&json!({
         "saved": path.display().to_string(),
         "document": doc_label(&doc),
         "template": template.name,
-        "pages": printout.page_count(),
+        "pages": pages(&reply),
     }))
 }
 
@@ -238,7 +360,7 @@ fn page_size(args: &Value, fallback: (f64, f64)) -> Result<(f64, f64), String> {
 
 /// `preview_print`: the printout's pages as images, with a saved template or Typst
 /// source being tried out.
-pub fn preview(fyo: &mut Fyo, args: &Value) -> Result<Vec<Value>, String> {
+pub fn preview(fyo: &mut Fyo, printer: &Printer, args: &Value) -> Result<Vec<Value>, String> {
     ready(fyo)?;
     let doc = document(fyo, args)?;
     let mut template = pick_template(fyo, &doc, opt_text(args, "template"))?;
@@ -257,19 +379,24 @@ pub fn preview(fyo: &mut Fyo, args: &Value) -> Result<Vec<Value>, String> {
         template.width = width;
         template.height = height;
     }
-    let printout = lay_out(fyo, &doc, &template)?;
     let shown = args
         .get("pages")
         .and_then(Value::as_u64)
         .map_or(2, |n| n as usize)
         .clamp(1, PREVIEW_PAGES);
-    let images = printout.png_pages_up_to(PREVIEW_SCALE, shown)?;
+    let output = json!({ "output": "png", "scale": PREVIEW_SCALE, "pages": shown });
+    let reply = lay_out(fyo, printer, &doc, &template, output)?;
+    let images: Vec<&str> = reply
+        .get("png")
+        .and_then(Value::as_array)
+        .map(|pages| pages.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
     let (width, height) = template.size();
     let summary = json!({
         "document": doc_label(&doc),
         "template": template.name,
         "pageSize": format!("{} ({width} × {height} cm)", size_name(width, height)),
-        "pages": printout.page_count(),
+        "pages": pages(&reply),
         "shown": images.len(),
     });
     let mut content = vec![text_content(
@@ -278,7 +405,7 @@ pub fn preview(fyo: &mut Fyo, args: &Value) -> Result<Vec<Value>, String> {
     content.extend(images.iter().map(|png| {
         json!({
             "type": "image",
-            "data": base64::engine::general_purpose::STANDARD.encode(png),
+            "data": png,
             "mimeType": "image/png",
         })
     }));
@@ -286,7 +413,7 @@ pub fn preview(fyo: &mut Fyo, args: &Value) -> Result<Vec<Value>, String> {
 }
 
 /// `print_report`: a report's Save as PDF.
-pub fn report_pdf(fyo: &Fyo, args: &Value) -> Outcome {
+pub fn report_pdf(fyo: &Fyo, printer: &Printer, args: &Value) -> Outcome {
     let name = text_arg(args, "report")?;
     let mut report = prepared_report(fyo, name, args.get("filters"))?;
     let formatter = Formatter::new(fyo).map_err(|e| e.to_string())?;
@@ -373,15 +500,15 @@ pub fn report_pdf(fyo: &Fyo, args: &Value) -> Outcome {
         width,
         height,
     };
-    let printout = print_report(&print).map_err(|e| errors_text(&e))?;
+    let reply = printer.run(&json!({ "job": VERSION, "report": print.data(), "output": "pdf" }))?;
     let today = jiff::ZonedDateTime::now().date();
     let stem = format!("{title} - {}", formatter.date(today));
-    let path = save_pdf(&printout, opt_text(args, "path"), &stem, overwrite(args))?;
+    let path = save_pdf(&reply, opt_text(args, "path"), &stem, overwrite(args))?;
     pretty(&json!({
         "saved": path.display().to_string(),
         "report": title,
         "rows": end - start,
-        "pages": printout.page_count(),
+        "pages": pages(&reply),
     }))
 }
 
@@ -437,7 +564,7 @@ pub fn guide(fyo: &mut Fyo, args: &Value) -> Outcome {
             templates::default_field(kind)
         ),
         "starter": BASE_TEMPLATE,
-        "values": hint_json(&latte_print::hints::hints(fyo, kind, &t)),
+        "values": hint_json(&latte_templates::hints::hints(fyo, kind, &t)),
         "library": library,
         "pageSizes": sizes,
         "templates": templates::template_names(fyo, kind),
@@ -446,7 +573,8 @@ pub fn guide(fyo: &mut Fyo, args: &Value) -> Outcome {
         let schema = schema(fyo, kind)?;
         let doc = load(fyo, &schema, Some(name))?;
         let formatter = Formatter::new(fyo).map_err(|e| e.to_string())?;
-        let values = latte_print::values(fyo, &formatter, &doc, &t).map_err(|e| e.to_string())?;
+        let values =
+            latte_templates::print_values(fyo, &formatter, &doc, &t).map_err(|e| e.to_string())?;
         guide["documentValues"] = without_images(values);
     }
     pretty(&guide)

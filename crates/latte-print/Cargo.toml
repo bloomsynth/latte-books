@@ -1,6 +1,6 @@
 [package]
 name = "latte-print"
-description = "Typst rendering of invoices, payments and shipments"
+description = "Typst layout of invoices, payments, shipments and reports, as PDF and images"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 latte-core.workspace = true
+latte-templates.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 base64 = "0.23"
 jiff.workspace = true

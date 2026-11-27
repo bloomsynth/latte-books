@@ -1263,6 +1263,3 @@ fn trim(n: f64) -> String {
     let s = format!("{n:.4}");
     s.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
-
-#[cfg(test)]
-mod tests;

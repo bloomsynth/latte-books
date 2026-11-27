@@ -59,7 +59,7 @@ Books uses, Copyright (c) 2013-2017 Cole Bemis, under the MIT License
 
 Latte's print templates are Typst ports of Frappe Books' print templates
 (vendor/books/templates), and Books' HTML templates are converted to Typst by
-crates/latte-print/src/convert.
+crates/latte-templates/src/convert. They are in crates/latte-templates/src/templates.
 
 crates/latte-print/fonts bundles the Liberation fonts (Copyright (c) 2012 Red Hat, Inc.;
 digitized data copyright (c) 2010 Google Corporation) and Inter (Copyright (c) 2016-2020

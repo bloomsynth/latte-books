@@ -41,37 +41,37 @@ pub(crate) fn values(entry_type: &str) -> Value {
 pub(crate) const BUNDLED: [(&str, &str, &str, f64); 6] = [
     (
         "Basic",
-        include_str!("templates/basic.typ"),
+        include_str!("../../latte-templates/src/templates/basic.typ"),
         "SalesInvoice",
         21.0,
     ),
     (
         "Business",
-        include_str!("templates/business.typ"),
+        include_str!("../../latte-templates/src/templates/business.typ"),
         "SalesInvoice",
         21.0,
     ),
     (
         "Minimal",
-        include_str!("templates/minimal.typ"),
+        include_str!("../../latte-templates/src/templates/minimal.typ"),
         "PurchaseInvoice",
         21.0,
     ),
     (
         "Business.Payment",
-        include_str!("templates/payment.typ"),
+        include_str!("../../latte-templates/src/templates/payment.typ"),
         "Payment",
         21.0,
     ),
     (
         "Business.Shipment",
-        include_str!("templates/shipment.typ"),
+        include_str!("../../latte-templates/src/templates/shipment.typ"),
         "Shipment",
         21.0,
     ),
     (
         "Business-POS",
-        include_str!("templates/pos.typ"),
+        include_str!("../../latte-templates/src/templates/pos.typ"),
         "SalesInvoice",
         8.0,
     ),
@@ -112,7 +112,7 @@ fn the_new_template_prints() {
 fn a_payment_without_taxes_prints() {
     let mut values = values("Payment");
     values["doc"]["taxes"] = json!("");
-    let source = include_str!("templates/payment.typ");
+    let source = include_str!("../../latte-templates/src/templates/payment.typ");
     assert!(render(source, &values, (21.0, 29.7), &t).is_ok());
 }
 
@@ -131,7 +131,7 @@ fn a_company_without_gstin_prints() {
 /// the message it prints for a purchase with none.
 #[test]
 fn the_self_invoice_prints() {
-    let source = include_str!("templates/self_invoice.typ");
+    let source = include_str!("../../latte-templates/src/templates/self_invoice.typ");
     let charge = |integrated: bool| {
         json!({
             "rows": [{ "item": "Claude subscription", "hsnCode": "998315",

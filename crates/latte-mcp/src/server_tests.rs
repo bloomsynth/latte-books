@@ -3,6 +3,7 @@ use latte_core::setup::{SetupWizardOptions, setup_instance};
 use serde_json::{Value, json};
 
 use super::Server;
+use crate::print::Printer;
 
 struct TempFile(std::path::PathBuf);
 
@@ -359,7 +360,11 @@ fn an_assistant_prints_an_invoice_and_a_report() {
         std::process::id(),
         latte_db::get_random_string()
     )));
-    let mut server = Server::new(Some(file.0.clone()));
+    // The app lays the pages out for an assistant; here the test does, with the same code.
+    let mut server = Server::with_printer(
+        Some(file.0.clone()),
+        Printer::InProcess(latte_print::job::run),
+    );
     ok(
         &mut server,
         "create_document",

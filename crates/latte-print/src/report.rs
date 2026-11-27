@@ -5,32 +5,11 @@
 
 use std::collections::HashMap;
 
-use serde_json::json;
+use serde_json::Value;
+
+pub use latte_templates::report::{ReportColumn, ReportPrint};
 
 use crate::{PrintError, Printout};
-
-/// A column of the printout.
-#[derive(Debug, Clone)]
-pub struct ReportColumn {
-    pub label: String,
-    /// `left`, `right` or `center`.
-    pub align: &'static str,
-}
-
-/// What a report printout shows.
-#[derive(Debug, Clone)]
-pub struct ReportPrint {
-    pub company_name: String,
-    pub title: String,
-    pub columns: Vec<ReportColumn>,
-    /// The cells' shown values, a list per row.
-    pub rows: Vec<Vec<String>>,
-    /// When it was printed, as shown at its foot.
-    pub printed: String,
-    /// The page, in centimetres.
-    pub width: f64,
-    pub height: f64,
-}
 
 const SOURCE: &str = r##"
 #let data = json("/report.json")
@@ -91,19 +70,15 @@ const SOURCE: &str = r##"
 
 /// Lays the report out.
 pub fn print_report(report: &ReportPrint) -> Result<Printout, Vec<PrintError>> {
-    let data = json!({
-        "company": report.company_name,
-        "title": report.title,
-        "columns": report.columns.iter().map(|c| json!({ "label": c.label, "align": c.align })).collect::<Vec<_>>(),
-        "rows": report.rows,
-        "printed": report.printed,
-        "width": report.width,
-        "height": report.height,
-    });
+    print_report_data(&report.data())
+}
+
+/// Lays out a report from [`ReportPrint::data`].
+pub fn print_report_data(data: &Value) -> Result<Printout, Vec<PrintError>> {
     let mut files = HashMap::new();
     files.insert(
         "/report.json".to_owned(),
-        serde_json::to_vec(&data).map_err(|e| vec![PrintError::new(e.to_string())])?,
+        serde_json::to_vec(data).map_err(|e| vec![PrintError::new(e.to_string())])?,
     );
     crate::render_plain(SOURCE, files)
 }
