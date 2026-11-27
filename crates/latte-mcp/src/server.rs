@@ -72,7 +72,9 @@ impl Server {
             "{company} Latte Books is an accounting app (a port of Frappe Books). Look things \
              up with find_documents, get_document and run_report; describe_document_type \
              gives a type's fields. New documents are saved as drafts; show the person a \
-             draft and ask before submitting it, since submitting posts it to the accounts."
+             draft and ask before submitting it, since submitting posts it to the accounts. \
+             print_document and print_report save PDFs; preview_print shows a printout's \
+             pages, and print_template_guide tells how to write a print template."
         )
     }
 
@@ -120,11 +122,11 @@ impl Server {
         let outcome = self
             .company()
             .and_then(|company| tools::call(&mut company.fyo, name, &args));
-        let (text, is_error) = match outcome {
-            Ok(text) => (text, false),
-            Err(text) => (text, true),
+        let (content, is_error) = match outcome {
+            Ok(content) => (content, false),
+            Err(text) => (vec![json!({ "type": "text", "text": text })], true),
         };
-        json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+        json!({ "content": content, "isError": is_error })
     }
 
     /// The company file in use, once one is open.

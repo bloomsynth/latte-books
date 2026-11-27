@@ -4108,10 +4108,13 @@ dependencies = [
 name = "latte-mcp"
 version = "0.1.0-beta.7"
 dependencies = [
+ "base64 0.23.1",
  "embed-resource",
  "jiff",
  "latte-core",
  "latte-db",
+ "latte-i18n",
+ "latte-print",
  "latte-schema",
  "serde_json",
  "toml_edit 0.25.17+spec-1.1.0",

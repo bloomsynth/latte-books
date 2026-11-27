@@ -17,6 +17,13 @@ The 0.1.0-beta.4 section is the example to follow.
 
 ## [Unreleased]
 
+### What's new
+
+- **PDFs from your AI assistant.** Ask it to save an invoice, quote, payment or other
+  entry as a PDF, with any of your print templates, or to print a report to PDF. It can
+  show you the pages first, write you a new print template, convert a Frappe Books
+  template, and set which one prints by default.
+
 ## [0.1.0-beta.7] - 2026-11-23
 
 Submitted journal entries can now be edited, and every change to your books is kept in an

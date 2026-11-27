@@ -4,6 +4,7 @@
 //! Every write goes through the same `Doc` sync, submit and cancel checks as the app.
 
 pub mod assistants;
+mod print;
 pub mod server;
 mod tools;
 mod values;

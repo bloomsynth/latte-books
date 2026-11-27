@@ -387,6 +387,13 @@ for Tally).
   the assistant's own tool approval. An assistant's writes are logged under their own
   device id, and the app shows the open page again when it sees them (see DEVIATIONS.md).
   Not yet tried with a real assistant.*
+- *Printing, 2026-11-27: assistants list the print templates and which prints by default,
+  save a document or a report as a PDF (to Documents unless told where), see a
+  printout's pages as images, try a template's Typst source on a document before
+  saving it, read what a template can use (`print_template_guide`), and convert a Books
+  HTML template to Typst. The same `latte-print` layout as the app, so the PDF is the
+  one the app saves. Like the app, `latte-mcp` writes Latte's bundled templates into the
+  file before printing.*
 - Later: a "Changes by assistants" list in the app, and setup for VS Code (Copilot) and
   Windsurf.
 - Next: an invoice in a foreign currency made by an assistant gets exchange rate 1 (Latte
